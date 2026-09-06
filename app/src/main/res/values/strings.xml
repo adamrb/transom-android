@@ -156,4 +156,10 @@
     <string name="server_setup_auth_failed">The server rejected the auth token (401/403). Check the token.</string>
     <string name="server_setup_error_fmt">Connection failed: %1$s</string>
     <string name="server_setup_success">Connected! Server and token verified.</string>
+
+    <!-- Library (embedded server dashboard) -->
+    <string name="library">Library</string>
+    <string name="library_not_configured">Configure your bridge server in Settings to browse the Library.</string>
+    <string name="library_load_failed">Couldn\'t reach your server. Check that it\'s running and that you\'re online.</string>
+    <string name="retry">Retry</string>
 </resources>

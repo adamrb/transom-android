@@ -21,6 +21,7 @@ object RecordingStore {
     private const val KEY_SERVER_AUTH_TOKEN = "server_auth_token"
     private const val KEY_PLAUD_DOMAIN = "plaud_domain"
     private const val KEY_DELETE_AFTER_UPLOAD = "delete_after_upload"
+    private const val KEY_LIBRARY_WEBVIEW_HOST = "library_webview_host"
     private const val KEY_CACHED_PLAUD_TOKEN = "cached_plaud_token"
     private const val KEY_CACHED_PLAUD_TOKEN_EXPIRY = "cached_plaud_token_expiry"
     private const val RECORDINGS_FILE = "recordings.json"
@@ -125,6 +126,16 @@ object RecordingStore {
             if (value != serverAuthToken) serverConfigGenCounter.incrementAndGet()
             prefs.edit().putString(KEY_SERVER_AUTH_TOKEN, value).apply()
         }
+
+    /**
+     * Host whose data (localStorage token, cookies, cache) the Library WebView currently holds.
+     * Persisted so the fragment can wipe WebView storage when the configured server host changes
+     * — including across app restarts, and after unpair/re-onboarding (clearAll() nulls this,
+     * which the fragment treats as "wipe before first load").
+     */
+    var libraryWebViewHost: String?
+        get() = prefs.getString(KEY_LIBRARY_WEBVIEW_HOST, null)
+        set(value) = prefs.edit().putString(KEY_LIBRARY_WEBVIEW_HOST, value).apply()
 
     /** Server configuration complete (onboarding gate). */
     val isServerConfigured: Boolean
