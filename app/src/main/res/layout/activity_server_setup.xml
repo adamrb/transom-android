@@ -48,10 +48,23 @@
                 android:textColor="@color/gray_medium"
                 android:textSize="14sp" />
 
+            <Button
+                android:id="@+id/scanQrButton"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="24dp"
+                android:background="@drawable/bg_secondary_button"
+                app:backgroundTint="@null"
+                android:fontFamily="sans-serif"
+                android:text="@string/scan_qr"
+                android:textAllCaps="false"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp" />
+
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="32dp"
+                android:layout_marginTop="24dp"
                 android:fontFamily="sans-serif"
                 android:text="@string/server_url"
                 android:textColor="@color/text_primary"

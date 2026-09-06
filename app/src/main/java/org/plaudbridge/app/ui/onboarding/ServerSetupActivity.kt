@@ -9,12 +9,15 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
 import androidx.lifecycle.lifecycleScope
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.common.AppLog
+import org.plaudbridge.app.common.QrSetupPayload
 import org.plaudbridge.app.databinding.ActivityServerSetupBinding
 import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.storage.RecordingStore
@@ -39,6 +42,27 @@ class ServerSetupActivity : AppCompatActivity() {
 
     /** Set true after a successful test of the CURRENT field values. */
     private var verified = false
+
+    /**
+     * QR onboarding: the server dashboard shows a QR encoding
+     * {"v":1,"url":"https://...","token":"..."}. Scanning fills both fields and runs the same
+     * "Test connection" verification as manual entry. The scanner (zxing-android-embedded's
+     * CaptureActivity) requests the CAMERA permission itself — the app never asks for it.
+     */
+    private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
+        val contents = result.contents ?: return@registerForActivityResult // cancelled
+        when (val parsed = QrSetupPayload.parse(contents)) {
+            is QrSetupPayload.Result.Success -> {
+                binding.serverUrlInput.setText(parsed.payload.url)
+                binding.serverTokenInput.setText(parsed.payload.token)
+                testConnection()
+            }
+            is QrSetupPayload.Result.Failure -> {
+                AppLog.w(TAG, "QR parse failed: ${parsed.error} — ${parsed.reason}")
+                showStatus(getString(R.string.qr_invalid_fmt, parsed.reason), isError = true)
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,6 +91,14 @@ class ServerSetupActivity : AppCompatActivity() {
         binding.serverTokenInput.addTextChangedListener(SimpleWatcher { invalidate() })
         invalidate()
 
+        binding.scanQrButton.setOnClickListener {
+            qrScanLauncher.launch(ScanOptions().apply {
+                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                setPrompt(getString(R.string.qr_scan_prompt))
+                setBeepEnabled(false)
+                setOrientationLocked(true)
+            })
+        }
         binding.testButton.setOnClickListener { testConnection() }
         binding.continueButton.setOnClickListener { onContinue() }
     }

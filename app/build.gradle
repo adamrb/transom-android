@@ -66,6 +66,10 @@ dependencies {
     // Library tab: pull-to-refresh around the dashboard WebView
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
 
+    // QR onboarding scanner. transitive=false + explicit zxing core 3.3.0: the wrapper's default
+    // core (3.4.x) requires API 24+, this app supports minSdk 21 (journeyapps README recipe).
+    implementation('com.journeyapps:zxing-android-embedded:4.3.0') { transitive = false }
+    implementation 'com.google.zxing:core:3.3.0'
 
     // Material
     implementation 'com.google.android.material:material:1.10.0'
