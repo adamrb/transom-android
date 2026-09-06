@@ -107,6 +107,20 @@ WebView is locked to the configured server's origin: external links open in the 
 nothing else loads inside the tab, and the token is only ever injected into your server's
 origin. Changing the server host (or unpairing) wipes the WebView's storage.
 
+### In-app updates
+
+If your server hosts an APK (`GET /api/v1/apk/info` + `GET /api/v1/apk/file`, Bearer auth),
+the app offers updates from it: automatically on foregrounding (at most once per 24 hours) and
+manually via **Settings → Version → Check**. The download is streamed to app-private storage
+and its **sha256 is verified against the server's manifest before the installer ever sees
+it** — a mismatched file is deleted. On Android 8+ the first install asks you to allow
+Plaud Bridge to install unknown apps (the standard sideload consent). Downloaded APKs are
+cleaned up automatically after a successful update (or after 7 days).
+
+**Every APK uploaded to the server must increment `version_code`** (the app updates only when
+the hosted `version_code` is strictly greater than the installed one). Bump `versionCode` /
+`versionName` in `app/build.gradle` for each release you upload.
+
 ### Settings
 
 | Setting | Notes |
@@ -178,8 +192,10 @@ rejection, redirects not followed), token expiry handling in `TokenManager`, com
 `(device_sn, session_id)` identity and index corruption recovery in `RecordingStore`, and the
 `UploadManager` queue (lost-wakeup dirty flag, blank-SN / wrong-device delete safety, deferred
 device deletes), the Library WebView's same-origin policy (`WebViewOriginPolicy`) and
-token-injection JS escaping (`TokenInjection`), and the QR setup payload parser
-(`QrSetupPayload`). The BLE SDK is faked behind the thin `UploadManager.DeviceLink` seam — nothing
+token-injection JS escaping (`TokenInjection`), the QR setup payload parser
+(`QrSetupPayload`), and the self-update pipeline (`UpdateManager`: strict manifest parsing,
+version comparison, sha256/size verification incl. tampered-download rejection, the 24h
+auto-check throttle, and stale-download cleanup — against MockWebServer). The BLE SDK is faked behind the thin `UploadManager.DeviceLink` seam — nothing
 in the test suite talks to real hardware.
 
 ### Known limitations

@@ -204,6 +204,67 @@ object ApiClient {
         }
     }
 
+    // MARK: - App update (APK hosted on the bridge server)
+
+    /** Raw result of GET /api/v1/apk/info: 200 body text, 404 = no APK hosted. */
+    sealed class ApkInfoResult {
+        data class Ok(val json: String) : ApkInfoResult()
+        object NotHosted : ApkInfoResult()
+        data class Error(val message: String) : ApkInfoResult()
+    }
+
+    /** GET /api/v1/apk/info (Bearer auth). Parsing/validation happens in UpdateManager. */
+    fun fetchApkInfo(): ApkInfoResult {
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/apk/info")
+            .header("Authorization", authHeader())
+            .get()
+            .build()
+        return try {
+            client.newCall(req).execute().use { resp ->
+                val text = resp.body?.string() ?: ""
+                when {
+                    resp.code == 404 -> ApkInfoResult.NotHosted
+                    !resp.isSuccessful -> {
+                        AppLog.w(TAG, "apk info failed: HTTP ${resp.code} (${text.length} bytes)")
+                        ApkInfoResult.Error("HTTP ${resp.code}")
+                    }
+                    else -> ApkInfoResult.Ok(text)
+                }
+            }
+        } catch (e: Exception) {
+            ApkInfoResult.Error(e.message ?: "network error")
+        }
+    }
+
+    /**
+     * GET /api/v1/apk/file (Bearer auth) → stream the APK binary to [dest]. Throws on any
+     * HTTP/IO failure (deleting the partial file). The caller MUST verify the sha256 + size
+     * against the manifest before doing anything with the file — see UpdateManager.
+     */
+    fun downloadApk(dest: File) {
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/apk/file")
+            .header("Authorization", authHeader())
+            .get()
+            .build()
+        try {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    AppLog.w(TAG, "apk download failed: HTTP ${resp.code}")
+                    throw ApiException(resp.code, "apk download rejected")
+                }
+                val body = resp.body ?: throw ApiException(resp.code, "empty apk response")
+                body.byteStream().use { input ->
+                    dest.outputStream().use { output -> input.copyTo(output) }
+                }
+            }
+        } catch (e: Exception) {
+            dest.delete()
+            throw e
+        }
+    }
+
     sealed class TranscriptResult {
         /** rawJson = {"text": "...", "segments": [...]} as returned by the server. */
         data class Ready(val rawJson: String) : TranscriptResult()

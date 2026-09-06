@@ -44,7 +44,14 @@ class PlaudBridgeApp : Application() {
         // Reconcile the index with the filesystem: recordings whose exported audio vanished
         // (legacy cacheDir eviction, user "clear cache") become unsynced again so the sync flow
         // re-downloads them while the recorder copy still exists.
-        Thread { RecordingStore.clearMissingLocalFiles() }.start()
+        Thread {
+            RecordingStore.clearMissingLocalFiles()
+            // Drop stale self-update downloads: anything for this (or an older) version — i.e.
+            // after a successful update launched — and anything older than 7 days.
+            org.plaudbridge.app.net.UpdateManager.cleanupStaleApks(
+                this, BuildConfig.VERSION_CODE, System.currentTimeMillis()
+            )
+        }.start()
         registerForegroundReconnect()
     }
 

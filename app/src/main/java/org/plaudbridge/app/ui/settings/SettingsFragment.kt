@@ -80,9 +80,9 @@ class SettingsFragment : Fragment() {
         // SDK Logs export: encrypted .plaud package → share sheet → clear logs
         binding.exportLogsButton.setOnClickListener { exportSdkLogs() }
 
-        // App version (read-only)
-        binding.appVersionLabel.text =
-            "${org.plaudbridge.app.BuildConfig.VERSION_NAME} (${org.plaudbridge.app.BuildConfig.VERSION_CODE})"
+        // App version + manual update check against the self-hosted server
+        renderVersionLabel(null)
+        binding.checkUpdateButton.setOnClickListener { checkForUpdates() }
 
         // Unpair
         binding.signOutButton.setOnClickListener { showUnpairConfirmation() }
@@ -138,6 +138,49 @@ class SettingsFragment : Fragment() {
             startActivity(Intent.createChooser(intent, getString(R.string.sdk_logs)))
             withContext(Dispatchers.IO) {
                 try { sdk.NiceBuildSdk.cleanupLogs(ctx) } catch (_: Exception) { }
+            }
+        }
+    }
+
+    // MARK: - App update (APK hosted on the bridge server)
+
+    /** "0.2.0 (2)" plus the latest check result, e.g. "0.2.0 (2) · Up to date". */
+    private fun renderVersionLabel(status: String?) {
+        val version =
+            "${org.plaudbridge.app.BuildConfig.VERSION_NAME} (${org.plaudbridge.app.BuildConfig.VERSION_CODE})"
+        binding.appVersionLabel.text = if (status.isNullOrBlank()) version else "$version · $status"
+    }
+
+    private fun checkForUpdates() {
+        if (!RecordingStore.isServerConfigured) {
+            renderVersionLabel(getString(R.string.not_configured))
+            return
+        }
+        binding.checkUpdateButton.isEnabled = false
+        renderVersionLabel(getString(R.string.update_checking))
+        viewLifecycleOwner.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                org.plaudbridge.app.net.UpdateManager.checkForUpdate(
+                    org.plaudbridge.app.BuildConfig.VERSION_CODE
+                )
+            }
+            if (!isAdded) return@launch
+            binding.checkUpdateButton.isEnabled = true
+            when (result) {
+                is org.plaudbridge.app.net.UpdateManager.CheckResult.UpToDate ->
+                    renderVersionLabel(getString(R.string.update_up_to_date))
+                is org.plaudbridge.app.net.UpdateManager.CheckResult.NotHosted ->
+                    renderVersionLabel(getString(R.string.update_not_hosted))
+                is org.plaudbridge.app.net.UpdateManager.CheckResult.Error ->
+                    renderVersionLabel(getString(R.string.update_check_failed_fmt, result.message))
+                is org.plaudbridge.app.net.UpdateManager.CheckResult.UpdateAvailable -> {
+                    renderVersionLabel(
+                        getString(R.string.update_available_short_fmt, result.manifest.versionName)
+                    )
+                    org.plaudbridge.app.ui.update.AppUpdateFlow.promptInstall(
+                        requireActivity(), result.manifest
+                    )
+                }
             }
         }
     }

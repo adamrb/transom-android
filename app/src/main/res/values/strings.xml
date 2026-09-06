@@ -165,4 +165,18 @@
     <string name="library_not_configured">Configure your bridge server in Settings to browse the Library.</string>
     <string name="library_load_failed">Couldn\'t reach your server. Check that it\'s running and that you\'re online.</string>
     <string name="retry">Retry</string>
+
+    <!-- App update (APK hosted on the bridge server) -->
+    <string name="check_updates">Check</string>
+    <string name="update_checking">Checking your server…</string>
+    <string name="update_up_to_date">Up to date</string>
+    <string name="update_not_hosted">Your server hosts no APK</string>
+    <string name="update_check_failed_fmt">Update check failed: %1$s</string>
+    <string name="update_available_title">Update available</string>
+    <string name="update_available_fmt">Plaud Bridge %1$s is available on your server.</string>
+    <string name="update_available_short_fmt">Update %1$s available</string>
+    <string name="update_download_install">Download &amp; install</string>
+    <string name="update_downloading">Downloading update…</string>
+    <string name="update_download_failed_fmt">Update download failed: %1$s</string>
+    <string name="update_allow_installs">To install updates from your server, allow Plaud Bridge to install unknown apps, then try again.</string>
 </resources>

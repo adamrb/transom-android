@@ -10,17 +10,22 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.plaudbridge.app.BuildConfig
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.databinding.ActivityMainBinding
 import org.plaudbridge.app.models.DeviceConnectionState
+import org.plaudbridge.app.net.UpdateManager
 import org.plaudbridge.app.storage.RecordingStore
 import org.plaudbridge.app.ui.files.FilesFragment
 import org.plaudbridge.app.ui.home.HomeFragment
 import org.plaudbridge.app.ui.library.LibraryFragment
 import org.plaudbridge.app.ui.onboarding.WelcomeActivity
 import org.plaudbridge.app.ui.settings.SettingsFragment
+import org.plaudbridge.app.ui.update.AppUpdateFlow
 
 /**
  * Main screen — bottom floating Tab Bar + 4 Fragments (Home, Files, Library, Settings)
@@ -82,6 +87,27 @@ class MainActivity : AppCompatActivity() {
             RecordingStore.lastConnectedDeviceSN != null
         ) {
             binding.root.postDelayed({ deviceManager.attemptReconnect() }, 2_000)
+        }
+
+        // Continue an app update that was waiting on the unknown-sources permission, then
+        // (at most once per 24h) check the server for a newer hosted APK.
+        AppUpdateFlow.resumePendingInstall(this)
+        maybeAutoCheckForUpdate()
+    }
+
+    /** Foreground auto-check against the server's hosted APK, throttled to once per 24h. */
+    private fun maybeAutoCheckForUpdate() {
+        if (!RecordingStore.isServerConfigured) return
+        val now = System.currentTimeMillis()
+        if (!UpdateManager.isAutoCheckDue(RecordingStore.lastUpdateCheckAt, now)) return
+        RecordingStore.lastUpdateCheckAt = now
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                UpdateManager.checkForUpdate(BuildConfig.VERSION_CODE)
+            }
+            if (result is UpdateManager.CheckResult.UpdateAvailable && !isFinishing && !isDestroyed) {
+                AppUpdateFlow.promptInstall(this@MainActivity, result.manifest)
+            }
         }
     }
 
