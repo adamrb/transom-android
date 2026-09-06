@@ -1,0 +1,297 @@
+package org.plaudbridge.app.storage
+
+import android.content.Context
+import android.content.SharedPreferences
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import org.plaudbridge.app.models.RecordingFile
+import java.io.File
+import java.util.UUID
+
+object RecordingStore {
+
+    private const val PREFS_NAME = "plaud_bridge_prefs"
+    private const val KEY_LAST_CONNECTED_SN = "last_connected_device_sn"
+    private const val KEY_PAIRED_SNS = "paired_device_sns"
+    private const val KEY_PAIRED_NAMES = "paired_device_names"
+    private const val KEY_USER_ID = "user_id"
+    private const val KEY_AUTO_SYNC = "is_auto_sync_enabled"
+    private const val KEY_FAST_TRANSFER_HIDE = "fast_transfer_never_show"
+    private const val KEY_SERVER_BASE_URL = "server_base_url"
+    private const val KEY_SERVER_AUTH_TOKEN = "server_auth_token"
+    private const val KEY_PLAUD_DOMAIN = "plaud_domain"
+    private const val KEY_DELETE_AFTER_UPLOAD = "delete_after_upload"
+    private const val KEY_CACHED_PLAUD_TOKEN = "cached_plaud_token"
+    private const val RECORDINGS_FILE = "recordings.json"
+
+    private lateinit var appContext: Context
+    private lateinit var prefs: SharedPreferences
+    private val gson = Gson()
+    private val lock = Any()
+
+    fun init(context: Context) {
+        appContext = context.applicationContext
+        prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    }
+
+    // --- SharedPreferences ---
+
+    /** Active device SN (the one currently selected / to auto-reconnect). */
+    var lastConnectedDeviceSN: String?
+        get() = prefs.getString(KEY_LAST_CONNECTED_SN, null)
+        set(value) = prefs.edit().putString(KEY_LAST_CONNECTED_SN, value).apply()
+
+    // --- Paired devices (multi-device support, mirrors iOS) ---
+
+    /** Serial numbers of all paired devices. */
+    val pairedDeviceSNs: List<String>
+        get() = prefs.getString(KEY_PAIRED_SNS, null)?.let {
+            runCatching { gson.fromJson(it, Array<String>::class.java).toList() }.getOrDefault(emptyList())
+        } ?: emptyList()
+
+    private fun savePairedDeviceSNs(value: List<String>) =
+        prefs.edit().putString(KEY_PAIRED_SNS, gson.toJson(value)).apply()
+
+    /** [SN: display name] cache for paired devices. */
+    private val pairedDeviceNames: Map<String, String>
+        get() = prefs.getString(KEY_PAIRED_NAMES, null)?.let {
+            val type = object : TypeToken<Map<String, String>>() {}.type
+            runCatching { gson.fromJson<Map<String, String>>(it, type) }.getOrNull()
+        } ?: emptyMap()
+
+    private fun savePairedDeviceNames(value: Map<String, String>) =
+        prefs.edit().putString(KEY_PAIRED_NAMES, gson.toJson(value)).apply()
+
+    /** Add a paired device and make it the active device. */
+    fun addPairedDevice(sn: String, name: String) {
+        val sns = pairedDeviceSNs.toMutableList()
+        if (!sns.contains(sn)) sns.add(sn)
+        savePairedDeviceSNs(sns)
+        savePairedDeviceNames(pairedDeviceNames.toMutableMap().apply { put(sn, name) })
+        lastConnectedDeviceSN = sn
+    }
+
+    /** Remove a paired device; if it was active, fall back to the first remaining one. */
+    fun removePairedDevice(sn: String) {
+        val sns = pairedDeviceSNs.toMutableList().apply { remove(sn) }
+        savePairedDeviceSNs(sns)
+        savePairedDeviceNames(pairedDeviceNames.toMutableMap().apply { remove(sn) })
+        if (lastConnectedDeviceSN == sn) lastConnectedDeviceSN = sns.firstOrNull()
+    }
+
+    /** Display name for a paired device SN (falls back to the SN itself). */
+    fun deviceName(sn: String): String = pairedDeviceNames[sn] ?: sn
+
+    var userId: String?
+        get() = prefs.getString(KEY_USER_ID, null)
+        set(value) = prefs.edit().putString(KEY_USER_ID, value).apply()
+
+    /**
+     * Stable per-install user id sent to plaud-bridge-server as the Plaud client_user_id.
+     * "pb_" + UUID satisfies Plaud's 6-120 character requirement. Generated once, then persisted.
+     */
+    fun getOrCreateUserId(): String {
+        userId?.let { return it }
+        val id = "pb_${UUID.randomUUID()}"
+        userId = id
+        return id
+    }
+
+    // --- Bridge server settings ---
+
+    /** Base URL of the self-hosted plaud-bridge-server, e.g. "https://bridge.example.com" (no trailing slash). */
+    var serverBaseUrl: String?
+        get() = prefs.getString(KEY_SERVER_BASE_URL, null)
+        set(value) = prefs.edit().putString(KEY_SERVER_BASE_URL, value?.trimEnd('/')).apply()
+
+    /** Bearer token for the self-hosted server's API. */
+    var serverAuthToken: String?
+        get() = prefs.getString(KEY_SERVER_AUTH_TOKEN, null)
+        set(value) = prefs.edit().putString(KEY_SERVER_AUTH_TOKEN, value).apply()
+
+    /** Server configuration complete (onboarding gate). */
+    val isServerConfigured: Boolean
+        get() = !serverBaseUrl.isNullOrBlank() && !serverAuthToken.isNullOrBlank()
+
+    // --- Plaud cloud (auth handshake only — audio never goes there) ---
+
+    const val PLAUD_DOMAIN_US = "platform-us.plaud.ai"
+    const val PLAUD_DOMAIN_JP = "platform-jp.plaud.ai"
+
+    /** Selectable Plaud platform regions (SDK customDomain / partner API host). */
+    val plaudDomains: List<Pair<String, String>> = listOf(
+        "US" to PLAUD_DOMAIN_US,
+        "JP" to PLAUD_DOMAIN_JP
+    )
+
+    /** Plaud platform domain used by the SDK (BLE handshake auth). Restart to apply a change. */
+    var plaudDomain: String
+        get() = prefs.getString(KEY_PLAUD_DOMAIN, null) ?: PLAUD_DOMAIN_US
+        set(value) = prefs.edit().putString(KEY_PLAUD_DOMAIN, value).apply()
+
+    /**
+     * Cached Plaud user access token (JWT) fetched from plaud-bridge-server. Refreshed by
+     * TokenManager when close to expiry or when the SDK reports an auth failure.
+     */
+    var cachedPlaudToken: String?
+        get() = prefs.getString(KEY_CACHED_PLAUD_TOKEN, null)
+        set(value) = prefs.edit().putString(KEY_CACHED_PLAUD_TOKEN, value).apply()
+
+    /** Delete a recording from the device after a CONFIRMED server upload. Default OFF. */
+    var deleteAfterUpload: Boolean
+        get() = prefs.getBoolean(KEY_DELETE_AFTER_UPLOAD, false)
+        set(value) = prefs.edit().putBoolean(KEY_DELETE_AFTER_UPLOAD, value).apply()
+
+    /** Entered the app from Welcome without pairing a device ("Connect device later"). */
+    var hasSkippedOnboarding: Boolean
+        get() = prefs.getBoolean("has_skipped_onboarding", false)
+        set(value) = prefs.edit().putBoolean("has_skipped_onboarding", value).apply()
+
+    var isAutoSyncEnabled: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_SYNC, true)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_SYNC, value).apply()
+
+    /** "Never show again" preference for the WiFi fast-transfer confirmation sheet. */
+    var fastTransferNeverShowAgain: Boolean
+        get() = prefs.getBoolean(KEY_FAST_TRANSFER_HIDE, false)
+        set(value) = prefs.edit().putBoolean(KEY_FAST_TRANSFER_HIDE, value).apply()
+
+    // --- Recording Files (JSON persistence) ---
+
+    val allFiles: List<RecordingFile>
+        get() = synchronized(lock) {
+            loadFiles().sortedByDescending { it.createdAt }
+        }
+
+    fun addFiles(files: List<RecordingFile>) {
+        synchronized(lock) {
+            val existing = loadFiles().toMutableList()
+            val existingSessionIds = existing.map { it.sessionId }.toSet()
+            val newFiles = files.filter { it.sessionId !in existingSessionIds }
+            existing.addAll(newFiles)
+            saveFiles(existing)
+        }
+    }
+
+    fun deleteFile(file: RecordingFile) {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.removeAll { it.id == file.id }
+            saveFiles(files)
+        }
+        // Delete the local audio file
+        file.localPath?.let { path ->
+            File(path).takeIf { it.exists() }?.delete()
+        }
+    }
+
+    fun renameFile(file: RecordingFile, newName: String) {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.find { it.id == file.id }?.name = newName
+            saveFiles(files)
+        }
+    }
+
+    fun replaceAllFiles(files: List<RecordingFile>) {
+        synchronized(lock) {
+            saveFiles(files)
+        }
+    }
+
+    /** Backfill a real duration (seconds) for a file whose stored duration is 0. */
+    fun updateDuration(id: String, durationSec: Long) {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.find { it.id == id }?.duration = durationSec
+            saveFiles(files)
+        }
+    }
+
+    /** Persist a transcript (JSON: {"text": ..., "segments": [...]}) fetched from the server. */
+    fun updateTranscript(id: String, transcriptJSON: String) {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.find { it.id == id }?.transcriptJSON = transcriptJSON
+            saveFiles(files)
+        }
+    }
+
+    fun markAsSynced(sessionId: Long, localPath: String, duration: Long) {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.find { it.sessionId == sessionId }?.apply {
+                this.localPath = localPath
+                this.syncedAt = System.currentTimeMillis()
+                this.duration = duration
+            }
+            saveFiles(files)
+        }
+    }
+
+    /** Record a confirmed server upload (201 created, or 200 duplicate:true). */
+    fun markAsUploaded(sessionId: Long, serverId: String?) {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.find { it.sessionId == sessionId }?.apply {
+                this.uploaded = true
+                this.serverId = serverId
+                this.uploadedAt = System.currentTimeMillis()
+            }
+            saveFiles(files)
+        }
+    }
+
+    /** Store the server-side recording id (e.g. resolved via the lookup endpoint). */
+    fun updateServerId(id: String, serverId: String) {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.find { it.id == id }?.apply {
+                this.serverId = serverId
+                this.uploaded = true
+            }
+            saveFiles(files)
+        }
+    }
+
+    /** Files synced locally but not yet confirmed uploaded to the bridge server. */
+    val pendingUploads: List<RecordingFile>
+        get() = allFiles.filter { it.isSynced && !it.uploaded }
+
+    val exportDir: File
+        get() {
+            val dir = File(appContext.cacheDir, "export")
+            if (!dir.exists()) dir.mkdirs()
+            return dir
+        }
+
+    fun clearAll() {
+        synchronized(lock) {
+            saveFiles(emptyList())
+        }
+        prefs.edit().clear().apply()
+        // Delete the audio directory
+        File(appContext.filesDir, "audio").takeIf { it.exists() }?.deleteRecursively()
+    }
+
+    // --- Private helpers ---
+
+    private fun recordingsFile(): File = File(appContext.filesDir, RECORDINGS_FILE)
+
+    private fun loadFiles(): List<RecordingFile> {
+        val file = recordingsFile()
+        if (!file.exists()) return emptyList()
+        return try {
+            val json = file.readText()
+            val type = object : TypeToken<List<RecordingFile>>() {}.type
+            gson.fromJson(json, type) ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveFiles(files: List<RecordingFile>) {
+        val json = gson.toJson(files)
+        recordingsFile().writeText(json)
+    }
+}

@@ -1,0 +1,313 @@
+package org.plaudbridge.app.ui.settings
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.EditText
+import android.widget.LinearLayout
+import androidx.appcompat.app.AlertDialog
+import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.plaudbridge.app.PlaudBridgeApp
+import org.plaudbridge.app.R
+import org.plaudbridge.app.databinding.FragmentSettingsBinding
+import org.plaudbridge.app.net.ApiClient
+import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.ui.onboarding.WelcomeActivity
+
+/**
+ * Settings Tab — sync toggles, bridge-server config, Plaud region, user id, firmware, unpair.
+ */
+class SettingsFragment : Fragment() {
+
+    private var _binding: FragmentSettingsBinding? = null
+    private val binding get() = _binding!!
+
+    private val app get() = requireActivity().application as PlaudBridgeApp
+    private val deviceManager get() = app.deviceManager
+    private val recordingManager get() = app.recordingManager
+
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        _binding = FragmentSettingsBinding.inflate(inflater, container, false)
+        return binding.root
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+
+        // Re-check firmware on open (mirrors iOS setupBindings), covering late/failed on-connect checks
+        deviceManager.refreshFirmwareCheck()
+
+        // Auto Sync toggle
+        binding.autoSyncToggle.isChecked = RecordingStore.isAutoSyncEnabled
+        binding.autoSyncToggle.onToggleChanged = { isChecked ->
+            RecordingStore.isAutoSyncEnabled = isChecked
+            deviceManager.setAutoSync(isChecked)
+        }
+
+        // Delete-after-upload toggle (default OFF): remove the recording from the device only
+        // after the bridge server has confirmed the upload.
+        binding.deleteAfterUploadToggle.isChecked = RecordingStore.deleteAfterUpload
+        binding.deleteAfterUploadToggle.onToggleChanged = { isChecked ->
+            RecordingStore.deleteAfterUpload = isChecked
+        }
+
+        // Bridge server (URL + auth token)
+        renderServerCard()
+        binding.editServerButton.setOnClickListener { showEditServerDialog() }
+
+        // Plaud cloud region (SDK auth handshake only; restart to apply)
+        renderRegionCard()
+        binding.switchRegionButton.setOnClickListener { showSwitchRegionDialog() }
+
+        // Per-install user id (sent to the bridge server as the Plaud client_user_id)
+        binding.userIdLabel.text = RecordingStore.getOrCreateUserId()
+        binding.copyUserIdButton.setOnClickListener {
+            val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("User ID", RecordingStore.getOrCreateUserId()))
+        }
+
+        // SDK Logs export: encrypted .plaud package → share sheet → clear logs
+        binding.exportLogsButton.setOnClickListener { exportSdkLogs() }
+
+        // App version (read-only)
+        binding.appVersionLabel.text =
+            "${org.plaudbridge.app.BuildConfig.VERSION_NAME} (${org.plaudbridge.app.BuildConfig.VERSION_CODE})"
+
+        // Unpair
+        binding.signOutButton.setOnClickListener { showUnpairConfirmation() }
+
+        observeDevice()
+    }
+
+    private fun observeDevice() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                deviceManager.connectedDevice.collect { device ->
+                    binding.firmwareVersionLabel.text = device?.firmwareVersion?.let { "Version $it" } ?: "--"
+
+                    // Show the firmware update button
+                    val hasUpdate = device?.latestFirmwareVersion != null &&
+                            device.latestFirmwareVersion != device.firmwareVersion
+                    binding.firmwareUpdateButton.visibility = if (hasUpdate) View.VISIBLE else View.GONE
+                    binding.firmwareUpdateButton.setOnClickListener {
+                        FirmwareUpdateSheet
+                            .newInstance(device?.name ?: "Plaud Device")
+                            .show(childFragmentManager, "FirmwareUpdateSheet")
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Export the encrypted SDK log package (.plaud) and hand it to the system share sheet, then
+     * clear the on-device logs so each export contains only fresh content.
+     */
+    private fun exportSdkLogs() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val ctx = requireContext().applicationContext
+            val file = withContext(Dispatchers.IO) {
+                try { sdk.NiceBuildSdk.exportLog(ctx) } catch (e: Exception) { null }
+            }
+            if (file == null || !file.exists()) {
+                AlertDialog.Builder(requireContext())
+                    .setMessage(R.string.export_failed)
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show()
+                return@launch
+            }
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                requireContext(), "${requireContext().packageName}.fileprovider", file
+            )
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/octet-stream"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, getString(R.string.sdk_logs)))
+            withContext(Dispatchers.IO) {
+                try { sdk.NiceBuildSdk.cleanupLogs(ctx) } catch (_: Exception) { }
+            }
+        }
+    }
+
+    // MARK: - Bridge server settings
+
+    private fun renderServerCard() {
+        val url = RecordingStore.serverBaseUrl
+        val token = RecordingStore.serverAuthToken
+        binding.serverInfoLabel.text = when {
+            url.isNullOrBlank() -> getString(R.string.not_configured)
+            else -> "$url · ${maskToken(token)}"
+        }
+    }
+
+    private fun maskToken(token: String?): String = when {
+        token.isNullOrBlank() -> "no token"
+        token.length <= 8 -> "••••"
+        else -> "${token.take(4)}…${token.takeLast(4)}"
+    }
+
+    /** Edit the server URL + auth token; verified against the server before saving. */
+    private fun showEditServerDialog() {
+        val ctx = requireContext()
+        val density = resources.displayMetrics.density
+        val pad = (20 * density).toInt()
+        val urlInput = EditText(ctx).apply {
+            hint = getString(R.string.server_url_hint)
+            setText(RecordingStore.serverBaseUrl ?: "")
+            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
+            maxLines = 1
+        }
+        val tokenInput = EditText(ctx).apply {
+            hint = getString(R.string.server_auth_token_hint)
+            setText(RecordingStore.serverAuthToken ?: "")
+            maxLines = 2
+        }
+        val container = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+            addView(urlInput)
+            addView(tokenInput)
+        }
+        AlertDialog.Builder(ctx)
+            .setTitle(R.string.bridge_server)
+            .setView(container)
+            .setPositiveButton(R.string.confirm) { _, _ ->
+                verifyAndSaveServer(
+                    urlInput.text.toString().trim(),
+                    tokenInput.text.toString().trim()
+                )
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun verifyAndSaveServer(rawUrl: String, token: String) {
+        var url = rawUrl.trimEnd('/')
+        if (url.isBlank() || token.isBlank()) return
+        if (!url.startsWith("http://") && !url.startsWith("https://")) url = "https://$url"
+        val finalUrl = url
+        viewLifecycleOwner.lifecycleScope.launch {
+            val error = withContext(Dispatchers.IO) {
+                try {
+                    if (!ApiClient.checkHealth(finalUrl)) return@withContext getString(R.string.server_setup_health_failed)
+                    val plaudToken = ApiClient.fetchUserToken(
+                        finalUrl, token, RecordingStore.getOrCreateUserId()
+                    )
+                    RecordingStore.serverBaseUrl = finalUrl
+                    RecordingStore.serverAuthToken = token
+                    RecordingStore.cachedPlaudToken = plaudToken
+                    try { sdk.NiceBuildSdk.setPartnerToken(plaudToken) } catch (_: Exception) { }
+                    null
+                } catch (e: Exception) {
+                    e.message ?: "connection failed"
+                }
+            }
+            if (!isAdded) return@launch
+            renderServerCard()
+            AlertDialog.Builder(requireContext())
+                .setTitle(R.string.bridge_server)
+                .setMessage(
+                    if (error == null) getString(R.string.server_saved)
+                    else getString(R.string.server_setup_error_fmt, error)
+                )
+                .setPositiveButton(android.R.string.ok, null)
+                .show()
+        }
+    }
+
+    // MARK: - Plaud cloud region
+
+    private fun renderRegionCard() {
+        val domain = RecordingStore.plaudDomain
+        val label = RecordingStore.plaudDomains.firstOrNull { it.second == domain }?.first ?: "Custom"
+        binding.plaudRegionLabel.text = "$label · $domain"
+    }
+
+    /**
+     * Switch the Plaud platform region (SDK customDomain / partner API host — used ONLY for the
+     * device auth handshake). The SDK initializes once at app start, so restart to apply.
+     */
+    private fun showSwitchRegionDialog() {
+        val domains = RecordingStore.plaudDomains.map { it.second }.toTypedArray()
+        val labels = RecordingStore.plaudDomains
+            .map { (label, domain) -> "$label ($domain)" }
+            .toTypedArray()
+        val current = domains.indexOf(RecordingStore.plaudDomain).coerceAtLeast(0)
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.plaud_region)
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                dialog.dismiss()
+                val selected = domains[which]
+                if (selected == RecordingStore.plaudDomain) return@setSingleChoiceItems
+                RecordingStore.plaudDomain = selected
+                renderRegionCard()
+                AlertDialog.Builder(requireContext())
+                    .setTitle(R.string.plaud_region)
+                    .setMessage(getString(R.string.plaud_region_restart_fmt, selected))
+                    .setCancelable(false)
+                    .setPositiveButton(R.string.exit_now) { _, _ ->
+                        requireActivity().finishAffinity()
+                        kotlin.system.exitProcess(0)
+                    }
+                    .setNegativeButton(R.string.later, null)
+                    .show()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun showUnpairConfirmation() {
+        // Unpairing strands an in-progress recording — refuse while recording.
+        if (recordingManager.state.value.isActive) {
+            AlertDialog.Builder(requireContext())
+                .setTitle(R.string.device_recording_title)
+                .setMessage(R.string.device_recording_blocks_unpair)
+                .setPositiveButton(android.R.string.ok, null)
+                .show()
+            return
+        }
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.unpair_device)
+            .setMessage(R.string.confirm_unpair)
+            .setPositiveButton(R.string.confirm) { _, _ ->
+                // Unpair the CURRENT device only: other paired devices and synced
+                // recordings survive. unpair() falls the active SN back to the next device.
+                deviceManager.unpair()
+                if (RecordingStore.pairedDeviceSNs.isEmpty()) {
+                    navigateToWelcome()
+                } else {
+                    requireActivity().recreate()
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun navigateToWelcome() {
+        // Unpairing the last device returns to onboarding — drop the "connect later" shortcut too.
+        RecordingStore.hasSkippedOnboarding = false
+        val intent = Intent(requireContext(), WelcomeActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        startActivity(intent)
+        activity?.finish()
+    }
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        _binding = null
+    }
+}

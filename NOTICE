@@ -1,0 +1,14 @@
+Plaud Bridge (Android)
+
+This product includes software derived from the Plaud SDK template app
+(https://github.com/Plaud-AI/plaud-sdk-public), licensed under the
+Apache License, Version 2.0:
+
+    Copyright 2026 Plaud Inc.
+
+The Plaud SDK binary bundled at app/libs/plaud-sdk.aar is proprietary to
+Plaud Inc. and is distributed under a separate license; it is NOT covered
+by this project's Apache-2.0 license.
+
+Plaud Bridge is an independent community project and is not affiliated
+with, endorsed by, or supported by Plaud Inc.
