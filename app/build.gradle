@@ -100,6 +100,9 @@ dependencies {
     // Unit tests (JVM): Robolectric for the Android runtime, MockWebServer for HTTP contracts
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.11.1'
+    // Robolectric+OkHttp platform detection tries to load Conscrypt's native
+    // lib on the JVM; the uber jar bundles it (fixes UnsatisfiedLinkError).
+    testImplementation 'org.conscrypt:conscrypt-openjdk-uber:2.5.2'
     testImplementation 'androidx.test:core:1.5.0'
     testImplementation 'com.squareup.okhttp3:mockwebserver:4.9.3'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
