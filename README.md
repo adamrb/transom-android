@@ -89,11 +89,23 @@ device (BLE also doesn't work in the emulator).
 
 Install the APK (`app/build/outputs/apk/debug/`), then:
 
-1. **Connect your server** — enter the server URL and auth token; *Test connection* checks
-   `GET /api/v1/health` and then verifies the token by fetching your first Plaud access token.
+1. **Connect your server** — tap **Scan QR code** and scan the setup QR from your server's
+   dashboard (it encodes `{"v":1,"url":"https://...","token":"..."}`), or enter the server URL
+   and auth token manually; *Test connection* checks `GET /api/v1/health` and then verifies the
+   token by fetching your first Plaud access token. The camera permission is requested by the
+   scanner itself, only when you use it.
 2. **Pair your device** — press the record button on your Plaud device to wake it, scan,
    and connect. (See the FAQ about unbinding from the official app first.)
 3. Recordings sync automatically on connect (toggle in Settings), or on demand via *Sync now*.
+
+### Library tab
+
+The **Library** tab embeds your server's web dashboard (the mobile-friendly SPA it serves at
+`/`) in a WebView, with pull-to-refresh and in-tab back navigation. The app injects your server
+auth token into the page's localStorage (`pb_token`) so you are never asked to log in. The
+WebView is locked to the configured server's origin: external links open in the system browser,
+nothing else loads inside the tab, and the token is only ever injected into your server's
+origin. Changing the server host (or unpairing) wipes the WebView's storage.
 
 ### Settings
 
@@ -165,7 +177,9 @@ Covered: the strict upload-response contract in `ApiClient` (201/duplicate pairi
 rejection, redirects not followed), token expiry handling in `TokenManager`, composite
 `(device_sn, session_id)` identity and index corruption recovery in `RecordingStore`, and the
 `UploadManager` queue (lost-wakeup dirty flag, blank-SN / wrong-device delete safety, deferred
-device deletes). The BLE SDK is faked behind the thin `UploadManager.DeviceLink` seam — nothing
+device deletes), the Library WebView's same-origin policy (`WebViewOriginPolicy`) and
+token-injection JS escaping (`TokenInjection`), and the QR setup payload parser
+(`QrSetupPayload`). The BLE SDK is faked behind the thin `UploadManager.DeviceLink` seam — nothing
 in the test suite talks to real hardware.
 
 ### Known limitations
