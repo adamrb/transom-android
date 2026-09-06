@@ -212,13 +212,88 @@ class UploadManagerTest {
 
         UploadManager.kick()
         awaitCondition("delete issued") { 40L in fakeLink.deletedSnapshot() }
+        awaitCondition("run finished") { UploadManager.state.value is UploadState.Idle }
 
         // Device reports failure -> flag stays set so a later kick retries.
         UploadManager.handleDeviceDeleteResult(40L, 1)
         assertEquals(1, RecordingStore.pendingDeviceDeletes("SN-A").size)
 
-        // Success clears it.
+        // Next kick re-issues the (deferred) delete; a correlated success then clears it.
+        UploadManager.kick()
+        awaitCondition("delete re-issued") { fakeLink.deletedSnapshot().count { it == 40L } == 2 }
         UploadManager.handleDeviceDeleteResult(40L, 0)
         assertTrue(RecordingStore.pendingDeviceDeletes("SN-A").isEmpty())
+    }
+
+    @Test
+    fun exactlyOneDeleteCommandPerUploadedSession() {
+        // processQueue issues the delete AND processPendingDeletes runs in the same kick — the
+        // in-flight registry must ensure exactly ONE command goes to the device.
+        RecordingStore.deleteAfterUpload = true
+        fakeLink.sn = "SN-A"
+        addSyncedRecording("SN-A", 60)
+        server.enqueue(okUploadResponse("srv-60"))
+
+        UploadManager.kick()
+
+        awaitCondition("delete issued") { 60L in fakeLink.deletedSnapshot() }
+        awaitCondition("run finished") { UploadManager.state.value is UploadState.Idle }
+        Thread.sleep(200) // grace period: any duplicate issuance would land here
+        assertEquals(listOf(60L), fakeLink.deletedSnapshot())
+    }
+
+    @Test
+    fun deleteCallbackAfterDeviceSwitchIsNotMisattributed() {
+        // Sessions can collide across devices. SN-B has its own (already pending) session 50;
+        // SN-A's delete command for ITS session 50 completes only after the user switched to
+        // SN-B. The callback must correlate with the CAPTURED target (SN-A), treat the outcome
+        // as unknown (device changed), and must not clear SN-B's pending state.
+        RecordingStore.deleteAfterUpload = true
+        addSyncedRecording("SN-A", 50)
+        addSyncedRecording("SN-B", 50)
+        RecordingStore.markAsUploaded("SN-B", 50, "sid-b")
+        RecordingStore.setDeletePendingOnDevice("SN-B", 50, true)
+
+        fakeLink.sn = "SN-A"
+        server.enqueue(okUploadResponse("srv-50a"))
+        UploadManager.kick()
+        awaitCondition("delete issued to SN-A") { 50L in fakeLink.deletedSnapshot() }
+        awaitCondition("run finished") { UploadManager.state.value is UploadState.Idle }
+
+        // Device switch between issuing the command and receiving its callback.
+        fakeLink.sn = "SN-B"
+        UploadManager.handleDeviceDeleteResult(50L, 0)
+
+        // Outcome unknown for SN-A -> its pending flag stays; SN-B's state is untouched.
+        assertEquals(1, RecordingStore.pendingDeviceDeletes("SN-A").size)
+        assertEquals(1, RecordingStore.pendingDeviceDeletes("SN-B").size)
+    }
+
+    @Test
+    fun serverConfigChangeMidUploadDiscardsResult() {
+        // The old server accepted the upload while the user was switching servers — the result
+        // must be discarded: not marked uploaded (and so never eligible for device deletion).
+        val firstRequestStarted = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                firstRequestStarted.countDown()
+                releaseFirst.await(10, TimeUnit.SECONDS)
+                return MockResponse().setResponseCode(201)
+                    .setBody("""{"id":"old-server-id","duplicate":false}""")
+            }
+        }
+
+        addSyncedRecording("SN-A", 70)
+        UploadManager.kick()
+        assertTrue(firstRequestStarted.await(10, TimeUnit.SECONDS))
+
+        // Server switch while the request is in flight (bumps the config generation).
+        RecordingStore.serverAuthToken = "different-token"
+        releaseFirst.countDown()
+
+        awaitCondition("run finished") { UploadManager.state.value is UploadState.Failed }
+        assertFalse(RecordingStore.allFiles.single().uploaded)
+        assertTrue(fakeLink.deletedSnapshot().isEmpty())
     }
 }

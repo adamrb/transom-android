@@ -98,6 +98,32 @@ class ApiClientTest {
     }
 
     @Test
+    fun uploadNumericIdIsRejected() {
+        // org.json optString would coerce 123 -> "123"; the contract requires a JSON string.
+        server.enqueue(
+            MockResponse().setResponseCode(201).setBody("""{"id":123,"duplicate":false}""")
+        )
+        assertThrows(ApiClient.ApiException::class.java) { upload() }
+    }
+
+    @Test
+    fun uploadStringDuplicateIsRejected() {
+        // org.json getBoolean would coerce "true" -> true; the contract requires a JSON boolean.
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody("""{"id":"abc","duplicate":"true"}""")
+        )
+        assertThrows(ApiClient.ApiException::class.java) { upload() }
+    }
+
+    @Test
+    fun uploadNullIdIsRejected() {
+        server.enqueue(
+            MockResponse().setResponseCode(201).setBody("""{"id":null,"duplicate":false}""")
+        )
+        assertThrows(ApiClient.ApiException::class.java) { upload() }
+    }
+
+    @Test
     fun upload201WithDuplicateTrueViolatesContract() {
         server.enqueue(
             MockResponse().setResponseCode(201).setBody("""{"id":"abc","duplicate":true}""")
@@ -236,6 +262,13 @@ class ApiClientTest {
     @Test
     fun lookup200WithoutIdIsError() {
         server.enqueue(MockResponse().setResponseCode(200).setBody("""{}"""))
+        assertTrue(ApiClient.lookupRecordingId("SN1", 42L) is ApiClient.LookupResult.Error)
+    }
+
+    @Test
+    fun lookup200WithNumericIdIsError() {
+        // Same strict typing as the upload contract: id must be a JSON string.
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"id":123}"""))
         assertTrue(ApiClient.lookupRecordingId("SN1", 42L) is ApiClient.LookupResult.Error)
     }
 }

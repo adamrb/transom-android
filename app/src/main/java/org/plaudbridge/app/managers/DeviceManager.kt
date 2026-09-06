@@ -720,6 +720,8 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
         // A firmware check result is only valid for the device it was fetched for.
         pendingUpdateInfo = null
         pendingUpdateInfoSN = null
+        // An outstanding file-list request can no longer be attributed safely either.
+        SyncManager.shared.invalidateFileListRequest()
 
         // Unexpected disconnect → persistent auto-reconnect (not during user-initiated
         // disconnect/unpair/adding a device/OTA)

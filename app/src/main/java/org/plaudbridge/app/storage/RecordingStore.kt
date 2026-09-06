@@ -100,15 +100,31 @@ object RecordingStore {
 
     // --- Bridge server settings ---
 
+    /**
+     * Bumped whenever the server URL or auth token changes. In-flight uploads capture the
+     * generation before the request and discard their result if it changed — an upload that was
+     * accepted by the OLD server must not be persisted (and must never trigger a device delete)
+     * once the app points at a different server.
+     */
+    private val serverConfigGenCounter = java.util.concurrent.atomic.AtomicLong(0L)
+    val serverConfigGeneration: Long get() = serverConfigGenCounter.get()
+
     /** Base URL of the self-hosted plaud-bridge-server, e.g. "https://bridge.example.com" (no trailing slash). */
     var serverBaseUrl: String?
         get() = prefs.getString(KEY_SERVER_BASE_URL, null)
-        set(value) = prefs.edit().putString(KEY_SERVER_BASE_URL, value?.trimEnd('/')).apply()
+        set(value) {
+            val normalized = value?.trimEnd('/')
+            if (normalized != serverBaseUrl) serverConfigGenCounter.incrementAndGet()
+            prefs.edit().putString(KEY_SERVER_BASE_URL, normalized).apply()
+        }
 
     /** Bearer token for the self-hosted server's API. */
     var serverAuthToken: String?
         get() = prefs.getString(KEY_SERVER_AUTH_TOKEN, null)
-        set(value) = prefs.edit().putString(KEY_SERVER_AUTH_TOKEN, value).apply()
+        set(value) {
+            if (value != serverAuthToken) serverConfigGenCounter.incrementAndGet()
+            prefs.edit().putString(KEY_SERVER_AUTH_TOKEN, value).apply()
+        }
 
     /** Server configuration complete (onboarding gate). */
     val isServerConfigured: Boolean
@@ -224,22 +240,20 @@ object RecordingStore {
     }
 
     /**
-     * Composite-key matcher: recordings are identified by (device_sn, session_id) — session ids
-     * are NOT globally unique across devices. A stored record with a blank SN (legacy/WiFi edge
-     * case) matches any SN for the same session and is backfilled by the mutators below; a blank
-     * REQUESTED SN only matches blank records, so state is never written across devices.
+     * Composite-key matcher: a recording's identity is EXACTLY (device_sn, session_id) —
+     * session ids are NOT globally unique across devices. Blank-SN legacy records form their
+     * own namespace: they only ever match a blank requested SN, are never backfilled to a real
+     * device, and never stand in for a real device's session. (A wildcard here is precisely how
+     * cross-device state corruption — wrong-device deletes, suppressed downloads — happens; the
+     * worst case of strict isolation is one redundant re-download of a legacy blank record.)
      */
-    private fun matches(file: RecordingFile, deviceSN: String, sessionId: Long): Boolean {
-        if (file.sessionId != sessionId) return false
-        if (file.deviceSN == deviceSN) return true
-        return file.deviceSN.isBlank() && deviceSN.isNotBlank()
-    }
+    private fun matches(file: RecordingFile, deviceSN: String, sessionId: Long): Boolean =
+        file.sessionId == sessionId && file.deviceSN == deviceSN
 
     fun markAsSynced(deviceSN: String, sessionId: Long, localPath: String, duration: Long) {
         synchronized(lock) {
             val files = loadFiles().toMutableList()
             files.find { matches(it, deviceSN, sessionId) }?.apply {
-                if (this.deviceSN.isBlank() && deviceSN.isNotBlank()) this.deviceSN = deviceSN
                 this.localPath = localPath
                 this.syncedAt = System.currentTimeMillis()
                 this.duration = duration
@@ -374,9 +388,13 @@ object RecordingStore {
         val tmp = File(target.parentFile, "$RECORDINGS_FILE.tmp")
         tmp.writeText(json)
         if (!tmp.renameTo(target)) {
-            // Rename failed (rare) — fall back to a direct write rather than losing the update.
-            target.writeText(json)
-            tmp.delete()
+            // Rename failed (rare). NEVER fall back to a direct write — a crash mid-write would
+            // truncate the index, which is the exact loss the temp file exists to prevent. Keep
+            // the previous index intact (this update is lost, but re-derivable) and leave the
+            // temp file behind for inspection.
+            org.plaudbridge.app.common.AppLog.w(
+                "RecordingStore", "recordings index rename failed — keeping previous index"
+            )
         }
     }
 }

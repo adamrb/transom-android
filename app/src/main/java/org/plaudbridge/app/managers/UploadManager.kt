@@ -78,6 +78,17 @@ object UploadManager {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val running = AtomicBoolean(false)
 
+    /**
+     * Delete commands awaiting their bleDeleteFile callback: sessionId -> SN the command was
+     * issued to. The callback carries no SN, so this registry is the correlation source — the
+     * completion is credited to the CAPTURED target, never to whatever device happens to be
+     * connected at callback time. It also dedupes: while a session has an entry, no second
+     * delete command is issued for it. Entries are cleared by the callback, on command failure,
+     * or at the start of the next kick run (a lost callback then permits a retry; the pending
+     * flag stays set throughout, so nothing is ever wrongly marked deleted).
+     */
+    private val inFlightDeletes = java.util.concurrent.ConcurrentHashMap<Long, String>()
+
     /** Work arrived while a run was in flight — loop again instead of dropping the wakeup. */
     private val dirty = AtomicBoolean(false)
 
@@ -90,6 +101,9 @@ object UploadManager {
         dirty.set(true)
         if (!running.compareAndSet(false, true)) return
         scope.launch {
+            // Stale in-flight entries (callback never arrived, e.g. disconnect) must not block
+            // retries forever; a late callback then finds no entry and is safely ignored.
+            inFlightDeletes.clear()
             try {
                 while (dirty.getAndSet(false)) {
                     processQueue()
@@ -116,6 +130,11 @@ object UploadManager {
             _state.value = UploadState.Uploading(index + 1, pending.size, rec.name)
             try {
                 val file = File(rec.localPath!!)
+                // Server-config generation guard: if the user switches server URL/token while
+                // this request is in flight, the OLD server's acceptance means nothing on the
+                // new one — the result must be discarded, not persisted (and certainly must not
+                // trigger a device delete).
+                val configGen = RecordingStore.serverConfigGeneration
                 // NOTE: rec.deviceSN is used as-is. A blank SN is still uploaded (the server can
                 // store it), but it must never be "fixed up" with the currently connected SN —
                 // that guess is exactly what enables cross-device deletion bugs.
@@ -126,12 +145,17 @@ object UploadManager {
                     startedAtIso = isoUtc(rec.createdAt),
                     durationSec = rec.duration.takeIf { it > 0 }?.toDouble()
                 )
-                // Only a validated result reaches this point (non-blank id, exact contract).
-                RecordingStore.markAsUploaded(rec.deviceSN, rec.sessionId, result.id)
-                onFilesChanged()
-                AppLog.i(TAG, "Uploaded sessionId=${rec.sessionId} duplicate=${result.duplicate}")
-                if (RecordingStore.deleteAfterUpload) {
-                    requestDeviceDelete(rec.deviceSN, rec.sessionId)
+                if (RecordingStore.serverConfigGeneration != configGen) {
+                    failures++
+                    AppLog.w(TAG, "Upload result discarded — server config changed mid-upload (sessionId=${rec.sessionId})")
+                } else {
+                    // Only a validated result reaches this point (non-blank id, exact contract).
+                    RecordingStore.markAsUploaded(rec.deviceSN, rec.sessionId, result.id)
+                    onFilesChanged()
+                    AppLog.i(TAG, "Uploaded sessionId=${rec.sessionId} duplicate=${result.duplicate}")
+                    if (RecordingStore.deleteAfterUpload) {
+                        requestDeviceDelete(rec.deviceSN, rec.sessionId)
+                    }
                 }
             } catch (e: Exception) {
                 failures++
@@ -177,9 +201,10 @@ object UploadManager {
 
     /**
      * Issue the SDK delete. Requires (checked again here) that the connected SN matches the
-     * recording's SN. The SDK's bleDeleteFile callback carries no SN, so the pending flag is
-     * cleared once [handleDeviceDeleteResult] reports status 0 while this device is connected;
-     * on failure the flag stays set and the delete is retried on a later kick.
+     * recording's SN, and registers the (sessionId -> SN) pair in [inFlightDeletes] BEFORE
+     * sending so the completion callback is correlated against the captured target — and so
+     * exactly ONE command per session is outstanding at a time (processQueue and
+     * processPendingDeletes can both reach here for the same session in one run).
      */
     private fun issueDeviceDelete(deviceSN: String, sessionId: Long) {
         try {
@@ -187,26 +212,40 @@ object UploadManager {
                 RecordingStore.setDeletePendingOnDevice(deviceSN, sessionId, true)
                 return
             }
+            // Persist the intent first: the flag is only ever cleared by a correlated success.
             RecordingStore.setDeletePendingOnDevice(deviceSN, sessionId, true)
+            if (inFlightDeletes.putIfAbsent(sessionId, deviceSN) != null) {
+                return // a command for this session is already awaiting its callback
+            }
             deviceLink.deleteFile(sessionId)
             AppLog.i(TAG, "Requested device delete for sessionId=$sessionId")
         } catch (e: Exception) {
+            inFlightDeletes.remove(sessionId)
             AppLog.w(TAG, "deleteFromDevice failed for sessionId=$sessionId", e)
         }
     }
 
     /**
-     * SDK bleDeleteFile result, forwarded by DeviceManager. Attribution: the callback has no SN,
-     * so it is credited to the device connected at callback time — the same device the command
-     * was issued to (issueDeviceDelete refuses to send otherwise).
+     * SDK bleDeleteFile result, forwarded by DeviceManager. The callback has no SN, so it is
+     * correlated against the (sessionId -> SN) captured when the command was ISSUED. If the
+     * connected device changed between issue and callback, the outcome is UNKNOWN — keep the
+     * pending flag (a retry against the right device is harmless; clearing it wrongly is not).
      */
     fun handleDeviceDeleteResult(sessionId: Long, status: Int) {
+        val targetSN = inFlightDeletes.remove(sessionId)
+        if (targetSN == null) {
+            AppLog.w(TAG, "bleDeleteFile for sessionId=$sessionId with no in-flight command — ignored")
+            return
+        }
         if (status != 0) {
             AppLog.w(TAG, "device delete failed (status=$status) sessionId=$sessionId — will retry")
             return
         }
-        val connected = connectedDeviceSN() ?: return
-        RecordingStore.setDeletePendingOnDevice(connected, sessionId, false)
+        if (connectedDeviceSN() != targetSN) {
+            AppLog.w(TAG, "device changed between delete command and callback (sessionId=$sessionId) — outcome unknown, keeping deletePending")
+            return
+        }
+        RecordingStore.setDeletePendingOnDevice(targetSN, sessionId, false)
         AppLog.i(TAG, "Device delete confirmed for sessionId=$sessionId")
     }
 

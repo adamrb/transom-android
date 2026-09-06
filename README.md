@@ -175,7 +175,17 @@ in the test suite talks to real hardware.
   hops). A rapid start/stop or a callback racing a queue clear can, in principle, interleave.
   The right fix is routing all SDK events and commands through one serialized actor — a larger
   refactor deliberately not attempted here. Attribution guards (device serial captured per
-  request, stale callbacks dropped) close the dangerous cross-device cases in the meantime.
+  request/command, consume-once request objects, stale callbacks dropped) close the dangerous
+  cross-device cases in the meantime.
+- **SDK callbacks carry no correlation id.** File-list, export, and delete callbacks arrive
+  without a request token, so attribution relies on capture-at-issue (closures / a consume-once
+  request object / an in-flight command registry) plus serial-number re-checks. If the SDK ever
+  allowed two outstanding requests to one device, callback *order* could still not be verified —
+  only a correlation id in the SDK API can fully fix that. `SyncManager`'s file-list attribution
+  has no unit test: exercising `handleBleFileList` requires constructing SDK `BleFile` objects
+  and triggers real `PlaudDeviceAgent` export calls inside the singleton's manager graph, which
+  cannot run on the JVM; the equivalent logic that *is* seam-isolated (UploadManager's delete
+  correlation) is covered.
 - **Release signing.** The `release` build type signs with the debug keystore for sideloading
   convenience. For any store-facing or shared build, configure a real protected keystore via
   `signingConfigs` (and consider Gradle dependency verification). The Gradle wrapper pins

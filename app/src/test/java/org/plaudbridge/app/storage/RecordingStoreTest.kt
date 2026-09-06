@@ -80,13 +80,19 @@ class RecordingStoreTest {
     }
 
     @Test
-    fun blankStoredSnIsBackfilledOnSync() {
+    fun blankSnRecordsAreIsolatedFromRealDevices() {
+        // Blank-SN legacy records are their own namespace: a real device's update must never
+        // match (or backfill) them — that wildcard is how cross-device corruption happened.
         RecordingStore.addFiles(listOf(rec("", 100)))
         RecordingStore.markAsSynced("SN-A", 100, "/tmp/a.mp3", 42)
 
         val stored = RecordingStore.allFiles.single()
-        assertEquals("SN-A", stored.deviceSN)
-        assertTrue(stored.isSynced)
+        assertEquals("", stored.deviceSN)
+        assertFalse(stored.isSynced)
+
+        // A blank-SN update DOES match the blank record (its own namespace).
+        RecordingStore.markAsSynced("", 100, "/tmp/legacy.mp3", 42)
+        assertTrue(RecordingStore.allFiles.single().isSynced)
     }
 
     @Test
@@ -95,6 +101,14 @@ class RecordingStoreTest {
         RecordingStore.addFiles(listOf(rec("SN-A", 100)))
         RecordingStore.markAsUploaded("", 100, "server-id")
         assertFalse(RecordingStore.allFiles.single().uploaded)
+    }
+
+    @Test
+    fun blankSnRecordDoesNotSuppressARealDeviceRecordWithSameSession() {
+        // Both may coexist: the blank legacy record and the real device's record are distinct.
+        RecordingStore.addFiles(listOf(rec("", 100)))
+        RecordingStore.addFiles(listOf(rec("SN-A", 100)))
+        assertEquals(2, RecordingStore.allFiles.size)
     }
 
     @Test
@@ -133,6 +147,47 @@ class RecordingStoreTest {
         val bak = File(context.filesDir, "recordings.json.bak")
         assertTrue(bak.exists())
         assertEquals("{ this is not valid json ][", bak.readText())
+    }
+
+    @Test
+    fun renameFailureNeverFallsBackToDirectWrite() {
+        // Force renameTo to fail: the target path is occupied by a non-empty directory
+        // (rename(2) of a file onto a non-empty directory fails). The old code then fell back
+        // to a direct target.writeText — truncation-prone AND it would throw here. The fixed
+        // code must complete without throwing and leave the existing path untouched.
+        val target = File(context.filesDir, "recordings.json")
+        target.delete()
+        assertTrue(target.mkdir())
+        File(target, "occupant").writeText("keep")
+
+        RecordingStore.addFiles(listOf(rec("SN-A", 1))) // must not throw
+
+        assertTrue(target.isDirectory)
+        assertEquals("keep", File(target, "occupant").readText())
+
+        // Clean up so later saves in other tests work.
+        File(target, "occupant").delete()
+        target.delete()
+        File(context.filesDir, "recordings.json.tmp").delete()
+    }
+
+    @Test
+    fun serverConfigGenerationBumpsOnUrlOrTokenChange() {
+        val start = RecordingStore.serverConfigGeneration
+        RecordingStore.serverBaseUrl = "https://one.example.com"
+        assertEquals(start + 1, RecordingStore.serverConfigGeneration)
+
+        // Same value: no bump.
+        RecordingStore.serverBaseUrl = "https://one.example.com"
+        assertEquals(start + 1, RecordingStore.serverConfigGeneration)
+
+        RecordingStore.serverAuthToken = "tok-1"
+        assertEquals(start + 2, RecordingStore.serverConfigGeneration)
+        RecordingStore.serverAuthToken = "tok-1"
+        assertEquals(start + 2, RecordingStore.serverConfigGeneration)
+
+        RecordingStore.serverBaseUrl = "https://two.example.com"
+        assertEquals(start + 3, RecordingStore.serverConfigGeneration)
     }
 
     // MARK: - Missing local file reconciliation

@@ -10,9 +10,9 @@ data class RecordingFile(
     @SerializedName("sessionId")
     val sessionId: Long,
 
-    /** var: a blank SN (legacy/WiFi edge case) is backfilled once the owning device is known. */
+    /** Immutable: (deviceSN, sessionId) is the recording's identity; blank = legacy/unknown. */
     @SerializedName("deviceSN")
-    var deviceSN: String,
+    val deviceSN: String,
 
     @SerializedName("name")
     var name: String,

@@ -67,13 +67,25 @@ class SyncManager private constructor() : SyncManagerProtocol {
     private var silentFetch = false
 
     /**
-     * Device the current file-list request / sync run belongs to. Captured when the request is
-     * issued; a bleFileList callback arriving after the user switched devices no longer matches
-     * and is dropped, so device A's sessions can never be stored under device B (async
-     * attribution guard).
+     * The file-list request currently awaiting its bleFileList callback. The SN is captured in
+     * an immutable object when the request is ISSUED, and the callback consumes it exactly once
+     * (getAndSet(null)) — so a second/stale callback finds nothing and is dropped, and a newer
+     * request can never have its SN read by an older callback slot-style. The request is also
+     * invalidated on device disconnect (see [invalidateFileListRequest]).
+     *
+     * Residual limitation (documented, not fixable app-side): the SDK callback carries no
+     * correlation id, so if TWO requests were somehow outstanding at once the callback order
+     * could not be verified. Requests only exist for the single connected device and are
+     * cleared on disconnect, which closes the cross-device window in practice.
      */
-    @Volatile
-    private var fileListRequestSN: String? = null
+    private class FileListRequest(val sn: String)
+    private val fileListRequest =
+        java.util.concurrent.atomic.AtomicReference<FileListRequest?>(null)
+
+    /** Drop any outstanding file-list request — its answer can no longer be attributed safely. */
+    fun invalidateFileListRequest() {
+        fileListRequest.set(null)
+    }
 
     /** Device the active BLE sync run is downloading from (set by handleFileList). */
     @Volatile
@@ -125,14 +137,14 @@ class SyncManager private constructor() : SyncManagerProtocol {
 
     override fun fetchFileList() {
         silentFetch = true
-        fileListRequestSN = currentDeviceSN()
+        fileListRequest.set(currentDeviceSN()?.let { FileListRequest(it) })
         queryDeviceFileList()
     }
 
     override fun startSync() {
         if (_state.value.isActive) return
         silentFetch = false
-        fileListRequestSN = currentDeviceSN()
+        fileListRequest.set(currentDeviceSN()?.let { FileListRequest(it) })
         _state.value = SyncState.Syncing(SyncProgress(totalFiles = 0, syncedFiles = 0))
         queryDeviceFileList()
     }
@@ -154,16 +166,18 @@ class SyncManager private constructor() : SyncManagerProtocol {
     /** Entry for the facade bleFileList callback (forwarded by DeviceManager's listener). */
     fun handleBleFileList(bleFiles: List<BleFile>) {
         AppLog.i(TAG, "bleFileList: found ${bleFiles.size} files")
-        // Async attribution guard: this callback carries no SN. If the device changed since the
-        // request was issued (or nothing is connected any more), the list belongs to the OLD
-        // device — drop it rather than storing its sessions under the new device's identity.
-        val requestSN = fileListRequestSN
+        // Async attribution guard: this callback carries no SN. Consume the outstanding request
+        // exactly once — a stale/duplicate callback finds nothing — and require that the device
+        // the request was issued to is still the connected one; otherwise the list belongs to
+        // the OLD device and is dropped rather than stored under the new device's identity.
+        val request = fileListRequest.getAndSet(null)
         val connectedSN = currentDeviceSN()
-        if (requestSN == null || connectedSN == null || requestSN != connectedSN) {
-            AppLog.w(TAG, "bleFileList dropped — device changed since the request was issued")
+        if (request == null || connectedSN == null || request.sn != connectedSN) {
+            AppLog.w(TAG, "bleFileList dropped — no matching outstanding request for this device")
             silentFetch = false
             return
         }
+        val requestSN = request.sn
         val sessionIds = bleFiles.map { it.sessionId }
         // Note: the newer BleFile exposes only sessionId/fileSize publicly; duration members are
         // internal. Duration stays 0 for now.
@@ -375,10 +389,11 @@ class SyncManager private constructor() : SyncManagerProtocol {
      */
     private fun registerWifiFiles(files: List<IWifiTransferAgent.WifiFileInfo>) {
         val localSynced = RecordingStore.allFiles.filter { it.syncedAt != null }
-        // Composite (SN, session) dedupe; blank-SN legacy entries match this device's sessions
-        // so they aren't duplicated (RecordingStore backfills their SN on the next markAsSynced).
+        // Composite (SN, session) dedupe. Blank-SN legacy entries are deliberately NOT matched:
+        // letting them stand in for this device's sessions is exactly the wildcard that caused
+        // cross-device suppression, so a legacy blank record may cost one redundant re-download.
         val syncedIds = localSynced
-            .filter { it.deviceSN == wifiDeviceSN || it.deviceSN.isBlank() }
+            .filter { it.deviceSN == wifiDeviceSN }
             .map { it.sessionId }
             .toSet()
         val deviceFiles = files
@@ -437,6 +452,9 @@ class SyncManager private constructor() : SyncManagerProtocol {
 
         val outputDir = RecordingStore.exportDir
         wifiCurrentFileName = RecordingStore.allFiles.firstOrNull { it.sessionId == sessionId }?.name
+        // Capture the owning SN at issue time; the completion callback must not read the
+        // mutable global (a later session could have overwritten it by then).
+        val exportSN = wifiDeviceSN
         AppLog.i(TAG, "WiFi export start: sessionId=$sessionId")
 
         try {
@@ -462,8 +480,10 @@ class SyncManager private constructor() : SyncManagerProtocol {
 
                     override fun onComplete(outputFile: java.io.File) {
                         AppLog.i(TAG, "WiFi export complete: sessionId=$sessionId -> ${outputFile.name}")
+                        // exportSN was captured when THIS export was issued (closure, not the
+                        // mutable global) — a session started later can't change its attribution.
                         RecordingStore.markAsSynced(
-                            wifiDeviceSN, sessionId, outputFile.absolutePath,
+                            exportSN, sessionId, outputFile.absolutePath,
                             audioDurationSec(outputFile.absolutePath)
                         )
                         wifiSyncedSessionIds.add(sessionId)
@@ -644,9 +664,10 @@ class SyncManager private constructor() : SyncManagerProtocol {
         activeSyncSN = sns.firstOrNull() ?: ""
         val localSynced = RecordingStore.allFiles.filter { it.isSynced }
         // Composite (SN, session) dedupe: a session id already synced from ANOTHER device must
-        // still be downloaded from this one. Blank-SN legacy entries match any device.
+        // still be downloaded from this one. Blank-SN legacy entries are their own namespace and
+        // never suppress a real device's session (they may re-download; that is the safe side).
         fun isAlreadySynced(sid: Long, sn: String) = localSynced.any {
-            it.sessionId == sid && (it.deviceSN == sn || it.deviceSN.isBlank())
+            it.sessionId == sid && it.deviceSN == sn
         }
         val newSessionIds = sessionIds.filterIndexed { i, sid ->
             !isAlreadySynced(sid, if (i < sns.size) sns[i] else "")
@@ -774,10 +795,11 @@ class SyncManager private constructor() : SyncManagerProtocol {
         null
     }
 
-    fun handleDownloadComplete(sessionId: Int, outputPath: String) {
+    /** [deviceSN] is captured when the export is ISSUED (closure), never read at completion. */
+    fun handleDownloadComplete(deviceSN: String, sessionId: Int, outputPath: String) {
         org.plaudbridge.app.common.OpusRepair.repairIfNeeded(outputPath)
         syncedCount++
-        RecordingStore.markAsSynced(activeSyncSN, sessionId.toLong(), outputPath, audioDurationSec(outputPath))
+        RecordingStore.markAsSynced(deviceSN, sessionId.toLong(), outputPath, audioDurationSec(outputPath))
         scope.launch { _files.value = RecordingStore.allFiles }
         // NOTE: unlike Plaud's template app, the file is NOT deleted from the device here.
         // UploadManager pushes it to the bridge server and — only when the user enabled
@@ -798,6 +820,9 @@ class SyncManager private constructor() : SyncManagerProtocol {
         lastProgressUpdate = 0
         lastProgressBytes = 0.0
         currentFileSize = synchronized(fileSizesBySession) { fileSizesBySession[nextSessionId] ?: 0 }
+        // Capture the owning SN for THIS export now; the completion callback uses the captured
+        // value so a run started later can never change this file's attribution.
+        val exportSN = activeSyncSN
 
         val currentFile = RecordingStore.allFiles.firstOrNull { it.sessionId == nextSessionId }
         scope.launch {
@@ -826,7 +851,7 @@ class SyncManager private constructor() : SyncManagerProtocol {
                 }
                 override fun onComplete(outputFile: File) {
                     bleExportStage = null
-                    handleDownloadComplete(nextSessionId.toInt(), outputFile.absolutePath)
+                    handleDownloadComplete(exportSN, nextSessionId.toInt(), outputFile.absolutePath)
                     resumeDeferredWiFiTransferIfNeeded()
                 }
                 override fun onError(error: String) {

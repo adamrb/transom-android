@@ -146,10 +146,17 @@ object ApiClient {
             val json = try { JSONObject(text) } catch (e: Exception) {
                 throw ApiException(resp.code, "upload response is not valid JSON")
             }
-            val id = json.optString("id")
-            if (id.isBlank()) throw ApiException(resp.code, "upload response has no id")
-            if (!json.has("duplicate")) throw ApiException(resp.code, "upload response has no duplicate flag")
-            val duplicate = json.getBoolean("duplicate")
+            // Strict JSON types: optString/getBoolean COERCE ({"id":123} -> "123",
+            // {"duplicate":"true"} -> true), which would let a malformed response pass
+            // validation and ultimately trigger a device delete. Require the exact types.
+            val id = json.opt("id")
+            if (id !is String || id.isBlank()) {
+                throw ApiException(resp.code, "upload response id must be a non-blank string")
+            }
+            val duplicate = json.opt("duplicate")
+            if (duplicate !is Boolean) {
+                throw ApiException(resp.code, "upload response duplicate must be a boolean")
+            }
             // Exact contract pairing: 201 must be a fresh store, 200 must be a duplicate.
             val contractOk = (resp.code == 201 && !duplicate) || (resp.code == 200 && duplicate)
             if (!contractOk) {
@@ -185,8 +192,9 @@ object ApiClient {
                         LookupResult.Error("HTTP ${resp.code}")
                     }
                     else -> {
-                        val id = try { JSONObject(text).optString("id") } catch (e: Exception) { "" }
-                        if (id.isBlank()) LookupResult.Error("lookup response has no id")
+                        // Same strictness as the upload contract: id must be a JSON string.
+                        val id = try { JSONObject(text).opt("id") as? String } catch (e: Exception) { null }
+                        if (id.isNullOrBlank()) LookupResult.Error("lookup response has no string id")
                         else LookupResult.Found(id)
                     }
                 }
