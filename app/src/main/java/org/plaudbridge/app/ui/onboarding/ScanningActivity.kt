@@ -36,8 +36,9 @@ class ScanningActivity : AppCompatActivity() {
     /** Add-device mode: launched from Home to pair an additional device. */
     private val isAddingDevice: Boolean get() = intent.getBooleanExtra(EXTRA_ADDING_DEVICE, false)
 
-    // Animations
+    // Animations (all canceled in onDestroy — infinite animators leak the activity otherwise)
     private var pulseAnimator: ObjectAnimator? = null
+    private var pulseYAnimator: ObjectAnimator? = null
     private var rotationAnimator: ObjectAnimator? = null
 
     /** BLE runtime permissions to request (Android 12+ needs BLUETOOTH_SCAN/CONNECT; below 12 needs location permission) */
@@ -80,6 +81,14 @@ class ScanningActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Cancel the infinite animators — a paused-but-alive INFINITE animator keeps the view
+        // (and the destroyed activity) reachable.
+        pulseAnimator?.cancel()
+        pulseYAnimator?.cancel()
+        rotationAnimator?.cancel()
+        pulseAnimator = null
+        pulseYAnimator = null
+        rotationAnimator = null
         // Leaving Add-Device without connecting must not permanently suppress auto-reconnect
         // (mirrors iOS viewWillDisappear reset).
         if (isAddingDevice) deviceManager.suppressAutoReconnect = false
@@ -171,7 +180,7 @@ class ScanningActivity : AppCompatActivity() {
             repeatMode = ValueAnimator.REVERSE
             repeatCount = ValueAnimator.INFINITE
         }
-        val pulseY = ObjectAnimator.ofFloat(binding.glowView, View.SCALE_Y, 0.95f, 1.05f).apply {
+        pulseYAnimator = ObjectAnimator.ofFloat(binding.glowView, View.SCALE_Y, 0.95f, 1.05f).apply {
             duration = 2000
             repeatMode = ValueAnimator.REVERSE
             repeatCount = ValueAnimator.INFINITE
@@ -185,17 +194,19 @@ class ScanningActivity : AppCompatActivity() {
         }
 
         pulseAnimator?.start()
-        pulseY.start()
+        pulseYAnimator?.start()
         rotationAnimator?.start()
     }
 
     private fun startAnimations() {
         pulseAnimator?.resume()
+        pulseYAnimator?.resume()
         rotationAnimator?.resume()
     }
 
     private fun stopAnimations() {
         pulseAnimator?.pause()
+        pulseYAnimator?.pause()
         rotationAnimator?.pause()
     }
 

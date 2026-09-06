@@ -57,7 +57,15 @@ Plaud's proprietary device SDK (`app/libs/plaud-sdk.aar`) — see [NOTICE](NOTIC
 ### 1. Run a server
 
 Deploy [`plaud-bridge-server`](https://github.com/adamrb/plaud-bridge-server) somewhere the
-phone can reach (HTTPS strongly recommended). You'll need its base URL and an API auth token.
+phone can reach. You'll need its base URL and an API auth token.
+
+**HTTPS is required.** The app only accepts `https://` server URLs: Android blocks cleartext
+(plain-HTTP) traffic by default, so an `http://` URL would just fail with an opaque network
+error. If you really want plain HTTP on a trusted LAN, you must add a custom
+[`networkSecurityConfig`](https://developer.android.com/privacy-and-security/security-config)
+to the app (an XML resource allowing cleartext for your specific host, referenced via
+`android:networkSecurityConfig` in the manifest) and relax the URL validation — this is
+deliberately not shipped.
 
 ### 2. Build the app
 
@@ -93,7 +101,7 @@ Install the APK (`app/build/outputs/apk/debug/`), then:
 |---|---|
 | Automatic sync | Pull new recordings whenever the device connects / stops recording |
 | Delete after upload | Remove from device only after the server confirms (default off) |
-| Bridge server | Edit URL/token; changes are verified against the server before saving |
+| Bridge server | Edit URL/token; changes are verified against the server before saving. Switching to a different server host resets local upload/transcript state — recordings re-upload to the new server (it deduplicates) |
 | Plaud cloud region | `platform-us.plaud.ai` (default) or `platform-jp.plaud.ai`; restart to apply |
 | User ID | The auto-generated per-install id (`pb_<uuid>`) your server sees |
 
@@ -127,6 +135,13 @@ Plaud's latest. The firmware image comes from Plaud's platform.
 **Recording from the app?**
 Yes — start/pause/stop the device's recorder remotely, with a live level meter.
 
+**What does deleting a recording in the app do?**
+The *Remove Downloaded Copy* action on a recording removes only the MP3 the phone downloaded
+(and the local list entry). It does **not** delete the copy on the recorder, nor anything
+already uploaded to your server. Device-side deletion happens only via the *Delete after
+upload* setting, and only after the server confirms the upload — and only ever on the exact
+device (matched by serial number) the recording came from.
+
 ## Development notes
 
 - Architecture follows the upstream template: singleton managers (`DeviceManager`,
@@ -137,6 +152,37 @@ Yes — start/pause/stop the device's recorder remotely, with a live level meter
   `ui/onboarding/ServerSetupActivity`. Removed: `TranscriptionManager` (Plaud cloud
   transcription), all `BuildConfig` credential injection.
 - minSdk 21, compileSdk 34, Kotlin + coroutines, OkHttp for the server API.
+
+### Testing
+
+JVM unit tests (JUnit4 + Robolectric + OkHttp MockWebServer) live in `app/src/test`:
+
+```bash
+./gradlew test          # or: ./gradlew testDebugUnitTest
+```
+
+Covered: the strict upload-response contract in `ApiClient` (201/duplicate pairing, HTML-200
+rejection, redirects not followed), token expiry handling in `TokenManager`, composite
+`(device_sn, session_id)` identity and index corruption recovery in `RecordingStore`, and the
+`UploadManager` queue (lost-wakeup dirty flag, blank-SN / wrong-device delete safety, deferred
+device deletes). The BLE SDK is faked behind the thin `UploadManager.DeviceLink` seam — nothing
+in the test suite talks to real hardware.
+
+### Known limitations
+
+- **Threading (SDK callbacks).** SDK callbacks and manager state transitions are not confined
+  to a single dispatcher/actor; state is guarded piecemeal (locks, `@Volatile`, main-thread
+  hops). A rapid start/stop or a callback racing a queue clear can, in principle, interleave.
+  The right fix is routing all SDK events and commands through one serialized actor — a larger
+  refactor deliberately not attempted here. Attribution guards (device serial captured per
+  request, stale callbacks dropped) close the dangerous cross-device cases in the meantime.
+- **Release signing.** The `release` build type signs with the debug keystore for sideloading
+  convenience. For any store-facing or shared build, configure a real protected keystore via
+  `signingConfigs` (and consider Gradle dependency verification). The Gradle wrapper pins
+  `distributionSha256Sum` for the 8.2 distribution.
+- **Backups.** `android:allowBackup` is `false`: the app stores your server bearer token and
+  a Plaud JWT, which must not leak through cloud/device-transfer backups. Re-onboard (server
+  URL + token) after moving to a new phone; recordings re-download/re-upload safely.
 
 ## License
 

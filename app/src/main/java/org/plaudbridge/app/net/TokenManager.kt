@@ -11,7 +11,10 @@ import org.plaudbridge.app.storage.RecordingStore
  *
  * Unlike Plaud's template app (build-time USER_ACCESS_TOKEN), this app fetches the token at
  * runtime from the self-hosted plaud-bridge-server (POST /api/v1/plaud/user-token), caches it,
- * and refreshes it when the JWT is close to expiry or when the SDK reports an auth failure.
+ * and refreshes it when it is close to expiry or when the SDK reports an auth failure.
+ *
+ * Expiry is tracked from the server's `expires_in` (persisted as an absolute timestamp);
+ * the JWT's own `exp` claim is used only as a consistency check (whichever is sooner wins).
  *
  * The Android SDK facade has no setUserAccessToken (iOS parity gap); the live-refresh path is
  * sdk.NiceBuildSdk.setPartnerToken, which the SDK also uses internally after initSDK.
@@ -25,17 +28,37 @@ object TokenManager {
 
     private val refreshMutex = Mutex()
 
-    /** Cached token if it parses and is not near expiry, else null. */
+    /** Effective expiry (epoch seconds): server-provided expiry, tightened by the JWT exp if sooner. */
+    private fun effectiveExpirySec(token: String): Long {
+        val serverExp = RecordingStore.cachedPlaudTokenExpiry
+        val jwtExp = JwtUtils.parse(token)?.expSeconds ?: 0L
+        return when {
+            serverExp > 0 && jwtExp > 0 -> minOf(serverExp, jwtExp)
+            serverExp > 0 -> serverExp
+            else -> jwtExp
+        }
+    }
+
+    /** Cached token if it is not near expiry, else null. */
     fun cachedTokenIfValid(): String? {
         val token = RecordingStore.cachedPlaudToken ?: return null
-        val info = JwtUtils.parse(token) ?: return null
+        val exp = effectiveExpirySec(token)
+        if (exp <= 0) return null
         val now = System.currentTimeMillis() / 1000
-        return if (info.expSeconds - now > EXPIRY_MARGIN_SEC) token else null
+        return if (exp - now > EXPIRY_MARGIN_SEC) token else null
     }
 
     /** Best-effort current token for synchronous callers (may be expired; empty if none yet). */
     val currentToken: String
         get() = RecordingStore.cachedPlaudToken ?: ""
+
+    /** Persist a token + its server-declared lifetime (used by onboarding and refresh). */
+    fun store(token: ApiClient.UserToken) {
+        RecordingStore.cachedPlaudToken = token.accessToken
+        RecordingStore.cachedPlaudTokenExpiry =
+            if (token.expiresInSec > 0) System.currentTimeMillis() / 1000 + token.expiresInSec
+            else 0L
+    }
 
     /**
      * Return a valid token, fetching a fresh one from the bridge server when the cache is
@@ -45,24 +68,21 @@ object TokenManager {
         if (!force) cachedTokenIfValid()?.let { return it }
         val userId = RecordingStore.getOrCreateUserId()
         val token = ApiClient.fetchUserToken(userId)
-        RecordingStore.cachedPlaudToken = token
-        AppLog.i(TAG, "Fetched Plaud user token for $userId (${JwtUtils.mask(token)})")
-        token
+        store(token)
+        AppLog.i(TAG, "Fetched Plaud user token (expires_in=${token.expiresInSec}s)")
+        token.accessToken
     }
 
     /**
      * Refresh the token and hand it to the (already initialized) SDK. Used when the JWT nears
      * expiry mid-session or the SDK reports an auth failure (e.g. 401 from the partner API).
-     * Returns the new token, or null if the fetch failed.
+     * Returns the new token, or null if the fetch OR the SDK apply failed — callers must treat
+     * null as "do not proceed with stale credentials".
      */
     suspend fun refreshAndApply(): String? = try {
         val token = getValidToken(force = true)
-        try {
-            sdk.NiceBuildSdk.setPartnerToken(token)
-            AppLog.i(TAG, "Applied refreshed token to SDK")
-        } catch (e: Exception) {
-            AppLog.w(TAG, "setPartnerToken failed", e)
-        }
+        sdk.NiceBuildSdk.setPartnerToken(token)
+        AppLog.i(TAG, "Applied refreshed token to SDK")
         token
     } catch (e: Exception) {
         AppLog.w(TAG, "Token refresh failed", e)

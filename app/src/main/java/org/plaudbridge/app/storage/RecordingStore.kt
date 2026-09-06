@@ -22,6 +22,7 @@ object RecordingStore {
     private const val KEY_PLAUD_DOMAIN = "plaud_domain"
     private const val KEY_DELETE_AFTER_UPLOAD = "delete_after_upload"
     private const val KEY_CACHED_PLAUD_TOKEN = "cached_plaud_token"
+    private const val KEY_CACHED_PLAUD_TOKEN_EXPIRY = "cached_plaud_token_expiry"
     private const val RECORDINGS_FILE = "recordings.json"
 
     private lateinit var appContext: Context
@@ -137,6 +138,11 @@ object RecordingStore {
         get() = prefs.getString(KEY_CACHED_PLAUD_TOKEN, null)
         set(value) = prefs.edit().putString(KEY_CACHED_PLAUD_TOKEN, value).apply()
 
+    /** Absolute expiry (epoch seconds) derived from the server's expires_in; 0 = unknown. */
+    var cachedPlaudTokenExpiry: Long
+        get() = prefs.getLong(KEY_CACHED_PLAUD_TOKEN_EXPIRY, 0L)
+        set(value) = prefs.edit().putLong(KEY_CACHED_PLAUD_TOKEN_EXPIRY, value).apply()
+
     /** Delete a recording from the device after a CONFIRMED server upload. Default OFF. */
     var deleteAfterUpload: Boolean
         get() = prefs.getBoolean(KEY_DELETE_AFTER_UPLOAD, false)
@@ -166,8 +172,8 @@ object RecordingStore {
     fun addFiles(files: List<RecordingFile>) {
         synchronized(lock) {
             val existing = loadFiles().toMutableList()
-            val existingSessionIds = existing.map { it.sessionId }.toSet()
-            val newFiles = files.filter { it.sessionId !in existingSessionIds }
+            val existingKeys = existing.map { it.deviceSN to it.sessionId }.toSet()
+            val newFiles = files.filter { (it.deviceSN to it.sessionId) !in existingKeys }
             existing.addAll(newFiles)
             saveFiles(existing)
         }
@@ -217,10 +223,23 @@ object RecordingStore {
         }
     }
 
-    fun markAsSynced(sessionId: Long, localPath: String, duration: Long) {
+    /**
+     * Composite-key matcher: recordings are identified by (device_sn, session_id) — session ids
+     * are NOT globally unique across devices. A stored record with a blank SN (legacy/WiFi edge
+     * case) matches any SN for the same session and is backfilled by the mutators below; a blank
+     * REQUESTED SN only matches blank records, so state is never written across devices.
+     */
+    private fun matches(file: RecordingFile, deviceSN: String, sessionId: Long): Boolean {
+        if (file.sessionId != sessionId) return false
+        if (file.deviceSN == deviceSN) return true
+        return file.deviceSN.isBlank() && deviceSN.isNotBlank()
+    }
+
+    fun markAsSynced(deviceSN: String, sessionId: Long, localPath: String, duration: Long) {
         synchronized(lock) {
             val files = loadFiles().toMutableList()
-            files.find { it.sessionId == sessionId }?.apply {
+            files.find { matches(it, deviceSN, sessionId) }?.apply {
+                if (this.deviceSN.isBlank() && deviceSN.isNotBlank()) this.deviceSN = deviceSN
                 this.localPath = localPath
                 this.syncedAt = System.currentTimeMillis()
                 this.duration = duration
@@ -229,16 +248,68 @@ object RecordingStore {
         }
     }
 
-    /** Record a confirmed server upload (201 created, or 200 duplicate:true). */
-    fun markAsUploaded(sessionId: Long, serverId: String?) {
+    /** Record a confirmed server upload (validated 201, or validated 200 duplicate:true). */
+    fun markAsUploaded(deviceSN: String, sessionId: Long, serverId: String) {
         synchronized(lock) {
             val files = loadFiles().toMutableList()
-            files.find { it.sessionId == sessionId }?.apply {
+            files.find { matches(it, deviceSN, sessionId) }?.apply {
                 this.uploaded = true
                 this.serverId = serverId
                 this.uploadedAt = System.currentTimeMillis()
             }
             saveFiles(files)
+        }
+    }
+
+    /** Set/clear the "delete from device once reconnected" flag (delete-after-upload retry). */
+    fun setDeletePendingOnDevice(deviceSN: String, sessionId: Long, pending: Boolean) {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.find { matches(it, deviceSN, sessionId) }?.deletePendingOnDevice = pending
+            saveFiles(files)
+        }
+    }
+
+    /** Uploaded recordings still waiting for a device-side delete, for the given device only. */
+    fun pendingDeviceDeletes(deviceSN: String): List<RecordingFile> =
+        allFiles.filter { it.deletePendingOnDevice && it.uploaded && it.deviceSN == deviceSN }
+
+    /**
+     * Drop all server-side state (uploaded/serverId/transcripts) — used when the user points the
+     * app at a DIFFERENT server: the old ids mean nothing there, and re-uploads are deduplicated.
+     */
+    fun clearServerState() {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.forEach {
+                it.uploaded = false
+                it.serverId = null
+                it.uploadedAt = null
+                it.deletePendingOnDevice = false
+                it.transcriptJSON = null
+            }
+            saveFiles(files)
+        }
+    }
+
+    /**
+     * Reconcile the index with the filesystem: a record whose exported audio has vanished is no
+     * longer synced — clear localPath/syncedAt so the sync flow re-downloads it while the device
+     * copy still exists (recordings previously lived in cacheDir, which Android may evict).
+     */
+    fun clearMissingLocalFiles() {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            var changed = false
+            files.forEach { f ->
+                val path = f.localPath
+                if (path != null && !File(path).exists()) {
+                    f.localPath = null
+                    f.syncedAt = null
+                    changed = true
+                }
+            }
+            if (changed) saveFiles(files)
         }
     }
 
@@ -258,9 +329,10 @@ object RecordingStore {
     val pendingUploads: List<RecordingFile>
         get() = allFiles.filter { it.isSynced && !it.uploaded }
 
+    /** Durable storage for exported recordings (filesDir — cacheDir can be evicted by the OS). */
     val exportDir: File
         get() {
-            val dir = File(appContext.cacheDir, "export")
+            val dir = File(appContext.filesDir, "recordings")
             if (!dir.exists()) dir.mkdirs()
             return dir
         }
@@ -286,12 +358,25 @@ object RecordingStore {
             val type = object : TypeToken<List<RecordingFile>>() {}.type
             gson.fromJson(json, type) ?: emptyList()
         } catch (e: Exception) {
+            // Quarantine the corrupt index instead of silently treating it as empty — the next
+            // save would otherwise overwrite it and permanently lose upload/server state.
+            try {
+                file.copyTo(File(file.parentFile, "$RECORDINGS_FILE.bak"), overwrite = true)
+            } catch (_: Exception) { }
             emptyList()
         }
     }
 
+    /** Write via temp file + rename so a crash mid-write never truncates the index. */
     private fun saveFiles(files: List<RecordingFile>) {
         val json = gson.toJson(files)
-        recordingsFile().writeText(json)
+        val target = recordingsFile()
+        val tmp = File(target.parentFile, "$RECORDINGS_FILE.tmp")
+        tmp.writeText(json)
+        if (!tmp.renameTo(target)) {
+            // Rename failed (rare) — fall back to a direct write rather than losing the update.
+            target.writeText(json)
+            tmp.delete()
+        }
     }
 }

@@ -18,10 +18,16 @@ import java.util.concurrent.TimeUnit
  * All methods are blocking and must be called off the main thread (callers use
  * Dispatchers.IO). Endpoints:
  *   GET  /api/v1/health                          (no auth)
- *   POST /api/v1/plaud/user-token                {"user_id": ...} -> {"access_token", ...}
+ *   POST /api/v1/plaud/user-token                {"user_id": ...} -> {"access_token", "expires_in", ...}
  *   POST /api/v1/recordings                      multipart "file" + "metadata"
  *   GET  /api/v1/recordings/lookup?device_sn=..&session_id=..
- *   GET  /api/v1/recordings/{id}/transcript      200 ready / 404,409 pending
+ *   GET  /api/v1/recordings/{id}/transcript      200 ready / 409 pending
+ *
+ * Security notes:
+ * - Redirects are disabled: a redirecting proxy must never turn into a spoofed "success"
+ *   that leads to marking a recording uploaded (and possibly deleting it from the device).
+ * - Logging is restricted to status codes and byte counts — never response bodies, tokens,
+ *   or transcript content.
  */
 object ApiClient {
 
@@ -31,6 +37,8 @@ object ApiClient {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(300, TimeUnit.SECONDS)
+        .followRedirects(false)
+        .followSslRedirects(false)
         .build()
 
     private val jsonType = "application/json".toMediaType()
@@ -52,11 +60,14 @@ object ApiClient {
         client.newCall(req).execute().use { resp -> return resp.isSuccessful }
     }
 
+    /** Result of POST /api/v1/plaud/user-token. [expiresInSec] <= 0 when the server omitted it. */
+    data class UserToken(val accessToken: String, val expiresInSec: Long)
+
     /**
      * Verify the server auth token by requesting a Plaud user token for [userId] against an
-     * explicit base URL + token (used by onboarding "Test connection"). Returns the access token.
+     * explicit base URL + token (used by onboarding "Test connection").
      */
-    fun fetchUserToken(base: String, authToken: String, userId: String): String {
+    fun fetchUserToken(base: String, authToken: String, userId: String): UserToken {
         val body = JSONObject().put("user_id", userId).toString().toRequestBody(jsonType)
         val req = Request.Builder()
             .url("${base.trimEnd('/')}/api/v1/plaud/user-token")
@@ -66,17 +77,23 @@ object ApiClient {
         client.newCall(req).execute().use { resp ->
             val text = resp.body?.string() ?: ""
             if (!resp.isSuccessful) {
-                AppLog.w(TAG, "user-token failed: HTTP ${resp.code} ${text.take(200)}")
-                throw ApiException(resp.code, text.take(200))
+                AppLog.w(TAG, "user-token failed: HTTP ${resp.code} (${text.length} bytes)")
+                throw ApiException(resp.code, "user-token request rejected")
             }
-            val token = JSONObject(text).optString("access_token")
+            val json = try { JSONObject(text) } catch (e: Exception) {
+                throw ApiException(resp.code, "user-token response is not valid JSON")
+            }
+            val token = json.optString("access_token")
             if (token.isBlank()) throw ApiException(resp.code, "no access_token in response")
-            return token
+            return UserToken(
+                accessToken = token,
+                expiresInSec = json.optLong("expires_in", 0L)
+            )
         }
     }
 
     /** Fetch a fresh Plaud user access token using the stored server settings. */
-    fun fetchUserToken(userId: String): String =
+    fun fetchUserToken(userId: String): UserToken =
         fetchUserToken(
             baseUrl(),
             RecordingStore.serverAuthToken ?: throw IllegalStateException("Server auth token not configured"),
@@ -85,11 +102,16 @@ object ApiClient {
 
     // MARK: - Recording upload
 
-    data class UploadResult(val id: String?, val duplicate: Boolean)
+    /** A STRICTLY validated upload result: [id] is always non-blank. */
+    data class UploadResult(val id: String, val duplicate: Boolean)
 
     /**
      * POST /api/v1/recordings (multipart/form-data).
-     * 201 -> stored; 200 with duplicate:true -> the server already has it (also success).
+     *
+     * Contract, enforced exactly (anything else throws and the upload is retried later —
+     * a recording is only ever marked uploaded / deleted from the device on a validated result):
+     *   201 + JSON {"id": <non-blank>, "duplicate": false}  -> stored now
+     *   200 + JSON {"id": <non-blank>, "duplicate": true}   -> server already had it
      */
     fun uploadRecording(
         file: File,
@@ -118,42 +140,74 @@ object ApiClient {
         client.newCall(req).execute().use { resp ->
             val text = resp.body?.string() ?: ""
             if (resp.code != 200 && resp.code != 201) {
-                AppLog.w(TAG, "upload failed: HTTP ${resp.code} ${text.take(200)}")
-                throw ApiException(resp.code, text.take(200))
+                AppLog.w(TAG, "upload failed: HTTP ${resp.code} (${text.length} bytes)")
+                throw ApiException(resp.code, "upload rejected")
             }
-            val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
-            return UploadResult(
-                id = json.optString("id").takeIf { it.isNotBlank() },
-                duplicate = json.optBoolean("duplicate", false)
-            )
+            val json = try { JSONObject(text) } catch (e: Exception) {
+                throw ApiException(resp.code, "upload response is not valid JSON")
+            }
+            val id = json.optString("id")
+            if (id.isBlank()) throw ApiException(resp.code, "upload response has no id")
+            if (!json.has("duplicate")) throw ApiException(resp.code, "upload response has no duplicate flag")
+            val duplicate = json.getBoolean("duplicate")
+            // Exact contract pairing: 201 must be a fresh store, 200 must be a duplicate.
+            val contractOk = (resp.code == 201 && !duplicate) || (resp.code == 200 && duplicate)
+            if (!contractOk) {
+                throw ApiException(resp.code, "upload response violates the status/duplicate contract")
+            }
+            return UploadResult(id = id, duplicate = duplicate)
         }
     }
 
     // MARK: - Transcript
 
-    /** GET /api/v1/recordings/lookup — server-side recording id for (device_sn, session_id), or null. */
-    fun lookupRecordingId(deviceSn: String, sessionId: Long): String? {
+    /** Typed result of the recording-id lookup. */
+    sealed class LookupResult {
+        data class Found(val id: String) : LookupResult()
+        /** 404: the server has no such recording (not uploaded / not registered yet). */
+        object NotFound : LookupResult()
+        data class AuthError(val code: Int) : LookupResult()
+        data class Error(val message: String) : LookupResult()
+    }
+
+    /** GET /api/v1/recordings/lookup — server-side recording id for (device_sn, session_id). */
+    fun lookupRecordingId(deviceSn: String, sessionId: Long): LookupResult {
         val url = "${baseUrl()}/api/v1/recordings/lookup?device_sn=$deviceSn&session_id=$sessionId"
         val req = Request.Builder().url(url).header("Authorization", authHeader()).get().build()
-        client.newCall(req).execute().use { resp ->
-            if (resp.code == 404) return null
-            val text = resp.body?.string() ?: ""
-            if (!resp.isSuccessful) {
-                AppLog.w(TAG, "lookup failed: HTTP ${resp.code} ${text.take(200)}")
-                return null
+        return try {
+            client.newCall(req).execute().use { resp ->
+                val text = resp.body?.string() ?: ""
+                when {
+                    resp.code == 404 -> LookupResult.NotFound
+                    resp.code == 401 || resp.code == 403 -> LookupResult.AuthError(resp.code)
+                    !resp.isSuccessful -> {
+                        AppLog.w(TAG, "lookup failed: HTTP ${resp.code} (${text.length} bytes)")
+                        LookupResult.Error("HTTP ${resp.code}")
+                    }
+                    else -> {
+                        val id = try { JSONObject(text).optString("id") } catch (e: Exception) { "" }
+                        if (id.isBlank()) LookupResult.Error("lookup response has no id")
+                        else LookupResult.Found(id)
+                    }
+                }
             }
-            return JSONObject(text).optString("id").takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            LookupResult.Error(e.message ?: "network error")
         }
     }
 
     sealed class TranscriptResult {
         /** rawJson = {"text": "...", "segments": [...]} as returned by the server. */
         data class Ready(val rawJson: String) : TranscriptResult()
+        /** 409: the server knows the recording but the transcription is not done yet. */
         object Pending : TranscriptResult()
+        /** 404: the server does not know this recording id (stale/foreign id). */
+        object NotFound : TranscriptResult()
+        data class AuthError(val code: Int) : TranscriptResult()
         data class Error(val message: String) : TranscriptResult()
     }
 
-    /** GET /api/v1/recordings/{id}/transcript — Ready when done, Pending on 404/409. */
+    /** GET /api/v1/recordings/{id}/transcript. */
     fun fetchTranscript(recordingId: String): TranscriptResult {
         val req = Request.Builder()
             .url("${baseUrl()}/api/v1/recordings/$recordingId/transcript")
@@ -165,8 +219,13 @@ object ApiClient {
                 val text = resp.body?.string() ?: ""
                 when {
                     resp.isSuccessful -> TranscriptResult.Ready(text)
-                    resp.code == 404 || resp.code == 409 -> TranscriptResult.Pending
-                    else -> TranscriptResult.Error("HTTP ${resp.code}: ${text.take(200)}")
+                    resp.code == 409 -> TranscriptResult.Pending
+                    resp.code == 404 -> TranscriptResult.NotFound
+                    resp.code == 401 || resp.code == 403 -> TranscriptResult.AuthError(resp.code)
+                    else -> {
+                        AppLog.w(TAG, "transcript failed: HTTP ${resp.code} (${text.length} bytes)")
+                        TranscriptResult.Error("HTTP ${resp.code}")
+                    }
                 }
             }
         } catch (e: Exception) {

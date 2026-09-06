@@ -55,8 +55,11 @@ class FirmwareUpdateSheet : BottomSheetDialogFragment() {
         }
         // Block dismissal while the update is running
         isCancelable = false
-        // Survive rotation without re-triggering the OTA
+        // Survive rotation without re-triggering the OTA, and keep the run-identity flag so a
+        // terminal state arriving right after rotation is still rendered (and re-enables dismissal
+        // instead of leaving the sheet stuck non-cancelable).
         started = savedInstanceState?.getBoolean(KEY_STARTED, false) ?: false
+        sawFreshState = savedInstanceState?.getBoolean(KEY_SAW_FRESH_STATE, false) ?: false
 
         val deviceName = arguments?.getString(ARG_DEVICE_NAME) ?: "Plaud Device"
         binding.descriptionLabel.text = getString(R.string.firmware_updating_desc, deviceName)
@@ -73,6 +76,7 @@ class FirmwareUpdateSheet : BottomSheetDialogFragment() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putBoolean(KEY_STARTED, started)
+        outState.putBoolean(KEY_SAW_FRESH_STATE, sawFreshState)
     }
 
     private fun buildSegments() {
@@ -129,7 +133,9 @@ class FirmwareUpdateSheet : BottomSheetDialogFragment() {
             FirmwareUpdateUiState.Phase.RESTARTING ->
                 binding.descriptionLabel.text = getString(R.string.firmware_restarting_desc)
             FirmwareUpdateUiState.Phase.COMPLETED -> {
-                // Don't dismiss yet — wait for the device to actually reconnect (mirrors iOS).
+                // Terminal state: the push is done, so the user may dismiss at any time while we
+                // wait for the device to reconnect (mirrors iOS).
+                isCancelable = true
                 awaitReconnectThenDismiss()
             }
             FirmwareUpdateUiState.Phase.FAILED -> {
@@ -194,6 +200,7 @@ class FirmwareUpdateSheet : BottomSheetDialogFragment() {
     companion object {
         private const val ARG_DEVICE_NAME = "device_name"
         private const val KEY_STARTED = "ota_started"
+        private const val KEY_SAW_FRESH_STATE = "ota_saw_fresh_state"
         private val EMPTY_COLOR = Color.parseColor("#E5E5E5")
 
         fun newInstance(deviceName: String): FirmwareUpdateSheet = FirmwareUpdateSheet().apply {

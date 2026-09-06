@@ -28,9 +28,12 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
 
-    private val homeFragment = HomeFragment()
-    private val filesFragment = FilesFragment()
-    private val settingsFragment = SettingsFragment()
+    // Created in setupFragments: fresh instances on first launch, re-attached by tag after
+    // process/config recreation (the FragmentManager restores its own instances — adding new
+    // ones on top would duplicate every tab).
+    private lateinit var homeFragment: Fragment
+    private lateinit var filesFragment: Fragment
+    private lateinit var settingsFragment: Fragment
     private var activeFragment: Fragment? = null
 
     private var selectedTab = 0
@@ -51,9 +54,9 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        setupFragments()
+        setupFragments(savedInstanceState)
         setupTabBar()
-        selectTab(0)
+        selectTab(savedInstanceState?.getInt(KEY_SELECTED_TAB, 0) ?: 0, force = true)
 
         // Cloud binding alerts (e.g. device bound to another account)
         lifecycleScope.launch {
@@ -80,13 +83,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupFragments() {
-        supportFragmentManager.beginTransaction()
-            .add(R.id.fragmentContainer, settingsFragment, "settings").hide(settingsFragment)
-            .add(R.id.fragmentContainer, filesFragment, "files").hide(filesFragment)
-            .add(R.id.fragmentContainer, homeFragment, "home")
-            .commit()
-        activeFragment = homeFragment
+    private fun setupFragments(savedInstanceState: Bundle?) {
+        val fm = supportFragmentManager
+        if (savedInstanceState == null) {
+            homeFragment = HomeFragment()
+            filesFragment = FilesFragment()
+            settingsFragment = SettingsFragment()
+            fm.beginTransaction()
+                .add(R.id.fragmentContainer, settingsFragment, "settings").hide(settingsFragment)
+                .add(R.id.fragmentContainer, filesFragment, "files").hide(filesFragment)
+                .add(R.id.fragmentContainer, homeFragment, "home")
+                .commit()
+        } else {
+            // Recreation: reuse the FragmentManager's restored instances.
+            homeFragment = fm.findFragmentByTag("home") ?: HomeFragment()
+            filesFragment = fm.findFragmentByTag("files") ?: FilesFragment()
+            settingsFragment = fm.findFragmentByTag("settings") ?: SettingsFragment()
+        }
+        activeFragment = null // selectTab(force = true) sets visibility + activeFragment
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putInt(KEY_SELECTED_TAB, selectedTab)
     }
 
     private fun setupTabBar() {
@@ -104,8 +123,8 @@ class MainActivity : AppCompatActivity() {
         binding.tabSettings.setOnClickListener { selectTab(2) }
     }
 
-    private fun selectTab(index: Int) {
-        if (selectedTab == index && activeFragment != null) return
+    private fun selectTab(index: Int, force: Boolean = false) {
+        if (!force && selectedTab == index && activeFragment != null) return
         selectedTab = index
 
         val target = when (index) {
@@ -115,12 +134,12 @@ class MainActivity : AppCompatActivity() {
             else -> homeFragment
         }
 
-        activeFragment?.let { current ->
-            supportFragmentManager.beginTransaction()
-                .hide(current)
-                .show(target)
-                .commit()
+        val tx = supportFragmentManager.beginTransaction()
+        listOf(homeFragment, filesFragment, settingsFragment).forEach { f ->
+            if (f !== target && f.isAdded) tx.hide(f)
         }
+        if (target.isAdded) tx.show(target)
+        tx.commit()
         activeFragment = target
 
         updateTabAppearance()
@@ -143,5 +162,9 @@ class MainActivity : AppCompatActivity() {
             icons[i].setColorFilter(tint)
             labels[i].setTextColor(tint)
         }
+    }
+
+    companion object {
+        private const val KEY_SELECTED_TAB = "selected_tab"
     }
 }

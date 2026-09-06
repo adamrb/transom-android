@@ -119,6 +119,10 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
     /** Firmware update info from the latest check, reused by startFirmwareUpdate. */
     private var pendingUpdateInfo: FirmwareUpdateInfo? = null
 
+    /** SN the pendingUpdateInfo was fetched FOR — a stale result must never install elsewhere. */
+    @Volatile
+    private var pendingUpdateInfoSN: String? = null
+
     private var appContext: Context? = null
     private var scanTimeoutJob: Job? = null
 
@@ -197,7 +201,6 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
             }
             return
         }
-        sdkInitialized = true
 
         // Important: the SDK's Partner API (gen-key / sn-sign) defaults to platform-jp,
         // and the platformHost passed to initSdk is not forwarded to the Partner API (known SDK issue).
@@ -212,11 +215,18 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
 
         // GA facade init (E2EE devices need no appKey/appSecret; token = userAccessToken model)
         PlaudDeviceAgent.listener = agentListener
-        PlaudDeviceAgent.initSDK(
-            context = ctx,
-            userAccessToken = token,
-            customDomain = platformHost.removePrefix("https://")
-        )
+        try {
+            PlaudDeviceAgent.initSDK(
+                context = ctx,
+                userAccessToken = token,
+                customDomain = platformHost.removePrefix("https://")
+            )
+        } catch (e: Exception) {
+            // Do NOT latch sdkInitialized on failure — the next configure() retries a clean init.
+            AppLog.e(TAG, "initSDK failed", e)
+            return
+        }
+        sdkInitialized = true
 
         // Silence the BLE SDK's per-packet DEBUG spam (OtaPushHelper logs ~5 lines per 80-byte
         // packet during OTA ≈ 200 lines/s); INFO keeps connection/state logs.
@@ -224,7 +234,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
             com.tinnotech.penblesdk.utils.TntBleLog.setLogLevel(android.util.Log.INFO)
         } catch (e: Exception) { AppLog.w(TAG, "setLogLevel failed", e) }
 
-        AppLog.i(TAG, "SDK configured for userId=$userId")
+        AppLog.i(TAG, "SDK configured")
     }
 
     /** SN of the device the user asked to connect (facade bleConnectState carries no SN). */
@@ -421,6 +431,8 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
 
         override fun bleDeleteFile(sessionId: Long, status: Int) {
             AppLog.i(TAG, "bleDeleteFile: sessionId=$sessionId, status=$status")
+            // Delete-after-upload bookkeeping: clear/keep the persisted deletePending flag.
+            UploadManager.handleDeviceDeleteResult(sessionId, status)
         }
 
         override fun bleDepair(status: Int) {
@@ -594,7 +606,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
                 val json = okhttp3.OkHttpClient().newCall(request).execute().use { resp ->
                     val body = resp.body?.string() ?: ""
                     if (!resp.isSuccessful) {
-                        AppLog.w(TAG, "checkFirmwareUpdate: HTTP ${resp.code}: ${body.take(200)}")
+                        AppLog.w(TAG, "checkFirmwareUpdate: HTTP ${resp.code} (${body.length} bytes)")
                         return@launch
                     }
                     org.json.JSONObject(body)
@@ -604,6 +616,14 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
                 val downloadUrl = json.optString("download_url")
                 val hasUpdate = serverCode > deviceCode && downloadUrl.isNotBlank()
                 AppLog.i(TAG, "checkFirmwareUpdate: current=$deviceCode, latest=$serverCode, hasUpdate=$hasUpdate")
+
+                // Async attribution guard (device switch mid-request): this response was fetched
+                // for [sn]. If a different device is connected by now, applying it could offer —
+                // and push — the wrong firmware image. Drop it instead.
+                if (_connectedDevice.value?.serialNumber != sn) {
+                    AppLog.w(TAG, "checkFirmwareUpdate result dropped — connected device changed")
+                    return@launch
+                }
 
                 // Install-time validation requires "^[VT]\d+$" (e.g. "V66055"), matching the
                 // device's own versionName format — keep the V/T prefix on versionCode.
@@ -626,6 +646,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
                     isForceUpdate = json.optBoolean("is_force", false)
                 )
                 pendingUpdateInfo = if (hasUpdate) info else null
+                pendingUpdateInfoSN = if (hasUpdate) sn else null
                 _connectedDevice.value = _connectedDevice.value?.copy(
                     firmwareVersion = formatFirmwareVersion(rawVersion),
                     latestFirmwareVersion = if (hasUpdate) formatFirmwareVersion(serverCode.toString()) else null
@@ -696,6 +717,9 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
     private fun onDeviceDisconnected() {
         _connectionState.value = DeviceConnectionState.Disconnected
         _connectedDevice.value = null
+        // A firmware check result is only valid for the device it was fetched for.
+        pendingUpdateInfo = null
+        pendingUpdateInfoSN = null
 
         // Unexpected disconnect → persistent auto-reconnect (not during user-initiated
         // disconnect/unpair/adding a device/OTA)
@@ -877,9 +901,18 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
         scope.launch(Dispatchers.IO) {
             try {
                 // Step 0: make sure the Plaud user token is fresh — the handshake token derives
-                // from it, and an expired JWT is rejected by the partner API / device.
-                if (org.plaudbridge.app.net.TokenManager.cachedTokenIfValid() == null) {
-                    org.plaudbridge.app.net.TokenManager.refreshAndApply()
+                // from it, and an expired JWT is rejected by the partner API / device. Abort the
+                // connect rather than proceeding with stale credentials.
+                if (org.plaudbridge.app.net.TokenManager.cachedTokenIfValid() == null &&
+                    org.plaudbridge.app.net.TokenManager.refreshAndApply() == null
+                ) {
+                    awaitingHandshake = false
+                    withContext(Dispatchers.Main) {
+                        _connectionState.value = DeviceConnectionState.Failed(
+                            "Could not refresh the Plaud access token from your server. Check Settings."
+                        )
+                    }
+                    return@launch
                 }
 
                 // Step 1: wait for the partner RSA key pair to be ready.
@@ -982,6 +1015,14 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
         }
         if (info == null || !info.hasUpdate) {
             emitFirmwareState(0f, FirmwareUpdateUiState.Phase.NO_UPDATE, "No update available")
+            return
+        }
+        // The pending update was checked for a specific device — never install it on another one.
+        if (pendingUpdateInfoSN == null || pendingUpdateInfoSN != _connectedDevice.value?.serialNumber) {
+            emitFirmwareState(
+                0f, FirmwareUpdateUiState.Phase.FAILED, "Update failed",
+                "The update check belongs to a different device — reopen Settings to re-check."
+            )
             return
         }
 
@@ -1115,13 +1156,14 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
     private fun queryCloudBinding(sn: String): CloudBindingInfo? = try {
         val deviceType = getDeviceType(sn)
         val url = "$platformHost/developer/api/open/partner/sdk/binding?type=$deviceType&sn=$sn"
-        AppLog.i(TAG, "cloud binding >>> GET $url")
+        AppLog.i(TAG, "cloud binding >>> GET /sdk/binding")
         val request = okhttp3.Request.Builder().url(url)
             .header("Authorization", "Bearer $partnerToken")
             .get().build()
         okhttp3.OkHttpClient().newCall(request).execute().use { resp ->
             val body = resp.body?.string() ?: ""
-            AppLog.i(TAG, "cloud binding <<< HTTP ${resp.code} ${body.take(300)}")
+            // Log status + size only — the body contains account-linked binding history.
+            AppLog.i(TAG, "cloud binding <<< HTTP ${resp.code} (${body.length} bytes)")
             if (!resp.isSuccessful) null
             else {
                 val json = JSONObject(body)
@@ -1174,7 +1216,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
             recoveryInProgress = true
             try {
                 for ((index, historicalId) in history.withIndex()) {
-                    AppLog.i(TAG, "recovery: attempt ${index + 1}/${history.size} with ${historicalId.take(20)}…")
+                    AppLog.i(TAG, "recovery: attempt ${index + 1}/${history.size}")
                     val signal = CompletableDeferred<Boolean>()
                     recoverySignal = signal
                     try {
@@ -1302,7 +1344,8 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
         val url = "$platformHost/developer/api/open/partner/sdk/$action"
         val body = JSONObject().put("type", getDeviceType(sn)).put("sn", sn)
         val token = partnerToken
-        AppLog.i(TAG, "cloud $action >>> POST $url body=$body Authorization=Bearer ${token.take(16)}…")
+        // Never log the token (not even a fragment) or the response body.
+        AppLog.i(TAG, "cloud $action >>> POST /sdk/$action")
         val request = okhttp3.Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $token")
@@ -1310,7 +1353,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
             .build()
         okhttp3.OkHttpClient().newCall(request).execute().use { resp ->
             val text = resp.body?.string() ?: ""
-            AppLog.i(TAG, "cloud $action <<< HTTP ${resp.code} ${text.take(300)}")
+            AppLog.i(TAG, "cloud $action <<< HTTP ${resp.code} (${text.length} bytes)")
             resp.code
         }
     } catch (e: Exception) {

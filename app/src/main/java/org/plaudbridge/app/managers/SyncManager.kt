@@ -66,6 +66,31 @@ class SyncManager private constructor() : SyncManagerProtocol {
 
     private var silentFetch = false
 
+    /**
+     * Device the current file-list request / sync run belongs to. Captured when the request is
+     * issued; a bleFileList callback arriving after the user switched devices no longer matches
+     * and is dropped, so device A's sessions can never be stored under device B (async
+     * attribution guard).
+     */
+    @Volatile
+    private var fileListRequestSN: String? = null
+
+    /** Device the active BLE sync run is downloading from (set by handleFileList). */
+    @Volatile
+    private var activeSyncSN: String = ""
+
+    /** Device the active WiFi fast-transfer session belongs to. */
+    @Volatile
+    private var wifiDeviceSN: String = ""
+
+    /** sessionId -> byte size from the latest device file list (for transfer-speed display). */
+    private val fileSizesBySession = mutableMapOf<Long, Int>()
+
+    /** SN of the currently connected device (single source for attribution checks). */
+    private fun currentDeviceSN(): String? =
+        DeviceManager.shared.connectedDevice.value?.serialNumber?.takeIf { it.isNotBlank() }
+            ?: RecordingStore.lastConnectedDeviceSN
+
     /** True while a WiFi fast transfer is in flight; guards finishWiFiTransfer so cleanup runs once. */
     @Volatile
     private var wifiTransferActive = false
@@ -100,12 +125,14 @@ class SyncManager private constructor() : SyncManagerProtocol {
 
     override fun fetchFileList() {
         silentFetch = true
+        fileListRequestSN = currentDeviceSN()
         queryDeviceFileList()
     }
 
     override fun startSync() {
         if (_state.value.isActive) return
         silentFetch = false
+        fileListRequestSN = currentDeviceSN()
         _state.value = SyncState.Syncing(SyncProgress(totalFiles = 0, syncedFiles = 0))
         queryDeviceFileList()
     }
@@ -127,14 +154,26 @@ class SyncManager private constructor() : SyncManagerProtocol {
     /** Entry for the facade bleFileList callback (forwarded by DeviceManager's listener). */
     fun handleBleFileList(bleFiles: List<BleFile>) {
         AppLog.i(TAG, "bleFileList: found ${bleFiles.size} files")
+        // Async attribution guard: this callback carries no SN. If the device changed since the
+        // request was issued (or nothing is connected any more), the list belongs to the OLD
+        // device — drop it rather than storing its sessions under the new device's identity.
+        val requestSN = fileListRequestSN
+        val connectedSN = currentDeviceSN()
+        if (requestSN == null || connectedSN == null || requestSN != connectedSN) {
+            AppLog.w(TAG, "bleFileList dropped — device changed since the request was issued")
+            silentFetch = false
+            return
+        }
         val sessionIds = bleFiles.map { it.sessionId }
         // Note: the newer BleFile exposes only sessionId/fileSize publicly; duration members are
         // internal. Duration stays 0 for now.
         // TODO(SDK): expose a public duration getter, aligned with iOS BleFile.duration().
         val durations = bleFiles.map { 0L }
         val sizes = bleFiles.map { it.fileSize.toInt() }
-        val sn = RecordingStore.lastConnectedDeviceSN ?: ""
-        val sns = List(bleFiles.size) { sn }
+        synchronized(fileSizesBySession) {
+            bleFiles.forEach { fileSizesBySession[it.sessionId] = it.fileSize.toInt() }
+        }
+        val sns = List(bleFiles.size) { requestSN }
         handleFileList(sessionIds, durations, sizes, sns)
     }
 
@@ -187,6 +226,9 @@ class SyncManager private constructor() : SyncManagerProtocol {
         // the device hotspot). BLE is re-enabled and reconnected when the transfer ends.
         DeviceManager.shared.suppressAutoReconnect = true
         wifiTransferActive = true
+        // The WiFi session belongs to the device connected right now; everything it produces is
+        // attributed to this SN (BLE drops during the transfer, so it can't be re-read later).
+        wifiDeviceSN = currentDeviceSN() ?: ""
 
         // Phase 1 shown immediately; the actual session starts after the device-idle grace period.
         _state.value = SyncState.WiFiConnecting(SyncState.WiFiConnectPhase.OPENING_HOTSPOT)
@@ -333,14 +375,19 @@ class SyncManager private constructor() : SyncManagerProtocol {
      */
     private fun registerWifiFiles(files: List<IWifiTransferAgent.WifiFileInfo>) {
         val localSynced = RecordingStore.allFiles.filter { it.syncedAt != null }
-        val syncedIds = localSynced.map { it.sessionId }.toSet()
+        // Composite (SN, session) dedupe; blank-SN legacy entries match this device's sessions
+        // so they aren't duplicated (RecordingStore backfills their SN on the next markAsSynced).
+        val syncedIds = localSynced
+            .filter { it.deviceSN == wifiDeviceSN || it.deviceSN.isBlank() }
+            .map { it.sessionId }
+            .toSet()
         val deviceFiles = files
             .filter { it.sessionId !in syncedIds }
             .map { wf ->
                 RecordingFile(
                     id = UUID.randomUUID().toString(),
                     sessionId = wf.sessionId,
-                    deviceSN = "",
+                    deviceSN = wifiDeviceSN,
                     name = "Untitled Recording",
                     duration = if (wf.duration > 0) wf.duration / 1000L else 0L,
                     createdAt = if (wf.timestamp > 0) wf.timestamp * 1000 else wf.sessionId * 1000,
@@ -416,7 +463,8 @@ class SyncManager private constructor() : SyncManagerProtocol {
                     override fun onComplete(outputFile: java.io.File) {
                         AppLog.i(TAG, "WiFi export complete: sessionId=$sessionId -> ${outputFile.name}")
                         RecordingStore.markAsSynced(
-                            sessionId, outputFile.absolutePath, audioDurationSec(outputFile.absolutePath)
+                            wifiDeviceSN, sessionId, outputFile.absolutePath,
+                            audioDurationSec(outputFile.absolutePath)
                         )
                         wifiSyncedSessionIds.add(sessionId)
                         wifiCompletedCount++
@@ -592,12 +640,20 @@ class SyncManager private constructor() : SyncManagerProtocol {
         sizes: List<Int>,
         sns: List<String>
     ) {
+        // This run downloads from exactly one device (all sns entries are the request SN).
+        activeSyncSN = sns.firstOrNull() ?: ""
         val localSynced = RecordingStore.allFiles.filter { it.isSynced }
-        val localSyncedIds = localSynced.map { it.sessionId }.toSet()
-        val newSessionIds = sessionIds.filter { it !in localSyncedIds }
+        // Composite (SN, session) dedupe: a session id already synced from ANOTHER device must
+        // still be downloaded from this one. Blank-SN legacy entries match any device.
+        fun isAlreadySynced(sid: Long, sn: String) = localSynced.any {
+            it.sessionId == sid && (it.deviceSN == sn || it.deviceSN.isBlank())
+        }
+        val newSessionIds = sessionIds.filterIndexed { i, sid ->
+            !isAlreadySynced(sid, if (i < sns.size) sns[i] else "")
+        }
 
         val deviceFiles = sessionIds.mapIndexedNotNull { i, sid ->
-            if (localSyncedIds.contains(sid)) return@mapIndexedNotNull null
+            if (isAlreadySynced(sid, if (i < sns.size) sns[i] else "")) return@mapIndexedNotNull null
             RecordingFile(
                 id = UUID.randomUUID().toString(),
                 sessionId = sid,
@@ -721,7 +777,7 @@ class SyncManager private constructor() : SyncManagerProtocol {
     fun handleDownloadComplete(sessionId: Int, outputPath: String) {
         org.plaudbridge.app.common.OpusRepair.repairIfNeeded(outputPath)
         syncedCount++
-        RecordingStore.markAsSynced(sessionId.toLong(), outputPath, audioDurationSec(outputPath))
+        RecordingStore.markAsSynced(activeSyncSN, sessionId.toLong(), outputPath, audioDurationSec(outputPath))
         scope.launch { _files.value = RecordingStore.allFiles }
         // NOTE: unlike Plaud's template app, the file is NOT deleted from the device here.
         // UploadManager pushes it to the bridge server and — only when the user enabled
@@ -741,6 +797,7 @@ class SyncManager private constructor() : SyncManagerProtocol {
         val nextSessionId = pendingSessionIds.removeFirst()
         lastProgressUpdate = 0
         lastProgressBytes = 0.0
+        currentFileSize = synchronized(fileSizesBySession) { fileSizesBySession[nextSessionId] ?: 0 }
 
         val currentFile = RecordingStore.allFiles.firstOrNull { it.sessionId == nextSessionId }
         scope.launch {

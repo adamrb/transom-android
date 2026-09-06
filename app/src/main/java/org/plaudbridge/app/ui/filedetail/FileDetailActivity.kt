@@ -183,18 +183,27 @@ class FileDetailActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val outcome = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 try {
-                    val serverId = file.serverId ?: run {
-                        val sn = file.deviceSN.ifBlank {
-                            org.plaudbridge.app.storage.RecordingStore.lastConnectedDeviceSN ?: ""
-                        }
-                        org.plaudbridge.app.net.ApiClient.lookupRecordingId(sn, file.sessionId)?.also {
-                            org.plaudbridge.app.storage.RecordingStore.updateServerId(file.id, it)
-                        }
-                    }
-                    if (serverId == null) {
-                        org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending
+                    val cachedId = file.serverId
+                    if (cachedId != null) {
+                        org.plaudbridge.app.net.ApiClient.fetchTranscript(cachedId)
                     } else {
-                        org.plaudbridge.app.net.ApiClient.fetchTranscript(serverId)
+                        // Look up with the recording's OWN device SN (blank stays blank — the
+                        // upload sent the SN as-is, so substituting the connected device's SN
+                        // could resolve to a DIFFERENT device's recording).
+                        when (val lookup = org.plaudbridge.app.net.ApiClient.lookupRecordingId(
+                            file.deviceSN, file.sessionId
+                        )) {
+                            is org.plaudbridge.app.net.ApiClient.LookupResult.Found -> {
+                                org.plaudbridge.app.storage.RecordingStore.updateServerId(file.id, lookup.id)
+                                org.plaudbridge.app.net.ApiClient.fetchTranscript(lookup.id)
+                            }
+                            is org.plaudbridge.app.net.ApiClient.LookupResult.NotFound ->
+                                org.plaudbridge.app.net.ApiClient.TranscriptResult.NotFound
+                            is org.plaudbridge.app.net.ApiClient.LookupResult.AuthError ->
+                                org.plaudbridge.app.net.ApiClient.TranscriptResult.AuthError(lookup.code)
+                            is org.plaudbridge.app.net.ApiClient.LookupResult.Error ->
+                                org.plaudbridge.app.net.ApiClient.TranscriptResult.Error(lookup.message)
+                        }
                     }
                 } catch (e: Exception) {
                     org.plaudbridge.app.net.ApiClient.TranscriptResult.Error(e.message ?: "network error")
@@ -210,18 +219,28 @@ class FileDetailActivity : AppCompatActivity() {
                 is org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending -> {
                     binding.emptySubtitle.text = getString(R.string.transcription_pending)
                 }
+                is org.plaudbridge.app.net.ApiClient.TranscriptResult.NotFound -> {
+                    binding.emptySubtitle.text = getString(R.string.transcript_not_on_server)
+                    if (userInitiated) showTranscriptAlert(getString(R.string.transcript_not_on_server))
+                }
+                is org.plaudbridge.app.net.ApiClient.TranscriptResult.AuthError -> {
+                    binding.emptySubtitle.text = getString(R.string.transcript_auth_error)
+                    if (userInitiated) showTranscriptAlert(getString(R.string.transcript_auth_error))
+                }
                 is org.plaudbridge.app.net.ApiClient.TranscriptResult.Error -> {
-                    binding.emptySubtitle.text = getString(R.string.transcription_pending)
-                    if (userInitiated) {
-                        AlertDialog.Builder(this@FileDetailActivity)
-                            .setTitle(getString(R.string.transcript))
-                            .setMessage(outcome.message)
-                            .setPositiveButton(android.R.string.ok, null)
-                            .show()
-                    }
+                    binding.emptySubtitle.text = getString(R.string.transcript_server_error)
+                    if (userInitiated) showTranscriptAlert(getString(R.string.transcript_server_error))
                 }
             }
         }
+    }
+
+    private fun showTranscriptAlert(message: String) {
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.transcript))
+            .setMessage(message)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
     }
 
     /**
@@ -246,7 +265,6 @@ class FileDetailActivity : AppCompatActivity() {
             }
             (0 until arr.length()).mapNotNull { i ->
                 val seg = arr.optJSONObject(i) ?: return@mapNotNull null
-                if (i == 0) org.plaudbridge.app.common.AppLog.i("Transcript", "first segment shape: ${seg.toString().take(220)}")
                 val text = seg.optString("content", seg.optString("text", seg.optString("sentence")))
                 if (text.isBlank()) return@mapNotNull null
                 // speaker_id is a string like "SPEAKER_00" (Plaud result shape, mirrors iOS);
@@ -553,7 +571,12 @@ class FileDetailActivity : AppCompatActivity() {
     private fun showDeleteConfirmation(file: RecordingFile) {
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.delete_recording))
-            .setMessage("This will permanently delete \"${file.name}\".")
+            // Accurate scope: this removes ONLY the phone's downloaded copy — any copy still on
+            // the recorder and anything already uploaded to your server are untouched.
+            .setMessage(
+                "This removes the downloaded copy of \"${file.name}\" from this phone. " +
+                    "Copies on the recorder or on your server are not deleted."
+            )
             .setPositiveButton(R.string.delete) { _, _ ->
                 syncManager.deleteFile(file)
                 finish()

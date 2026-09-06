@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Overrides the SDK's res/raw/logback.xml via Android resource merging (app wins over AAR).
-     Same policy as the SDK default except totalSizeCap raised 100MB → 500MB so multi-round
-     stress-test logs are not evicted before export. -->
+     Retention kept deliberately short (3 days / 100MB): these files end up in exported .plaud
+     support bundles, so the app also never logs tokens, response bodies, transcript text, or
+     user ids — status codes and byte counts only. -->
 <configuration>
     <!-- LOG_DIR is set programmatically in the SDK's Logger -->
 
@@ -18,11 +19,11 @@
             <!-- Max size of a single log file -->
             <maxFileSize>20MB</maxFileSize>
 
-            <!-- Keep 7 days of hourly files (7 x 24) -->
-            <maxHistory>168</maxHistory>
+            <!-- Keep 3 days of hourly files (3 x 24) -->
+            <maxHistory>72</maxHistory>
 
             <!-- Total size cap across all log files -->
-            <totalSizeCap>500MB</totalSizeCap>
+            <totalSizeCap>100MB</totalSizeCap>
 
             <cleanHistoryOnStart>true</cleanHistoryOnStart>
         </rollingPolicy>

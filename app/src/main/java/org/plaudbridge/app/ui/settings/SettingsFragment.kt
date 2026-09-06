@@ -173,7 +173,13 @@ class SettingsFragment : Fragment() {
         val tokenInput = EditText(ctx).apply {
             hint = getString(R.string.server_auth_token_hint)
             setText(RecordingStore.serverAuthToken ?: "")
-            maxLines = 2
+            // Secret field: password transformation + no autofill/suggestions.
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            }
+            maxLines = 1
         }
         val container = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -198,7 +204,23 @@ class SettingsFragment : Fragment() {
         var url = rawUrl.trimEnd('/')
         if (url.isBlank() || token.isBlank()) return
         if (!url.startsWith("http://") && !url.startsWith("https://")) url = "https://$url"
+        // HTTPS only: the default network security config blocks cleartext anyway, so an http://
+        // URL would just fail later with an opaque network error (see README for LAN setups).
+        if (!url.startsWith("https://")) {
+            AlertDialog.Builder(requireContext())
+                .setTitle(R.string.bridge_server)
+                .setMessage(R.string.server_setup_https_required)
+                .setPositiveButton(android.R.string.ok, null)
+                .show()
+            return
+        }
         val finalUrl = url
+        // Pointing the app at a DIFFERENT server invalidates every cached server id: recordings
+        // marked uploaded / transcript ids belong to the old server. Clear that state so files
+        // re-upload (the server deduplicates) instead of silently querying foreign ids.
+        val oldHost = RecordingStore.serverBaseUrl?.let { android.net.Uri.parse(it).host }
+        val newHost = android.net.Uri.parse(finalUrl).host
+        val hostChanged = oldHost != null && newHost != null && oldHost != newHost
         viewLifecycleOwner.lifecycleScope.launch {
             val error = withContext(Dispatchers.IO) {
                 try {
@@ -208,8 +230,9 @@ class SettingsFragment : Fragment() {
                     )
                     RecordingStore.serverBaseUrl = finalUrl
                     RecordingStore.serverAuthToken = token
-                    RecordingStore.cachedPlaudToken = plaudToken
-                    try { sdk.NiceBuildSdk.setPartnerToken(plaudToken) } catch (_: Exception) { }
+                    org.plaudbridge.app.net.TokenManager.store(plaudToken)
+                    if (hostChanged) RecordingStore.clearServerState()
+                    try { sdk.NiceBuildSdk.setPartnerToken(plaudToken.accessToken) } catch (_: Exception) { }
                     null
                 } catch (e: Exception) {
                     e.message ?: "connection failed"
@@ -220,8 +243,14 @@ class SettingsFragment : Fragment() {
             AlertDialog.Builder(requireContext())
                 .setTitle(R.string.bridge_server)
                 .setMessage(
-                    if (error == null) getString(R.string.server_saved)
-                    else getString(R.string.server_setup_error_fmt, error)
+                    when {
+                        error != null -> getString(R.string.server_setup_error_fmt, error)
+                        hostChanged ->
+                            getString(R.string.server_saved) +
+                                "\n\nServer changed: upload state and transcripts were reset — " +
+                                "synced recordings will re-upload to the new server."
+                        else -> getString(R.string.server_saved)
+                    }
                 )
                 .setPositiveButton(android.R.string.ok, null)
                 .show()

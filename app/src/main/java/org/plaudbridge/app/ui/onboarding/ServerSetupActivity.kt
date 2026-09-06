@@ -85,6 +85,12 @@ class ServerSetupActivity : AppCompatActivity() {
             showStatus(getString(R.string.server_setup_missing_fields), isError = true)
             return
         }
+        // HTTPS only: Android's default network security config blocks cleartext HTTP, so an
+        // http:// URL would only produce an opaque network error later (see README for LAN use).
+        if (!url.startsWith("https://")) {
+            showStatus(getString(R.string.server_setup_https_required), isError = true)
+            return
+        }
 
         binding.testButton.isEnabled = false
         showStatus(getString(R.string.server_setup_testing), isError = false)
@@ -119,10 +125,10 @@ class ServerSetupActivity : AppCompatActivity() {
                 showStatus(error, isError = true)
                 return@launch
             }
-            // Persist settings + the freshly fetched Plaud token.
+            // Persist settings + the freshly fetched Plaud token (with its expires_in).
             RecordingStore.serverBaseUrl = url
             RecordingStore.serverAuthToken = token
-            RecordingStore.cachedPlaudToken = plaudToken
+            plaudToken?.let { org.plaudbridge.app.net.TokenManager.store(it) }
             verified = true
             binding.continueButton.isEnabled = true
             binding.continueButton.alpha = 1f

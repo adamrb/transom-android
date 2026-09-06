@@ -41,6 +41,10 @@ class PlaudBridgeApp : Application() {
         super.onCreate()
         instance = this
         RecordingStore.init(this)
+        // Reconcile the index with the filesystem: recordings whose exported audio vanished
+        // (legacy cacheDir eviction, user "clear cache") become unsynced again so the sync flow
+        // re-downloads them while the recorder copy still exists.
+        Thread { RecordingStore.clearMissingLocalFiles() }.start()
         registerForegroundReconnect()
     }
 

@@ -10,8 +10,9 @@ data class RecordingFile(
     @SerializedName("sessionId")
     val sessionId: Long,
 
+    /** var: a blank SN (legacy/WiFi edge case) is backfilled once the owning device is known. */
     @SerializedName("deviceSN")
-    val deviceSN: String,
+    var deviceSN: String,
 
     @SerializedName("name")
     var name: String,
@@ -43,7 +44,11 @@ data class RecordingFile(
     var serverId: String? = null,
 
     @SerializedName("uploadedAt")
-    var uploadedAt: Long? = null
+    var uploadedAt: Long? = null,
+
+    /** Delete-after-upload could not run (device disconnected); retry on the matching device. */
+    @SerializedName("deletePendingOnDevice")
+    var deletePendingOnDevice: Boolean = false
 ) {
     val isSynced: Boolean
         get() = localPath != null
