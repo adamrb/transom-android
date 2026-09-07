@@ -32,7 +32,8 @@ import org.plaudbridge.app.storage.RecordingStore
 import org.plaudbridge.app.ui.onboarding.WelcomeActivity
 
 /**
- * Settings Tab — sync toggles, bridge-server config, Plaud region, user id, firmware, unpair.
+ * Settings Tab: sync toggles, server config, firmware, version, unpair, and a collapsed
+ * Advanced section for the plumbing (Plaud region, user id, SDK logs).
  */
 class SettingsFragment : Fragment() {
 
@@ -104,6 +105,14 @@ class SettingsFragment : Fragment() {
             startActivity(Intent(requireContext(), org.plaudbridge.app.ui.library.WebDashboardActivity::class.java))
         }
 
+        // Advanced section: collapsed unless the user opened it before.
+        renderAdvancedSection(RecordingStore.advancedSettingsExpanded)
+        binding.advancedHeader.setOnClickListener {
+            val expanded = !RecordingStore.advancedSettingsExpanded
+            RecordingStore.advancedSettingsExpanded = expanded
+            renderAdvancedSection(expanded)
+        }
+
         // Plaud cloud region (SDK auth handshake only; restart to apply)
         renderRegionCard()
         binding.switchRegionButton.setOnClickListener { showSwitchRegionDialog() }
@@ -132,6 +141,12 @@ class SettingsFragment : Fragment() {
         super.onResume()
         // The user may have just returned from the system battery dialog.
         renderBatteryOptimizationRow()
+    }
+
+    /** Show or hide the Advanced rows; the chevron points down while they are open. */
+    private fun renderAdvancedSection(expanded: Boolean) {
+        binding.advancedContent.visibility = if (expanded) View.VISIBLE else View.GONE
+        binding.advancedChevron.rotation = if (expanded) 90f else 0f
     }
 
     // MARK: - Battery optimization

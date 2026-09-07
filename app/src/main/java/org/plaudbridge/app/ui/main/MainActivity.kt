@@ -25,15 +25,14 @@ import org.plaudbridge.app.models.DeviceConnectionState
 import org.plaudbridge.app.net.UpdateManager
 import org.plaudbridge.app.service.DeviceConnectionService
 import org.plaudbridge.app.storage.RecordingStore
-import org.plaudbridge.app.ui.files.FilesFragment
 import org.plaudbridge.app.ui.home.HomeFragment
-import org.plaudbridge.app.ui.library.LibraryFragment
+import org.plaudbridge.app.ui.recordings.RecordingsFragment
 import org.plaudbridge.app.ui.onboarding.WelcomeActivity
 import org.plaudbridge.app.ui.settings.SettingsFragment
 import org.plaudbridge.app.ui.update.AppUpdateFlow
 
 /**
- * Main screen — bottom floating Tab Bar + 4 Fragments (Home, Files, Library, Settings)
+ * Main screen: bottom floating Tab Bar + 3 Fragments (Home, Recordings, Settings)
  */
 class MainActivity : AppCompatActivity() {
 
@@ -43,8 +42,7 @@ class MainActivity : AppCompatActivity() {
     // process/config recreation (the FragmentManager restores its own instances — adding new
     // ones on top would duplicate every tab).
     private lateinit var homeFragment: Fragment
-    private lateinit var filesFragment: Fragment
-    private lateinit var libraryFragment: Fragment
+    private lateinit var recordingsFragment: Fragment
     private lateinit var settingsFragment: Fragment
     private var activeFragment: Fragment? = null
 
@@ -77,7 +75,7 @@ class MainActivity : AppCompatActivity() {
 
         setupFragments(savedInstanceState)
         setupTabBar()
-        selectTab(savedInstanceState?.getInt(KEY_SELECTED_TAB, 0) ?: 0, force = true)
+        selectTab((savedInstanceState?.getInt(KEY_SELECTED_TAB, 0) ?: 0).coerceIn(0, 2), force = true)
 
         // Cloud binding alerts (e.g. device bound to another account)
         lifecycleScope.launch {
@@ -177,20 +175,17 @@ class MainActivity : AppCompatActivity() {
         val fm = supportFragmentManager
         if (savedInstanceState == null) {
             homeFragment = HomeFragment()
-            filesFragment = FilesFragment()
-            libraryFragment = LibraryFragment()
+            recordingsFragment = RecordingsFragment()
             settingsFragment = SettingsFragment()
             fm.beginTransaction()
                 .add(R.id.fragmentContainer, settingsFragment, "settings").hide(settingsFragment)
-                .add(R.id.fragmentContainer, libraryFragment, "library").hide(libraryFragment)
-                .add(R.id.fragmentContainer, filesFragment, "files").hide(filesFragment)
+                .add(R.id.fragmentContainer, recordingsFragment, "recordings").hide(recordingsFragment)
                 .add(R.id.fragmentContainer, homeFragment, "home")
                 .commit()
         } else {
             // Recreation: reuse the FragmentManager's restored instances.
             homeFragment = fm.findFragmentByTag("home") ?: HomeFragment()
-            filesFragment = fm.findFragmentByTag("files") ?: FilesFragment()
-            libraryFragment = fm.findFragmentByTag("library") ?: LibraryFragment()
+            recordingsFragment = fm.findFragmentByTag("recordings") ?: RecordingsFragment()
             settingsFragment = fm.findFragmentByTag("settings") ?: SettingsFragment()
         }
         activeFragment = null // selectTab(force = true) sets visibility + activeFragment
@@ -212,9 +207,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.tabHome.setOnClickListener { selectTab(0) }
-        binding.tabFiles.setOnClickListener { selectTab(1) }
-        binding.tabLibrary.setOnClickListener { selectTab(2) }
-        binding.tabSettings.setOnClickListener { selectTab(3) }
+        binding.tabRecordings.setOnClickListener { selectTab(1) }
+        binding.tabSettings.setOnClickListener { selectTab(2) }
     }
 
     private fun selectTab(index: Int, force: Boolean = false) {
@@ -223,14 +217,13 @@ class MainActivity : AppCompatActivity() {
 
         val target = when (index) {
             0 -> homeFragment
-            1 -> filesFragment
-            2 -> libraryFragment
-            3 -> settingsFragment
+            1 -> recordingsFragment
+            2 -> settingsFragment
             else -> homeFragment
         }
 
         val tx = supportFragmentManager.beginTransaction()
-        listOf(homeFragment, filesFragment, libraryFragment, settingsFragment).forEach { f ->
+        listOf(homeFragment, recordingsFragment, settingsFragment).forEach { f ->
             if (f !== target && f.isAdded) tx.hide(f)
         }
         if (target.isAdded) tx.show(target)
@@ -241,9 +234,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateTabAppearance() {
-        val tabs = listOf(binding.tabHome, binding.tabFiles, binding.tabLibrary, binding.tabSettings)
-        val icons = listOf(binding.tabHomeIcon, binding.tabFilesIcon, binding.tabLibraryIcon, binding.tabSettingsIcon)
-        val labels = listOf(binding.tabHomeLabel, binding.tabFilesLabel, binding.tabLibraryLabel, binding.tabSettingsLabel)
+        val tabs = listOf(binding.tabHome, binding.tabRecordings, binding.tabSettings)
+        val icons = listOf(binding.tabHomeIcon, binding.tabRecordingsIcon, binding.tabSettingsIcon)
+        val labels = listOf(binding.tabHomeLabel, binding.tabRecordingsLabel, binding.tabSettingsLabel)
 
         for (i in tabs.indices) {
             val isSelected = i == selectedTab

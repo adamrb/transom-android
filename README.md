@@ -98,14 +98,21 @@ Install the APK (`app/build/outputs/apk/debug/`), then:
    and connect. (See the FAQ about unbinding from the official app first.)
 3. Recordings sync automatically on connect (toggle in Settings), or on demand via *Sync now*.
 
-### Library tab
+### Recordings tab
 
-The **Library** tab embeds your server's web dashboard (the mobile-friendly SPA it serves at
-`/`) in a WebView, with pull-to-refresh and in-tab back navigation. The app injects your server
-auth token into the page's localStorage (`pb_token`) so you are never asked to log in. The
-WebView is locked to the configured server's origin: external links open in the system browser,
-nothing else loads inside the tab, and the token is only ever injected into your server's
-origin. Changing the server host (or unpairing) wipes the WebView's storage.
+The **Recordings** tab is one list of every recording you have, whether it currently sits on
+the phone, on your server, or both. The phone's sync index and the server's list are matched up
+(by the server id the upload returned, or by device serial + session id before that id is
+known) so a recording appears once, with the server's title and transcript status and the
+phone's offline audio. Rows only carry a status word while something is still happening
+(Downloading, Uploading, Transcribing, Failed). Long-press a row for Rename, Re-transcribe,
+Remove from phone (keeps the server copy) and Delete (server and phone; the recorder is never
+touched). Searching filters the list on the phone.
+
+The server's own web dashboard (automations editor, full server view) is still reachable from
+**Settings → Web dashboard**. It runs in a WebView locked to your server's origin: the token is
+only injected there, external links open in the system browser, and changing the server host
+(or unpairing) wipes the WebView's storage.
 
 ### In-app updates
 
@@ -199,7 +206,7 @@ Covered: the strict upload-response contract in `ApiClient` (201/duplicate pairi
 rejection, redirects not followed), token expiry handling in `TokenManager`, composite
 `(device_sn, session_id)` identity and index corruption recovery in `RecordingStore`, and the
 `UploadManager` queue (lost-wakeup dirty flag, blank-SN / wrong-device delete safety, deferred
-device deletes), the Library WebView's same-origin policy (`WebViewOriginPolicy`) and
+device deletes), the web dashboard WebView's same-origin policy (`WebViewOriginPolicy`) and
 token-injection JS escaping (`TokenInjection`), the QR setup payload parser
 (`QrSetupPayload`), and the self-update pipeline (`UpdateManager`: strict manifest parsing,
 version comparison, sha256/size verification incl. tampered-download rejection, the 24h

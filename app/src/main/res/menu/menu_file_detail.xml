@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Shared by the local (Files) and server (Library) modes of FileDetailActivity; the activity
-     hides the items that do not apply to the current mode. -->
+<!-- FileDetailActivity's More menu. The activity hides the items that do not apply to the
+     recording on screen: Export Audio and Remove from phone need a phone copy, Re-transcribe
+     needs a server copy. -->
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
     <item
         android:id="@+id/action_export"
@@ -21,9 +22,9 @@
         android:id="@+id/action_retranscribe"
         android:title="@string/retranscribe" />
     <item
-        android:id="@+id/action_delete"
-        android:title="@string/delete_recording" />
+        android:id="@+id/action_remove_from_phone"
+        android:title="@string/remove_from_phone" />
     <item
-        android:id="@+id/action_delete_server"
-        android:title="@string/delete_from_server" />
+        android:id="@+id/action_delete"
+        android:title="@string/delete" />
 </menu>

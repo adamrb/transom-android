@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Library tab: the server's recordings, laid out exactly like the Files tab (title row with
-     search icon, then the date-grouped card list). -->
+<!-- Recordings tab: title row with search icon, the recorder-to-phone sync banner, then the
+     date-grouped card list of every recording (phone, server, or both). -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical">
 
-    <!-- Title row: Library + search icon -->
+    <!-- Title row: Recordings + search icon -->
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -19,7 +19,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:fontFamily="sans-serif-light"
-            android:text="@string/library"
+            android:text="@string/recordings"
             android:textColor="@color/black"
             android:textSize="44sp" />
 
@@ -32,6 +32,22 @@
             android:contentDescription="Search"
             android:src="@drawable/ic_search"
             android:tint="@color/text_primary" />
+    </FrameLayout>
+
+    <!-- Sync Banner (recorder to phone transfer progress) -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="12dp">
+
+        <include
+            android:id="@+id/syncBanner"
+            layout="@layout/view_sync_banner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:visibility="gone" />
     </FrameLayout>
 
     <!-- Search field (revealed by the search icon): a card-styled single line -->
@@ -125,7 +141,7 @@
                 android:paddingBottom="120dp"
                 android:scrollbars="none" />
 
-            <!-- Empty state: 80dp below the title (mirrors Files), not vertically centered -->
+            <!-- Empty state: 80dp below the title (mirrors iOS), not vertically centered -->
             <TextView
                 android:id="@+id/emptyLabel"
                 android:layout_width="match_parent"
@@ -133,7 +149,7 @@
                 android:layout_marginTop="80dp"
                 android:fontFamily="sans-serif"
                 android:gravity="center"
-                android:text="@string/library_empty"
+                android:text="@string/no_recordings_yet"
                 android:textColor="@color/text_secondary"
                 android:textSize="14sp"
                 android:visibility="gone" />

@@ -35,13 +35,13 @@
     <string name="firmware_success_desc">Firmware updated successfully.</string>
     <string name="firmware_failed_desc">Update failed. Please try again.</string>
     <string name="firmware_no_update_desc">Your firmware is already up to date.</string>
-    <string name="capture_moments">Capture important moments</string>
-    <string name="record_via_device">Record via device microphone</string>
+    <string name="capture_moments">Start a recording</string>
+    <string name="record_via_device">Record on your Plaud from here</string>
     <string name="syncing_recordings">Syncing recordings from device</string>
     <string name="fast_transfer">Fast Transfer</string>
     <string name="retrieving_file_list">Retrieving file list...</string>
     <string name="recording_ellipsis">Recording...</string>
-    <string name="recent_files">Recent files</string>
+    <string name="recent_recordings">Recent recordings</string>
     <string name="sync_now">Sync now</string>
     <string name="no_recordings_yet">No recordings yet</string>
 
@@ -74,31 +74,34 @@
     <string name="pause">Pause</string>
     <string name="resume">Resume</string>
 
-    <!-- Files -->
-    <string name="files">Files</string>
+    <!-- Recordings tab (phone + server, merged) -->
+    <string name="recordings">Recordings</string>
     <string name="today">Today</string>
     <string name="yesterday">Yesterday</string>
+    <string name="status_downloading">Downloading</string>
+    <string name="status_uploading">Uploading</string>
+    <string name="status_transcribing">Transcribing…</string>
+    <string name="status_failed">Failed</string>
+    <string name="remove_from_phone">Remove from phone</string>
+    <string name="remove_from_phone_confirm_fmt">This removes the copy of \"%1$s\" from this phone. Your server keeps its copy, and nothing on the recorder changes.</string>
+    <string name="removed_from_phone">Removed from this phone</string>
+    <string name="delete_everywhere_confirm_fmt">This permanently deletes \"%1$s\" (audio and transcript) from your server and removes the copy on this phone. Nothing on the recorder changes.</string>
+    <string name="delete_phone_only_confirm_fmt">This permanently deletes \"%1$s\" from this phone. Nothing on the recorder changes.</string>
 
     <!-- File Detail -->
-    <string name="synced">Synced</string>
-    <string name="pending">Pending</string>
-    <string name="uploaded">Uploaded</string>
-    <string name="upload_pending">Upload pending</string>
-    <string name="on_device">On device</string>
-    <string name="transcription_pending">Transcription pending on your server. Check back in a bit.</string>
-    <string name="transcript_not_on_server">The server has no record of this recording yet — it may still be uploading.</string>
-    <string name="transcript_auth_error">The server rejected the auth token (401/403). Check the token in Settings.</string>
+    <string name="transcription_pending">Your server is still transcribing this. Check back in a bit.</string>
+    <string name="transcript_not_on_server">Your server has no record of this recording yet. It may still be uploading.</string>
+    <string name="transcript_auth_error">The server rejected the access token. Check it in Settings.</string>
     <string name="transcript_server_error">Could not reach your server. It may be down or unreachable.</string>
     <string name="checking_transcript">Checking for a transcript…</string>
     <string name="check_transcript">Check for transcript</string>
     <string name="no_transcript">No transcript available</string>
     <string name="transcript_needs_upload">This recording will be transcribed after it uploads to your server.</string>
-    <string name="transcript_needs_sync">Sync this recording first — it is still only on the device.</string>
+    <string name="transcript_needs_sync">This recording is still only on the recorder. Sync it first.</string>
     <string name="summary">Summary</string>
     <string name="transcript">Transcript</string>
     <string name="highlights">Highlights</string>
     <string name="highlight_no_speech">(no speech near this mark)</string>
-    <string name="generate_ai_insights">Generate AI insights</string>
     <string name="export_audio">Export Audio</string>
     <string name="rename">Rename</string>
     <string name="copy_summary">Copy Summary</string>
@@ -107,19 +110,17 @@
     <string name="action_copy_transcript">Copy transcript</string>
     <string name="action_export_markdown">Export markdown</string>
     <string name="transcript_copied">Transcript copied</string>
-    <string name="delete_recording">Remove Downloaded Copy</string>
-    <string name="confirm_delete">Are you sure you want to remove this recording\'s downloaded copy from this phone?</string>
     <string name="delete">Delete</string>
 
     <!-- Settings -->
     <string name="settings">Settings</string>
-    <string name="automatic_sync">Automatic Sync</string>
-    <string name="auto_sync_subtitle">Auto transfer recordings via BLE when device is connected</string>
+    <string name="automatic_sync">Sync new recordings automatically</string>
+    <string name="auto_sync_subtitle">When the recorder connects, download new recordings and send them to your server</string>
     <string name="device_firmware">Device Firmware</string>
     <string name="sdk_logs">SDK Logs</string>
     <string name="app_version">Version</string>
     <string name="switch_env">Switch</string>
-    <string name="bridge_server">Bridge Server</string>
+    <string name="bridge_server">Your server</string>
     <string name="edit">Edit</string>
     <string name="copy">Copy</string>
     <string name="not_configured">Not configured</string>
@@ -129,8 +130,8 @@
     <string name="exit_now">Exit Now</string>
     <string name="later">Later</string>
     <string name="user_id">User ID</string>
-    <string name="background_sync">Background sync</string>
-    <string name="background_sync_subtitle">Stay connected to the device while the app is in the background so new recordings sync right away</string>
+    <string name="background_sync">Keep syncing in the background</string>
+    <string name="background_sync_subtitle">Stay connected while the app is closed so recordings arrive right away</string>
     <string name="battery_optimization">Battery optimization</string>
     <string name="battery_optimization_exempt">Unrestricted. Background sync can run reliably</string>
     <string name="battery_optimization_restricted">Optimized. Tap to allow background activity so sync keeps running</string>
@@ -140,6 +141,7 @@
     <string name="sdk_logs_desc">Export SDK log files for debugging</string>
     <string name="export_logs">Export</string>
     <string name="export_failed">No logs to export</string>
+    <string name="advanced">Advanced</string>
 
     <!-- Fast Transfer -->
     <string name="fast_transfer_title">Fast Transfer via WiFi</string>
@@ -154,10 +156,10 @@
 
     <!-- Server setup (onboarding + settings) -->
     <string name="server_setup_title">Connect your server</string>
-    <string name="server_setup_subtitle">Plaud Bridge syncs recordings to your self-hosted plaud-bridge-server. Enter its URL and API token. Audio never touches Plaud\'s cloud — only the device auth handshake does.</string>
+    <string name="server_setup_subtitle">Enter the address of your Plaud Bridge server and its access token. Audio goes only to your server, never to Plaud\'s cloud.</string>
     <string name="server_url">Server URL</string>
     <string name="server_url_hint">https://bridge.example.com</string>
-    <string name="server_auth_token">Server auth token</string>
+    <string name="server_auth_token">Access token</string>
     <string name="server_auth_token_hint">Paste your server API token</string>
     <string name="test_connection">Test connection</string>
     <string name="continue_label">Continue</string>
@@ -165,31 +167,21 @@
     <string name="server_setup_https_required">The server URL must use https:// — Android blocks plain-HTTP (cleartext) traffic.</string>
     <string name="server_setup_testing">Testing connection…</string>
     <string name="server_setup_health_failed">Server unreachable — the health check failed. Check the URL.</string>
-    <string name="server_setup_auth_failed">The server rejected the auth token (401/403). Check the token.</string>
+    <string name="server_setup_auth_failed">The server rejected the access token. Check it in Settings.</string>
     <string name="server_setup_error_fmt">Connection failed: %1$s</string>
     <string name="server_setup_success">Connected! Server and token verified.</string>
     <string name="scan_qr">Scan QR code</string>
     <string name="qr_scan_prompt">Scan the setup QR from your server\'s dashboard</string>
     <string name="qr_invalid_fmt">QR code not recognized: %1$s</string>
 
-    <!-- Library (server recordings, native list) -->
-    <string name="library">Library</string>
-    <string name="library_not_configured">Configure your bridge server in Settings to browse the Library.</string>
+    <!-- Server list and server actions (Recordings tab, detail screen, web dashboard) -->
+    <string name="library_not_configured">Set up your server in Settings to see the recordings it holds.</string>
     <string name="library_load_failed">Couldn\'t reach your server. Check that it\'s running and that you\'re online.</string>
-    <string name="library_auth_failed">The server rejected the auth token (401/403). Check the token in Settings.</string>
-    <string name="library_empty">No recordings on the server yet</string>
+    <string name="library_auth_failed">The server rejected the access token. Check it in Settings.</string>
     <string name="library_search_hint">Search titles and transcripts</string>
     <string name="retry">Retry</string>
-    <string name="status_transcribing">Transcribing…</string>
-    <string name="status_pending">Pending</string>
-    <string name="status_failed">Failed</string>
-    <string name="status_stored">Stored</string>
-    <string name="status_done">Transcribed</string>
     <string name="retranscribe">Re-transcribe</string>
-    <string name="transcribe">Transcribe</string>
-    <string name="retranscribe_queued">Transcription queued on your server</string>
-    <string name="delete_from_server">Delete from server</string>
-    <string name="delete_from_server_confirm_fmt">This permanently deletes \"%1$s\" (audio and transcript) from your server. Copies on this phone or the recorder are not affected.</string>
+    <string name="retranscribe_queued">Transcription queued</string>
     <string name="recording_deleted">Recording deleted</string>
     <string name="server_request_failed_fmt">Server request failed: %1$s</string>
     <string name="recording_not_on_server">This recording is no longer on the server.</string>
@@ -199,7 +191,7 @@
 
     <!-- Web dashboard (the server\'s own UI, for automations and everything else the app does not do) -->
     <string name="web_dashboard">Web dashboard</string>
-    <string name="web_dashboard_subtitle">Automations, routes and the full server view</string>
+    <string name="web_dashboard_subtitle">Automations and the full server view</string>
     <string name="download_use_export">Use the app\'s Export instead</string>
 
     <!-- Custom vocabulary (names and terms the server's transcriber should get right) -->

@@ -386,4 +386,18 @@ class RecordingStoreTest {
 
         assertEquals(listOf(2L), RecordingStore.awaitingTranscript.map { it.sessionId })
     }
+
+    // MARK: - Settings preferences
+
+    @Test
+    fun advancedSettingsSectionIsCollapsedByDefaultAndRemembered() {
+        assertFalse(RecordingStore.advancedSettingsExpanded)
+        RecordingStore.advancedSettingsExpanded = true
+        assertTrue(RecordingStore.advancedSettingsExpanded)
+        // Survives a re-init (the prefs file is the store, not the object).
+        RecordingStore.init(context)
+        assertTrue(RecordingStore.advancedSettingsExpanded)
+        RecordingStore.advancedSettingsExpanded = false
+        assertFalse(RecordingStore.advancedSettingsExpanded)
+    }
 }

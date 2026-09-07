@@ -23,12 +23,15 @@ import org.plaudbridge.app.models.*
 import org.plaudbridge.app.ui.filedetail.FileDetailActivity
 import org.plaudbridge.app.ui.onboarding.ScanningActivity
 import org.plaudbridge.app.ui.recording.RecordingActivity
+import org.plaudbridge.app.ui.recordings.RecordingItem
+import org.plaudbridge.app.ui.recordings.RecordingsAdapter
+import org.plaudbridge.app.ui.recordings.RecordingsMerger
+import org.plaudbridge.app.ui.recordings.RecordingsRepository
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.*
 
 /**
- * Home Tab — Device card + Recording entry + Banners + Recent Files
+ * Home Tab: Device card + Recording entry + Banners + Recent recordings
  */
 class HomeFragment : Fragment() {
 
@@ -61,8 +64,10 @@ class HomeFragment : Fragment() {
         // Re-read the paired-device list on every return to Home (mirrors iOS viewWillAppear),
         // so unpair/add-device done on other screens is reflected immediately.
         renderOtherDevices(currentDevice?.serialNumber)
-        // Recent files: fetch AI titles still missing for uploaded recordings (no-op when none).
+        // Recent recordings: fetch AI titles still missing for uploaded recordings (no-op when
+        // none), and refresh the server snapshot so recordings that only exist there show too.
         org.plaudbridge.app.managers.TitleSyncManager.kick()
+        viewLifecycleOwner.lifecycleScope.launch { RecordingsRepository.refresh() }
     }
 
     private fun setupClickListeners() {
@@ -196,12 +201,11 @@ class HomeFragment : Fragment() {
                     }
                 }
 
-                // File list
+                // Recent recordings: the same merged phone + server list the Recordings tab shows
                 launch {
-                    syncManager.files.collect { files ->
-                        val synced = files.filter { it.isSynced }.take(5)
-                        updateRecentFiles(synced)
-                    }
+                    combine(syncManager.files, RecordingsRepository.server) { local, server ->
+                        RecordingsMerger.merge(local, server).take(5)
+                    }.collect { items -> updateRecentRecordings(items) }
                 }
 
                 // Auto-reconnect rejected by a locked device — offer recovery (lifecycle guide §3.3)
@@ -407,53 +411,28 @@ class HomeFragment : Fragment() {
             if (isWiFi) View.GONE else View.VISIBLE
     }
 
-    // MARK: - Recent Files
+    // MARK: - Recent recordings
 
-    private fun updateRecentFiles(files: List<RecordingFile>) {
+    private fun updateRecentRecordings(items: List<RecordingItem>) {
         binding.recentFilesList.removeAllViews()
-        binding.emptyFilesLabel.visibility = if (files.isEmpty()) View.VISIBLE else View.GONE
-        binding.recentFilesList.visibility = if (files.isEmpty()) View.GONE else View.VISIBLE
+        binding.emptyFilesLabel.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
+        binding.recentFilesList.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
 
-        for (file in files) {
-            val row = createFileRow(file)
-            binding.recentFilesList.addView(row)
+        for (item in items) {
+            binding.recentFilesList.addView(createRecordingRow(item))
         }
     }
 
-    private fun createFileRow(file: RecordingFile): View {
+    /** Same row layout and meta line as the Recordings tab, opening the same detail screen. */
+    private fun createRecordingRow(item: RecordingItem): View {
         val row = LayoutInflater.from(requireContext())
             .inflate(R.layout.item_file_row, binding.recentFilesList, false)
-        row.findViewById<TextView>(R.id.fileNameLabel).text = file.displayName
-        row.findViewById<TextView>(R.id.fileMetaLabel).text = formatMeta(file)
+        row.findViewById<TextView>(R.id.fileNameLabel).text = item.title
+        row.findViewById<TextView>(R.id.fileMetaLabel).text = RecordingsAdapter.metaLine(requireContext(), item)
         row.setOnClickListener {
-            val intent = Intent(requireContext(), FileDetailActivity::class.java)
-            intent.putExtra("file_id", file.id)
-            startActivity(intent)
+            startActivity(FileDetailActivity.intentFor(requireContext(), item))
         }
         return row
-    }
-
-    private fun formatMeta(file: RecordingFile): String {
-        val dateFormat = SimpleDateFormat("MMM d", Locale.getDefault())
-        val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-        val date = Date(file.createdAt)
-        val dur = formatDuration(file.duration)
-        val upload = when {
-            file.uploaded -> getString(R.string.uploaded)
-            file.isSynced -> getString(R.string.upload_pending)
-            else -> getString(R.string.on_device)
-        }
-        return "${dateFormat.format(date)}  \u00B7  ${timeFormat.format(date)}  \u00B7  $dur  \u00B7  $upload"
-    }
-
-    private fun formatDuration(seconds: Long): String {
-        if (seconds <= 0) return "--"
-        val total = seconds.toInt()
-        return if (total >= 3600) {
-            String.format("%dh %dm", total / 3600, (total % 3600) / 60)
-        } else {
-            String.format("%dm %ds", total / 60, total % 60)
-        }
     }
 
     // MARK: - Navigation

@@ -21,9 +21,11 @@ import org.robolectric.shadows.ShadowToast
 import java.io.File
 
 /**
- * FileDetailActivity transcript actions: the Copy / Export pills appear only once a transcript
- * is stored, Copy puts the transcript on the clipboard with a confirmation toast, and Export
- * hands a markdown file (server-compatible layout) to the share sheet.
+ * FileDetailActivity: the Copy / Export pills appear only once a transcript is stored, Copy puts
+ * the transcript on the clipboard with a confirmation toast, Export hands a markdown file
+ * (server-compatible layout) to the share sheet, and the unified open (phone copy + server
+ * copy) renders the cache first, refreshes from the server, and routes Delete / Remove from
+ * phone through the shared action semantics.
  */
 @RunWith(RobolectricTestRunner::class)
 class FileDetailActivityTest {
@@ -37,12 +39,18 @@ class FileDetailActivityTest {
         RecordingStore.init(context)
         RecordingStore.clearAll()
         File(context.filesDir, "recordings.json").delete()
+        org.plaudbridge.app.ui.recordings.RecordingsRepository.reset()
     }
 
-    private fun storeFile(transcriptJson: String?): RecordingFile {
+    private fun storeFile(
+        transcriptJson: String?,
+        serverId: String? = "srv-7",
+        uploaded: Boolean = true,
+        localPath: String? = null
+    ): RecordingFile {
         val file = RecordingFile(
             sessionId = 7L, deviceSN = "SN-A", name = "Untitled Recording", duration = 61,
-            createdAt = 1_788_758_851_000L, uploaded = true, serverId = "srv-7",
+            createdAt = 1_788_758_851_000L, uploaded = uploaded, serverId = serverId, localPath = localPath,
             serverTitle = "Budget \"Q3\" call"
         )
         RecordingStore.addFiles(listOf(file))
@@ -228,12 +236,13 @@ class FileDetailActivityTest {
         }
     }
 
-    private fun serverRecording(status: String = "done") = org.plaudbridge.app.models.ServerRecording.fromJson(
+    private fun serverRecording(status: String = "done", error: String? = null) = org.plaudbridge.app.models.ServerRecording.fromJson(
         org.json.JSONObject(
             """{"id":"srv-9","device_sn":"SN-A","session_id":9,"filename":"9.mp3","size_bytes":1,
             "duration_s":61.0,"started_at":"2026-09-07T05:27:31Z","uploaded_at":"2026-09-07T05:30:00Z",
             "source":"plaud-bridge-android","status":"$status","title":"Server side \"Q3\" call",
-            "summary":"From the list.","marks":[6.0],"has_transcript":true,"text_preview":null,"error":null}"""
+            "summary":"From the list.","marks":[6.0],"has_transcript":true,"text_preview":null,
+            "error":${if (error == null) "null" else "\"$error\""}}"""
         )
     )
 
@@ -251,7 +260,8 @@ class FileDetailActivityTest {
         val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptWithHighlights))
         val activity = launchServer(fake)
         assertEquals("Server side \"Q3\" call", activity.findViewById<android.widget.TextView>(R.id.fileNameLabel).text.toString())
-        assertEquals("Transcribed", activity.findViewById<android.widget.TextView>(R.id.statusBadge).text.toString())
+        // A finished recording wears no badge.
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.statusBadge).visibility)
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.transcriptActions).visibility)
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.highlightsHeader).visibility)
         assertEquals(2, activity.findViewById<android.widget.LinearLayout>(R.id.highlightsList).childCount)
@@ -299,5 +309,168 @@ class FileDetailActivityTest {
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.emptyState).visibility)
         assertEquals("This recording is no longer on the server.",
             activity.findViewById<android.widget.TextView>(R.id.emptySubtitle).text.toString())
+    }
+
+    // MARK: - Unified open (phone copy + server copy)
+
+    private fun configureServer(source: FileDetailActivity.ServerDetailSource) {
+        FileDetailActivity.serverSource = source
+        RecordingStore.serverBaseUrl = "https://bridge.example.com"
+        RecordingStore.serverAuthToken = "tok"
+    }
+
+    private fun launchBoth(fileId: String, serverId: String = "srv-9"): FileDetailActivity {
+        val intent = Intent(context, FileDetailActivity::class.java)
+            .putExtra(FileDetailActivity.EXTRA_FILE_ID, fileId)
+            .putExtra(FileDetailActivity.EXTRA_SERVER_RECORDING_ID, serverId)
+        return Robolectric.buildActivity(FileDetailActivity::class.java, intent).setup().get()
+    }
+
+    /**
+     * Tap the confirm button of the dialog on screen. AlertController delivers button clicks
+     * through a Handler message, so the paused main looper must run before the action lands.
+     */
+    private fun confirmLatestDialog() {
+        val dialog = org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+        dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick()
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+    }
+
+    @Test
+    fun intentForCarriesBothIdsWhenKnown() {
+        val file = storeFile(null, serverId = "srv-9")
+        val item = org.plaudbridge.app.ui.recordings.RecordingItem(file, serverRecording())
+        val intent = FileDetailActivity.intentFor(context, item)
+        assertEquals(file.id, intent.getStringExtra(FileDetailActivity.EXTRA_FILE_ID))
+        assertEquals("srv-9", intent.getStringExtra(FileDetailActivity.EXTRA_SERVER_RECORDING_ID))
+        val serverOnly = FileDetailActivity.intentFor(context, org.plaudbridge.app.ui.recordings.RecordingItem(null, serverRecording()))
+        assertEquals(null, serverOnly.getStringExtra(FileDetailActivity.EXTRA_FILE_ID))
+        assertEquals("srv-9", serverOnly.getStringExtra(FileDetailActivity.EXTRA_SERVER_RECORDING_ID))
+    }
+
+    @Test
+    fun unifiedOpenRefreshesTitleAndTranscriptFromTheServerAndCachesThem() {
+        val file = storeFile(transcriptJson, serverId = "srv-9")
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptWithHighlights))
+        configureServer(fake)
+        val activity = launchBoth(file.id)
+        // Server title wins over the cached AI title; the fresh transcript (with highlights) replaces the cache.
+        assertEquals("Server side \"Q3\" call", activity.findViewById<android.widget.TextView>(R.id.fileNameLabel).text.toString())
+        assertEquals(2, activity.findViewById<android.widget.LinearLayout>(R.id.highlightsList).childCount)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.statusBadge).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.emptyState).visibility)
+        // The phone copy now caches the server transcript so the next open is instant.
+        assertEquals(transcriptWithHighlights, RecordingStore.allFiles.single().transcriptJSON)
+    }
+
+    @Test
+    fun unifiedOpenKeepsThePhoneContentWhenTheServerIsUnreachable() {
+        val file = storeFile(transcriptJson, serverId = "srv-9")
+        val fake = object : FileDetailActivity.ServerDetailSource by FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending) {
+            override suspend fun recording(id: String) = org.plaudbridge.app.net.ApiClient.RecordingResult.Error("offline")
+        }
+        configureServer(fake)
+        val activity = launchBoth(file.id)
+        assertEquals("Budget \"Q3\" call", activity.findViewById<android.widget.TextView>(R.id.fileNameLabel).text.toString())
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.transcriptText).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.emptyState).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.statusBadge).visibility)
+    }
+
+    @Test
+    fun failedTranscriptionShowsFailedBadgeAndTheSingleCheckButton() {
+        val fake = FakeServerSource(serverRecording("failed", error = "GPU on fire"), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending)
+        val activity = launchServer(fake)
+        val badge = activity.findViewById<android.widget.TextView>(R.id.statusBadge)
+        assertEquals(View.VISIBLE, badge.visibility)
+        assertEquals("Failed", badge.text.toString())
+        assertEquals("GPU on fire", activity.findViewById<android.widget.TextView>(R.id.emptySubtitle).text.toString())
+        val button = activity.findViewById<android.widget.Button>(R.id.generateButton)
+        assertEquals(View.VISIBLE, button.visibility)
+        assertEquals("Check for transcript", button.text.toString())
+    }
+
+    @Test
+    fun phoneOnlyRecordingHasNoBadgeAndNoButton() {
+        val file = storeFile(null, serverId = null, uploaded = false, localPath = null)
+        val activity = launch(file.id)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.statusBadge).visibility)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.emptyState).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.generateButton).visibility)
+        assertEquals("This recording is still only on the recorder. Sync it first.",
+            activity.findViewById<android.widget.TextView>(R.id.emptySubtitle).text.toString())
+    }
+
+    @Test
+    fun menuOffersOnlyWhatAppliesToTheRecording() {
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
+        configureServer(fake)
+        val file = storeFile(null, serverId = "srv-9")
+        val both = launchBoth(file.id)
+        val menuBoth = android.widget.PopupMenu(both, both.findViewById(R.id.moreButton)).also {
+            it.menuInflater.inflate(R.menu.menu_file_detail, it.menu)
+            both.applyMenuVisibility(it.menu)
+        }.menu
+        assertTrue(menuBoth.findItem(R.id.action_retranscribe).isVisible)
+        assertTrue(menuBoth.findItem(R.id.action_remove_from_phone).isVisible)
+        assertTrue(menuBoth.findItem(R.id.action_delete).isVisible)
+        assertTrue(menuBoth.findItem(R.id.action_export_markdown).isVisible)
+
+        RecordingStore.clearAll()
+        RecordingStore.serverBaseUrl = "https://bridge.example.com"
+        RecordingStore.serverAuthToken = "tok"
+        val serverOnly = launchServer(fake)
+        val menuServer = android.widget.PopupMenu(serverOnly, serverOnly.findViewById(R.id.moreButton)).also {
+            it.menuInflater.inflate(R.menu.menu_file_detail, it.menu)
+            serverOnly.applyMenuVisibility(it.menu)
+        }.menu
+        assertTrue(menuServer.findItem(R.id.action_retranscribe).isVisible)
+        assertEquals(false, menuServer.findItem(R.id.action_remove_from_phone).isVisible)
+        assertEquals(false, menuServer.findItem(R.id.action_export).isVisible)
+        assertTrue(menuServer.findItem(R.id.action_delete).isVisible)
+    }
+
+    @Test
+    fun deleteRemovesTheServerCopyAndThePhoneCopyThenCloses() {
+        val file = storeFile(transcriptJson, serverId = "srv-9")
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
+        configureServer(fake)
+        val activity = launchBoth(file.id)
+        assertTrue(activity.onMenuAction(R.id.action_delete))
+        confirmLatestDialog()
+        assertEquals(listOf("srv-9"), fake.deleted)
+        assertTrue(RecordingStore.allFiles.isEmpty())
+        assertEquals("Recording deleted", ShadowToast.getTextOfLatestToast())
+        assertTrue(activity.isFinishing)
+    }
+
+    @Test
+    fun removeFromPhoneKeepsTheServerCopyAndStaysOpen() {
+        val file = storeFile(transcriptJson, serverId = "srv-9")
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
+        configureServer(fake)
+        val activity = launchBoth(file.id)
+        assertTrue(activity.onMenuAction(R.id.action_remove_from_phone))
+        confirmLatestDialog()
+        assertTrue(fake.deleted.isEmpty())
+        assertTrue(RecordingStore.allFiles.isEmpty())
+        assertEquals("Removed from this phone", ShadowToast.getTextOfLatestToast())
+        assertEquals(false, activity.isFinishing)
+        // Still showing the server copy.
+        assertEquals("Server side \"Q3\" call", activity.findViewById<android.widget.TextView>(R.id.fileNameLabel).text.toString())
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.transcriptText).visibility)
+    }
+
+    @Test
+    fun deleteOfPhoneOnlyRecordingNeverAsksTheServer() {
+        val file = storeFile(null, serverId = null, uploaded = false, localPath = null)
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending)
+        configureServer(fake)
+        val activity = launch(file.id)
+        assertTrue(activity.onMenuAction(R.id.action_delete))
+        confirmLatestDialog()
+        assertTrue(fake.deleted.isEmpty())
+        assertTrue(RecordingStore.allFiles.isEmpty())
+        assertTrue(activity.isFinishing)
     }
 }

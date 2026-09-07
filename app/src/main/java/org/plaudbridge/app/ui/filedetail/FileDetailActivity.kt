@@ -2,6 +2,7 @@ package org.plaudbridge.app.ui.filedetail
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -32,36 +33,50 @@ import org.plaudbridge.app.export.ExportFileName
 import org.plaudbridge.app.export.TranscriptHighlight
 import org.plaudbridge.app.export.TranscriptMarkdown
 import org.plaudbridge.app.export.TranscriptShare
+import org.plaudbridge.app.managers.TitleSyncManager
 import org.plaudbridge.app.models.RecordingFile
 import org.plaudbridge.app.models.ServerRecording
 import org.plaudbridge.app.net.ApiClient
+import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.ui.recordings.ApiServerRecordingActions
+import org.plaudbridge.app.ui.recordings.RecordingActions
+import org.plaudbridge.app.ui.recordings.RecordingItem
+import org.plaudbridge.app.ui.recordings.ServerRecordingActions
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
 /**
- * File detail page
+ * Recording detail page
  * Header (name/date/duration/status) + Summary + Highlights + Transcript + More Menu
  *
- * Two sources feed the same screen:
- *  - a LOCAL file (`file_id` extra): a [RecordingFile] from RecordingStore, the Files tab path;
- *  - a SERVER recording (`server_recording_id` extra): fetched live from the bridge server, the
- *    Library tab path. Nothing from this mode is ever written into RecordingStore; the server
- *    owns its recordings and the phone's index must stay the phone's.
- * Both map onto [DetailModel], the handful of fields the header, summary, highlights and
- * transcript blocks actually render, so the two paths cannot drift apart visually.
+ * One screen for one recording, wherever it lives. The intent carries whichever ids are known:
+ *  - `file_id`: the phone's [RecordingFile] (offline audio, cached transcript, upload state);
+ *  - `server_recording_id`: the bridge server's copy (fresh title, status, transcript).
+ * A phone copy renders instantly from its cache; a server id then refreshes title, status and
+ * transcript from the server. Both sides are combined through [RecordingItem], the same merge
+ * the Recordings tab draws its rows from, so the header cannot disagree with the list, and
+ * rendered through [DetailModel], the handful of fields the content blocks actually use.
+ *
+ * The only thing written back into RecordingStore is a transcript fetched for a recording the
+ * phone already indexes, which is exactly what TitleSyncManager stores in the background.
  */
 class FileDetailActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityFileDetailBinding
     private val syncManager get() = (application as PlaudBridgeApp).syncManager
 
+    /** The phone's copy, when the phone has one. */
     private var currentFile: RecordingFile? = null
 
-    /** Server-mode state; null in local mode. */
+    /** The server's id when known (intent, or remembered by the phone copy from its upload). */
     private var serverRecordingId: String? = null
+
+    /** The server's copy once fetched. */
     private var serverRecording: ServerRecording? = null
-    private val isServerMode get() = serverRecordingId != null
+
+    /** Transcript document fetched from the server in this view; wins over the phone's cache. */
+    private var serverTranscriptJSON: String? = null
 
     /** What the content blocks currently show, whichever source it came from. */
     private var currentModel: DetailModel? = null
@@ -73,7 +88,7 @@ class FileDetailActivity : AppCompatActivity() {
 
     /**
      * The fields the content blocks render. [transcriptJSON] is the server transcript document
-     * (text, segments, summary, highlights) in both modes; local files cache the same document.
+     * (text, segments, summary, highlights); the phone caches the same document.
      */
     data class DetailModel(
         val title: String,
@@ -84,34 +99,38 @@ class FileDetailActivity : AppCompatActivity() {
     )
 
     /**
-     * The server calls the screen makes in server mode. An interface (with the real client as
-     * the default) so a Robolectric test can drive the screen without a network stack; the
-     * default runs the blocking ApiClient calls on Dispatchers.IO.
+     * The server calls the screen makes. An interface (with the real client as the default) so
+     * a Robolectric test can drive the screen without a network stack; the default runs the
+     * blocking ApiClient calls on Dispatchers.IO. Extends the list's action seam so Rename,
+     * Re-transcribe and Delete go through the exact same code as the long-press sheet.
      */
-    interface ServerDetailSource {
+    interface ServerDetailSource : ServerRecordingActions {
         suspend fun recording(id: String): ApiClient.RecordingResult
         suspend fun transcript(id: String): ApiClient.TranscriptResult
-        suspend fun rename(id: String, title: String): ApiClient.RecordingResult
-        suspend fun retranscribe(id: String): ApiClient.ActionResult
-        suspend fun delete(id: String): ApiClient.ActionResult
     }
 
-    private object ApiServerDetailSource : ServerDetailSource {
+    private object ApiServerDetailSource : ServerDetailSource, ServerRecordingActions by ApiServerRecordingActions {
         override suspend fun recording(id: String) = withContext(Dispatchers.IO) { ApiClient.fetchRecording(id) }
         override suspend fun transcript(id: String) = withContext(Dispatchers.IO) { ApiClient.fetchTranscript(id) }
-        override suspend fun rename(id: String, title: String) =
-            withContext(Dispatchers.IO) { ApiClient.renameRecording(id, title) }
-        override suspend fun retranscribe(id: String) = withContext(Dispatchers.IO) { ApiClient.retranscribe(id) }
-        override suspend fun delete(id: String) = withContext(Dispatchers.IO) { ApiClient.deleteRecording(id) }
     }
 
     companion object {
-        /** Intent extra: open a recording that lives on the bridge server (Library tab). */
+        /** Intent extra: the phone's RecordingFile id. */
+        const val EXTRA_FILE_ID = "file_id"
+
+        /** Intent extra: the bridge server's recording id. */
         const val EXTRA_SERVER_RECORDING_ID = "server_recording_id"
 
         /** Swapped by tests; production always uses the ApiClient-backed default. */
         @VisibleForTesting
         var serverSource: ServerDetailSource = ApiServerDetailSource
+
+        /** Open a merged row: both ids travel when both are known. */
+        fun intentFor(context: Context, item: RecordingItem): Intent =
+            Intent(context, FileDetailActivity::class.java).apply {
+                item.localId?.let { putExtra(EXTRA_FILE_ID, it) }
+                item.serverId?.let { putExtra(EXTRA_SERVER_RECORDING_ID, it) }
+            }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -125,32 +144,66 @@ class FileDetailActivity : AppCompatActivity() {
         binding.exportMarkdownButton.setOnClickListener { currentModel?.let { m -> exportMarkdown(m) } }
         setupAudioPlayerControls()
 
-        val serverId = intent.getStringExtra(EXTRA_SERVER_RECORDING_ID)
-        if (serverId != null) {
-            serverRecordingId = serverId
-            loadServerRecording(serverId)
+        intent.getStringExtra(EXTRA_FILE_ID)?.let { currentFile = findFile(it) }
+        serverRecordingId = intent.getStringExtra(EXTRA_SERVER_RECORDING_ID)
+            ?: currentFile?.serverId?.takeIf { it.isNotBlank() }
+        if (currentFile == null && serverRecordingId == null) {
+            finish()
             return
         }
-        val fileId = intent.getStringExtra("file_id") ?: run { finish(); return }
-        loadFile(fileId)
+
+        val file = currentFile
+        if (file != null) {
+            backfillDuration(file)
+            render() // instant: cached title, transcript and local audio
+        } else {
+            binding.fileNameLabel.text = ""
+            binding.fileDateLabel.text = getString(R.string.checking_transcript)
+        }
+
+        val serverId = serverRecordingId
+        when {
+            serverId != null && RecordingStore.isServerConfigured -> loadServerRecording(serverId)
+            // Uploaded before the phone learned the server id (legacy index): resolve it by
+            // (device, session) and fetch the transcript the old way.
+            file != null && file.uploaded && transcriptPlainText == null ->
+                fetchTranscriptFromServer(file, userInitiated = false)
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        // Refresh data (after returning from a rename). Server mode re-renders in place after
-        // its own writes, so nothing to reload there.
-        if (!isServerMode) currentFile?.let { loadFile(it.id) }
+        // Pick up what changed while we were away (a rename, a transcript stored by the
+        // background title sync); the server side re-renders in place after its own writes.
+        val file = currentFile ?: return
+        currentFile = findFile(file.id) ?: file
+        if (currentModel != null) render()
     }
 
-    private fun loadFile(fileId: String) {
-        // Read from the persistent store FIRST: updateTranscript/updateDuration write to disk,
-        // while syncManager.files is an in-memory snapshot that may still hold stale objects
-        // (e.g. transcriptJSON = null right after a transcription completes).
-        val file = org.plaudbridge.app.storage.RecordingStore.allFiles.find { it.id == fileId }
-            ?: syncManager.files.value.find { it.id == fileId }
-            ?: run { finish(); return }
-        currentFile = file
-        bindFile(file)
+    /**
+     * Read from the persistent store FIRST: updateTranscript/updateDuration write to disk, while
+     * syncManager.files is an in-memory snapshot that may still hold stale objects.
+     */
+    private fun findFile(fileId: String): RecordingFile? =
+        RecordingStore.allFiles.find { it.id == fileId } ?: syncManager.files.value.find { it.id == fileId }
+
+    /**
+     * Self-heal: entries synced before the duration fix have duration 0 stored; recompute from
+     * the local audio and backfill so old files show the real length too.
+     */
+    private fun backfillDuration(file: RecordingFile) {
+        val localPath = file.localPath
+        if (file.duration > 0 || localPath == null || !File(localPath).exists()) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            val d = org.plaudbridge.app.managers.SyncManager.shared.audioDurationSec(localPath)
+            if (d > 0) {
+                RecordingStore.updateDuration(file.id, d)
+                runOnUiThread {
+                    currentFile = findFile(file.id) ?: file
+                    currentModel?.let { bindMetaLine(it.recordedAtMillis, d) }
+                }
+            }
+        }
     }
 
     /** On-screen transcript ("Speaker N · HH:MM:SS" blocks); null when nothing parseable. */
@@ -159,58 +212,42 @@ class FileDetailActivity : AppCompatActivity() {
     /** What Copy transcript puts on the clipboard: speaker paragraphs, no timestamps. */
     private var transcriptCopyText: String? = null
 
-    private fun bindFile(file: RecordingFile) {
-        val model = DetailModel(
-            title = file.displayName,
-            recordedAtMillis = file.createdAt,
-            durationSeconds = file.duration,
-            summary = file.summaryText,
-            transcriptJSON = file.transcriptJSON
-        )
-        bindContent(model)
-
-        // Self-heal: entries synced before the duration fix have duration 0 stored; recompute
-        // from the local audio and backfill so old files show the real length too.
-        val localPath = file.localPath
-        if (file.duration <= 0 && localPath != null && File(localPath).exists()) {
-            lifecycleScope.launch(Dispatchers.IO) {
-                val d = org.plaudbridge.app.managers.SyncManager.shared.audioDurationSec(localPath)
-                if (d > 0) {
-                    org.plaudbridge.app.storage.RecordingStore.updateDuration(file.id, d)
-                    runOnUiThread { bindMetaLine(file.createdAt, d) }
-                }
-            }
-        }
-
-        // Status badge: upload state against the self-hosted bridge server
-        when {
-            file.uploaded -> setStatusBadge(getString(R.string.uploaded), R.color.green, R.drawable.bg_status_synced)
-            file.isSynced -> setStatusBadge(getString(R.string.upload_pending), R.color.orange, R.drawable.bg_status_pending)
-            else -> setStatusBadge(getString(R.string.on_device), R.color.orange, R.drawable.bg_status_pending)
-        }
-
-        // Transcript empty state (only when bindContent found no transcript)
-        if (transcriptPlainText == null) {
-            when {
-                file.uploaded -> {
-                    showEmptyState(getString(R.string.transcript), getString(R.string.transcription_pending),
-                        getString(R.string.check_transcript)) { fetchTranscriptFromServer(file, userInitiated = true) }
-                    // Auto-check once whenever the detail page opens for an uploaded file.
-                    fetchTranscriptFromServer(file, userInitiated = false)
-                }
-                file.isSynced -> showEmptyState(getString(R.string.no_transcript), getString(R.string.transcript_needs_upload))
-                else -> showEmptyState(getString(R.string.no_transcript), getString(R.string.transcript_needs_sync))
-            }
-        }
-
-        // Audio player: only available once the file has a local audio file
-        bindLocalAudioPlayer(file)
+    /** The merged view of whatever this screen knows; null before anything has loaded. */
+    private fun currentItem(): RecordingItem? {
+        val file = currentFile
+        val rec = serverRecording
+        return if (file == null && rec == null) null else RecordingItem(file, rec)
     }
 
     /**
-     * Header, summary, highlights and transcript blocks from a [DetailModel]. Shared by both
-     * sources. Leaves the empty state hidden; callers decide what it says because the reason a
-     * transcript is missing differs per source.
+     * Render everything from the phone copy and the server copy together. The server transcript
+     * fetched in this view wins over the phone's cache; the transcript's own summary wins over
+     * the list object's (it is the freshest), then the server summary, then the phone's.
+     */
+    private fun render() {
+        val item = currentItem() ?: return
+        val file = item.local
+        val rec = item.server
+        val transcriptJSON = serverTranscriptJSON ?: file?.transcriptJSON
+        val transcriptSummary = transcriptJSON?.let { transcriptExportFields(it).second }
+        bindContent(
+            DetailModel(
+                title = item.title,
+                recordedAtMillis = item.recordedAt,
+                durationSeconds = item.durationSeconds,
+                summary = transcriptSummary ?: rec?.summary ?: file?.summaryText,
+                transcriptJSON = transcriptJSON
+            )
+        )
+        bindStatusBadge(item.status)
+        if (transcriptPlainText == null) bindEmptyState(item)
+        bindAudio(file, rec)
+    }
+
+    /**
+     * Header, summary, highlights and transcript blocks from a [DetailModel]. Leaves the empty
+     * state hidden; [bindEmptyState] decides what it says because the reason a transcript is
+     * missing differs per source.
      */
     private fun bindContent(model: DetailModel) {
         currentModel = model
@@ -247,10 +284,52 @@ class FileDetailActivity : AppCompatActivity() {
             "${dateFormat.format(Date(recordedAtMillis))} · ${formatMetaDuration(durationSeconds)}"
     }
 
+    /**
+     * The badge only speaks while the server is still working on the recording or gave up on
+     * it. A finished recording wears no badge: "Transcribed" or "Uploaded" would just restate
+     * that the transcript below exists.
+     */
+    private fun bindStatusBadge(status: RecordingItem.Status) {
+        when (status) {
+            RecordingItem.Status.TRANSCRIBING ->
+                setStatusBadge(getString(R.string.status_transcribing), R.color.orange, R.drawable.bg_status_pending)
+            RecordingItem.Status.FAILED ->
+                setStatusBadge(getString(R.string.status_failed), R.color.red, R.drawable.bg_status_pending)
+            else -> binding.statusBadge.visibility = View.GONE
+        }
+    }
+
     private fun setStatusBadge(text: String, colorRes: Int, backgroundRes: Int) {
+        binding.statusBadge.visibility = View.VISIBLE
         binding.statusBadge.text = text
         binding.statusBadge.setTextColor(ContextCompat.getColor(this, colorRes))
         binding.statusBadge.setBackgroundResource(backgroundRes)
+    }
+
+    /**
+     * Why there is no transcript yet, and the one button that can change that. "Check for
+     * transcript" appears whenever the server has (or should have) this recording; a recording
+     * that has not left the phone or the recorder yet gets an explanation and no button.
+     */
+    private fun bindEmptyState(item: RecordingItem) {
+        val rec = item.server
+        val file = item.local
+        when {
+            item.serverId != null || file?.uploaded == true -> {
+                val subtitle = when (rec?.status) {
+                    ServerRecording.STATUS_FAILED ->
+                        rec.error?.takeIf { it.isNotBlank() } ?: getString(R.string.transcription_failed)
+                    ServerRecording.STATUS_STORED -> getString(R.string.transcript_not_started)
+                    else -> getString(R.string.transcription_pending)
+                }
+                showEmptyState(getString(R.string.transcript), subtitle, getString(R.string.check_transcript)) {
+                    checkForTranscript()
+                }
+            }
+            file != null && file.isSynced ->
+                showEmptyState(getString(R.string.no_transcript), getString(R.string.transcript_needs_upload))
+            else -> showEmptyState(getString(R.string.no_transcript), getString(R.string.transcript_needs_sync))
+        }
     }
 
     /** Centered empty state under the Transcript tab; [buttonText] null hides the button. */
@@ -269,20 +348,20 @@ class FileDetailActivity : AppCompatActivity() {
         }
     }
 
-    // MARK: - Server mode (Library)
+    // MARK: - Server side
 
     /**
-     * GET the recording, then its transcript. The header renders as soon as the recording
-     * arrives so the screen is not blank while a long transcript downloads; 409 (still
-     * transcribing) and the other outcomes become the empty state's wording.
+     * GET the recording, then its transcript. The header re-renders as soon as the recording
+     * arrives so a server-only recording is not blank while a long transcript downloads; 409
+     * (still transcribing) and the other outcomes become the empty state's wording.
      */
     private fun loadServerRecording(id: String) {
-        binding.fileNameLabel.text = ""
-        binding.fileDateLabel.text = getString(R.string.checking_transcript)
         lifecycleScope.launch {
             when (val result = serverSource.recording(id)) {
                 is ApiClient.RecordingResult.Ok -> {
-                    bindServerRecording(result.recording, transcriptJSON = null)
+                    serverRecording = result.recording
+                    render()
+                    if (transcriptPlainText == null) binding.emptySubtitle.text = getString(R.string.checking_transcript)
                     loadServerTranscript(result.recording)
                 }
                 is ApiClient.RecordingResult.NotFound -> failServer(getString(R.string.recording_not_on_server))
@@ -295,90 +374,63 @@ class FileDetailActivity : AppCompatActivity() {
     private fun loadServerTranscript(rec: ServerRecording) {
         lifecycleScope.launch {
             when (val outcome = serverSource.transcript(rec.id)) {
-                is ApiClient.TranscriptResult.Ready -> bindServerRecording(rec, outcome.rawJson)
-                is ApiClient.TranscriptResult.Pending -> bindServerRecording(rec, null)
+                is ApiClient.TranscriptResult.Ready -> {
+                    storeServerTranscript(outcome.rawJson)
+                    render()
+                }
+                is ApiClient.TranscriptResult.Pending -> render()
                 is ApiClient.TranscriptResult.NotFound ->
                     if (rec.status == ServerRecording.STATUS_DONE) failServer(getString(R.string.recording_not_on_server))
-                    else bindServerRecording(rec, null)
+                    else render()
                 is ApiClient.TranscriptResult.AuthError -> failServer(getString(R.string.transcript_auth_error))
                 is ApiClient.TranscriptResult.Error -> failServer(getString(R.string.transcript_server_error))
             }
         }
     }
 
-    /** Render a server recording; the empty state reflects the server's status word. */
-    private fun bindServerRecording(rec: ServerRecording, transcriptJSON: String?) {
-        serverRecording = rec
-        // The transcript's own summary/title win when present (they are the freshest), else the
-        // list object's fields. Same precedence the Files path applies via TitleSyncManager.
-        val transcriptSummary = transcriptJSON?.let { transcriptExportFields(it).second }
-        bindContent(
-            DetailModel(
-                title = rec.displayTitle,
-                recordedAtMillis = rec.recordedAt,
-                durationSeconds = rec.durationSeconds,
-                summary = transcriptSummary ?: rec.summary,
-                transcriptJSON = transcriptJSON
-            )
-        )
-        when (rec.status) {
-            ServerRecording.STATUS_DONE -> setStatusBadge(getString(R.string.status_done), R.color.green, R.drawable.bg_status_synced)
-            ServerRecording.STATUS_FAILED -> setStatusBadge(getString(R.string.status_failed), R.color.red, R.drawable.bg_status_pending)
-            ServerRecording.STATUS_TRANSCRIBING -> setStatusBadge(getString(R.string.status_transcribing), R.color.orange, R.drawable.bg_status_pending)
-            ServerRecording.STATUS_STORED -> setStatusBadge(getString(R.string.status_stored), R.color.orange, R.drawable.bg_status_pending)
-            else -> setStatusBadge(getString(R.string.status_pending), R.color.orange, R.drawable.bg_status_pending)
-        }
-        if (transcriptPlainText == null) {
-            when (rec.status) {
-                ServerRecording.STATUS_FAILED -> showEmptyState(
-                    getString(R.string.no_transcript),
-                    rec.error?.takeIf { it.isNotBlank() } ?: getString(R.string.transcription_failed),
-                    getString(R.string.retranscribe)
-                ) { retranscribeOnServer(rec) }
-                ServerRecording.STATUS_STORED -> showEmptyState(
-                    getString(R.string.no_transcript), getString(R.string.transcript_not_started),
-                    getString(R.string.transcribe)
-                ) { retranscribeOnServer(rec) }
-                else -> showEmptyState(
-                    getString(R.string.transcript), getString(R.string.transcription_pending),
-                    getString(R.string.check_transcript)
-                ) { refreshServerRecording(rec.id) }
-            }
-        }
-        bindServerAudioPlayer(rec)
+    /**
+     * Keep the fetched transcript for this view and, when the phone indexes this recording,
+     * cache it there too (with its AI title) so the list and the next open are instant. Nothing
+     * is written for a server-only recording.
+     */
+    private fun storeServerTranscript(rawJson: String) {
+        serverTranscriptJSON = rawJson
+        val file = currentFile ?: return
+        if (file.transcriptJSON == rawJson) return
+        TitleSyncManager.storeTranscript(file.id, rawJson)
+        currentFile = findFile(file.id) ?: file
     }
 
-    /** Re-fetch both the recording (status may have moved on) and its transcript. */
-    private fun refreshServerRecording(id: String) {
+    /**
+     * The one transcript button: re-ask the server. With a server id that is a fresh GET of the
+     * recording (its status may have moved on) and its transcript; without one the id is first
+     * resolved from (device, session).
+     */
+    private fun checkForTranscript() {
         binding.generateButton.isEnabled = false
         binding.emptySubtitle.text = getString(R.string.checking_transcript)
-        loadServerRecording(id)
-    }
-
-    private fun failServer(message: String) {
-        if (serverRecording == null) {
-            binding.fileDateLabel.text = ""
-            showEmptyState(getString(R.string.transcript), message)
-        } else {
-            showEmptyState(getString(R.string.transcript), message, getString(R.string.retry)) {
-                serverRecordingId?.let { refreshServerRecording(it) }
-            }
+        val serverId = serverRecordingId
+        val file = currentFile
+        when {
+            serverId != null -> loadServerRecording(serverId)
+            file != null -> fetchTranscriptFromServer(file, userInitiated = true)
         }
     }
 
-    private fun retranscribeOnServer(rec: ServerRecording) {
-        binding.generateButton.isEnabled = false
-        lifecycleScope.launch {
-            when (val result = serverSource.retranscribe(rec.id)) {
-                is ApiClient.ActionResult.Ok -> {
-                    Toast.makeText(this@FileDetailActivity, R.string.retranscribe_queued, Toast.LENGTH_SHORT).show()
-                    loadServerRecording(rec.id)
-                }
-                else -> {
-                    binding.generateButton.isEnabled = true
-                    showTranscriptAlert(actionErrorMessage(result))
-                }
+    /**
+     * A server call failed. With content on screen (a phone copy, or an earlier server answer)
+     * the message only replaces the empty-state wording, never the content; with nothing to show
+     * yet, the header is cleared and the message is the page.
+     */
+    private fun failServer(message: String) {
+        binding.generateButton.isEnabled = true
+        if (currentItem() == null) {
+            binding.fileDateLabel.text = ""
+            showEmptyState(getString(R.string.transcript), message, getString(R.string.check_transcript)) {
+                checkForTranscript()
             }
+        } else if (transcriptPlainText == null) {
+            binding.emptySubtitle.text = message
         }
     }
 
@@ -387,33 +439,6 @@ class FileDetailActivity : AppCompatActivity() {
         is ApiClient.ActionResult.NotFound -> getString(R.string.recording_not_on_server)
         is ApiClient.ActionResult.AuthError -> getString(R.string.transcript_auth_error)
         is ApiClient.ActionResult.Error -> getString(R.string.server_request_failed_fmt, result.message)
-    }
-
-    private fun renameOnServer(rec: ServerRecording, newTitle: String) {
-        lifecycleScope.launch {
-            when (val result = serverSource.rename(rec.id, newTitle)) {
-                is ApiClient.RecordingResult.Ok -> {
-                    // Keep the transcript we already have; only the header changes.
-                    bindServerRecording(result.recording, currentModel?.transcriptJSON)
-                }
-                is ApiClient.RecordingResult.NotFound -> showTranscriptAlert(getString(R.string.recording_not_on_server))
-                is ApiClient.RecordingResult.AuthError -> showTranscriptAlert(getString(R.string.transcript_auth_error))
-                is ApiClient.RecordingResult.Error ->
-                    showTranscriptAlert(getString(R.string.server_request_failed_fmt, result.message))
-            }
-        }
-    }
-
-    private fun deleteOnServer(rec: ServerRecording) {
-        lifecycleScope.launch {
-            when (val result = serverSource.delete(rec.id)) {
-                is ApiClient.ActionResult.Ok, is ApiClient.ActionResult.NotFound -> {
-                    Toast.makeText(this@FileDetailActivity, R.string.recording_deleted, Toast.LENGTH_SHORT).show()
-                    finish() // the Library reloads on resume
-                }
-                else -> showTranscriptAlert(actionErrorMessage(result))
-            }
-        }
     }
 
     // MARK: - Highlights
@@ -470,22 +495,23 @@ class FileDetailActivity : AppCompatActivity() {
         binding.progressSlider.progress = if (duration > 0) (target * 1000 / duration).toInt() else 0
     }
 
-    // MARK: - Transcript (fetched from the self-hosted bridge server)
+    // MARK: - Transcript for a phone copy without a server id
 
     /** Guard so the automatic check on open runs only once per page view. */
     private var transcriptChecked = false
 
     /**
-     * Fetch the transcript from the bridge server:
-     * resolve the server-side recording id (lookup by device_sn + session_id when not cached),
-     * then GET /recordings/{id}/transcript. 404/409 means the transcription is still pending.
+     * Fetch the transcript for a phone copy whose server id is not known: resolve it by
+     * device_sn + session_id, then GET /recordings/{id}/transcript. 404/409 means the
+     * transcription is still pending. Once the id is known it is remembered, and every later
+     * check goes through [loadServerRecording].
      */
     private fun fetchTranscriptFromServer(file: RecordingFile, userInitiated: Boolean) {
         if (!userInitiated) {
             if (transcriptChecked) return
             transcriptChecked = true
         }
-        if (!org.plaudbridge.app.storage.RecordingStore.isServerConfigured) return
+        if (!RecordingStore.isServerConfigured) return
         binding.generateButton.isEnabled = false
         binding.emptySubtitle.text = getString(R.string.checking_transcript)
 
@@ -501,7 +527,7 @@ class FileDetailActivity : AppCompatActivity() {
                         // could resolve to a DIFFERENT device's recording).
                         when (val lookup = ApiClient.lookupRecordingId(file.deviceSN, file.sessionId)) {
                             is ApiClient.LookupResult.Found -> {
-                                org.plaudbridge.app.storage.RecordingStore.updateServerId(file.id, lookup.id)
+                                RecordingStore.updateServerId(file.id, lookup.id)
                                 ApiClient.fetchTranscript(lookup.id)
                             }
                             is ApiClient.LookupResult.NotFound -> ApiClient.TranscriptResult.NotFound
@@ -514,12 +540,14 @@ class FileDetailActivity : AppCompatActivity() {
                 }
             }
 
+            // The lookup may have stored a server id; from here on the server path owns it.
+            currentFile = findFile(file.id) ?: file
+            if (serverRecordingId == null) serverRecordingId = currentFile?.serverId?.takeIf { it.isNotBlank() }
             binding.generateButton.isEnabled = true
             when (outcome) {
                 is ApiClient.TranscriptResult.Ready -> {
-                    // Stores the transcript AND its AI title, then refreshes the list screens.
-                    org.plaudbridge.app.managers.TitleSyncManager.storeTranscript(file.id, outcome.rawJson)
-                    loadFile(file.id) // re-render: transcript body plus the title label
+                    storeServerTranscript(outcome.rawJson)
+                    render()
                 }
                 is ApiClient.TranscriptResult.Pending -> {
                     binding.emptySubtitle.text = getString(R.string.transcription_pending)
@@ -649,27 +677,32 @@ class FileDetailActivity : AppCompatActivity() {
         })
     }
 
-    private fun bindLocalAudioPlayer(file: RecordingFile) {
-        val path = file.localPath
-        val exists = path != null && File(path).exists()
-        if (!exists) {
-            binding.audioPlayer.visibility = View.GONE
-            releasePlayer()
+    /**
+     * Local audio when the phone has it (works offline, no auth needed), else the server stream
+     * once the server copy is known, else no player.
+     */
+    private fun bindAudio(file: RecordingFile?, rec: ServerRecording?) {
+        val path = file?.localPath
+        if (path != null && File(path).exists()) {
+            bindLocalAudioPlayer(path)
             return
         }
+        if (rec != null) {
+            bindServerAudioPlayer(rec)
+            return
+        }
+        binding.audioPlayer.visibility = View.GONE
+        releasePlayer()
+    }
+
+    private fun bindLocalAudioPlayer(path: String) {
         // Self-heal legacy files exported with the SDK's corrupt OpusTags header
-        if (path!!.endsWith(".opus", ignoreCase = true)) {
+        if (path.endsWith(".opus", ignoreCase = true)) {
             org.plaudbridge.app.common.OpusRepair.repairIfNeeded(path)
         }
         preparePlayer(key = path, mediaItem = MediaItem.fromUri(android.net.Uri.fromFile(File(path))), httpFactory = null)
     }
 
-    /**
-     * Stream the recording from the server. The audio endpoint is behind the same bearer token
-     * as the API, so ExoPlayer's HTTP source is given the Authorization header up front; it also
-     * sends Range requests, which the server honors, so seeking does not re-download the file.
-     */
-    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun bindServerAudioPlayer(rec: ServerRecording) {
         val url = try { ApiClient.recordingAudioUrl(rec.id) } catch (e: IllegalStateException) {
             binding.audioPlayer.visibility = View.GONE
@@ -812,61 +845,144 @@ class FileDetailActivity : AppCompatActivity() {
     // MARK: - More Menu
 
     private fun showMoreMenu(anchor: View) {
+        if (currentModel == null || currentItem() == null) return
         val popup = PopupMenu(this, anchor)
         popup.menuInflater.inflate(R.menu.menu_file_detail, popup.menu)
+        applyMenuVisibility(popup.menu)
+        popup.setOnMenuItemClickListener { item -> onMenuAction(item.itemId) }
+        popup.show()
+    }
 
+    /** Hide what does not apply: phone-only items without a phone copy, server items without a server copy. */
+    @VisibleForTesting
+    internal fun applyMenuVisibility(menu: android.view.Menu) {
         val model = currentModel ?: return
-        val file = currentFile
-        val rec = serverRecording
+        val hasFile = currentFile != null
+        val hasServer = serverRecordingId != null
+        menu.findItem(R.id.action_export)?.isVisible = hasFile
+        menu.findItem(R.id.action_copy_summary)?.isVisible = model.summary != null
+        menu.findItem(R.id.action_copy_transcript)?.isVisible = transcriptPlainText != null
+        menu.findItem(R.id.action_export_markdown)?.isVisible = transcriptPlainText != null
+        menu.findItem(R.id.action_retranscribe)?.isVisible = hasServer
+        menu.findItem(R.id.action_remove_from_phone)?.isVisible = hasFile
+        menu.findItem(R.id.action_delete)?.isVisible = true
+    }
 
-        // Hide options that do not apply (Export Audio stays visible like iOS; failure alerts)
-        popup.menu.findItem(R.id.action_copy_summary)?.isVisible = model.summary != null
-        popup.menu.findItem(R.id.action_copy_transcript)?.isVisible = transcriptPlainText != null
-        popup.menu.findItem(R.id.action_export_markdown)?.isVisible = transcriptPlainText != null
-        // Local-only vs server-only items
-        popup.menu.findItem(R.id.action_export)?.isVisible = !isServerMode
-        popup.menu.findItem(R.id.action_retranscribe)?.isVisible = isServerMode
-        popup.menu.findItem(R.id.action_delete)?.isVisible = !isServerMode
-        popup.menu.findItem(R.id.action_delete_server)?.isVisible = isServerMode
+    /** Menu dispatch, separate from the PopupMenu so tests can drive it. */
+    @VisibleForTesting
+    internal fun onMenuAction(itemId: Int): Boolean {
+        val model = currentModel ?: return false
+        val item = currentItem() ?: return false
+        when (itemId) {
+            R.id.action_export -> currentFile?.let { exportAudio(it) }
+            R.id.action_rename -> showRenameDialog(item)
+            R.id.action_copy_summary -> copySummary(model)
+            R.id.action_copy_transcript -> copyTranscript()
+            R.id.action_export_markdown -> exportMarkdown(model)
+            R.id.action_retranscribe -> serverRecordingId?.let { retranscribeOnServer(it) }
+            R.id.action_remove_from_phone -> confirmRemoveFromPhone(item)
+            R.id.action_delete -> confirmDelete(item)
+            else -> return false
+        }
+        return true
+    }
 
-        popup.setOnMenuItemClickListener { item ->
-            when (item.itemId) {
-                R.id.action_export -> {
-                    file?.let { exportAudio(it) }
-                    true
+    private fun retranscribeOnServer(serverId: String) {
+        binding.generateButton.isEnabled = false
+        lifecycleScope.launch {
+            when (val result = serverSource.retranscribe(serverId)) {
+                is ApiClient.ActionResult.Ok -> {
+                    Toast.makeText(this@FileDetailActivity, R.string.retranscribe_queued, Toast.LENGTH_SHORT).show()
+                    loadServerRecording(serverId)
                 }
-                R.id.action_rename -> {
-                    if (rec != null) showServerRenameDialog(rec) else file?.let { showRenameDialog(it) }
-                    true
+                else -> {
+                    binding.generateButton.isEnabled = true
+                    showTranscriptAlert(actionErrorMessage(result))
                 }
-                R.id.action_copy_summary -> {
-                    copySummary(model)
-                    true
-                }
-                R.id.action_copy_transcript -> {
-                    copyTranscript()
-                    true
-                }
-                R.id.action_export_markdown -> {
-                    exportMarkdown(model)
-                    true
-                }
-                R.id.action_retranscribe -> {
-                    rec?.let { retranscribeOnServer(it) }
-                    true
-                }
-                R.id.action_delete -> {
-                    file?.let { showDeleteConfirmation(it) }
-                    true
-                }
-                R.id.action_delete_server -> {
-                    rec?.let { showServerDeleteConfirmation(it) }
-                    true
-                }
-                else -> false
             }
         }
-        popup.show()
+    }
+
+    private fun showRenameDialog(item: RecordingItem) {
+        val editText = EditText(this).apply {
+            setText(item.title)
+            selectAll()
+            setPadding(48, 32, 48, 32)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.rename)
+            .setView(editText)
+            .setPositiveButton(R.string.confirm) { _, _ ->
+                val newName = editText.text.toString().trim()
+                if (newName.isEmpty()) {
+                    Toast.makeText(this, R.string.title_required, Toast.LENGTH_SHORT).show()
+                } else {
+                    rename(item, newName)
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** Server PATCH when the recording is there (mirrored into the phone copy), else a local rename. */
+    private fun rename(item: RecordingItem, newName: String) {
+        lifecycleScope.launch {
+            when (val result = RecordingActions.rename(item, newName, serverSource, syncManager)) {
+                is ApiClient.ActionResult.Ok -> {
+                    currentFile?.let { currentFile = findFile(it.id) ?: it }
+                    val serverId = serverRecordingId
+                    if (serverId != null && RecordingStore.isServerConfigured) loadServerRecording(serverId) else render()
+                }
+                else -> showTranscriptAlert(actionErrorMessage(result))
+            }
+        }
+    }
+
+    private fun confirmRemoveFromPhone(item: RecordingItem) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.remove_from_phone)
+            .setMessage(getString(R.string.remove_from_phone_confirm_fmt, item.title))
+            .setPositiveButton(R.string.remove_from_phone) { _, _ -> removeFromPhone(item) }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /**
+     * Drop the phone's copy. With a server copy on screen the page stays open and switches to
+     * the server stream; without one there is nothing left to show.
+     */
+    private fun removeFromPhone(item: RecordingItem) {
+        RecordingActions.removeFromPhone(item, syncManager)
+        Toast.makeText(this, R.string.removed_from_phone, Toast.LENGTH_SHORT).show()
+        currentFile = null
+        if (serverRecording != null) render() else finish()
+    }
+
+    private fun confirmDelete(item: RecordingItem) {
+        val message = if (item.serverId != null) {
+            getString(R.string.delete_everywhere_confirm_fmt, item.title)
+        } else {
+            getString(R.string.delete_phone_only_confirm_fmt, item.title)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.delete)
+            .setMessage(message)
+            .setPositiveButton(R.string.delete) { _, _ -> delete(item) }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** Server first (when it has the recording), then the phone copy; see [RecordingActions.delete]. */
+    private fun delete(item: RecordingItem) {
+        lifecycleScope.launch {
+            when (val result = RecordingActions.delete(item, serverSource, syncManager)) {
+                is ApiClient.ActionResult.Ok -> {
+                    Toast.makeText(this@FileDetailActivity, R.string.recording_deleted, Toast.LENGTH_SHORT).show()
+                    finish() // the lists refresh on resume
+                }
+                else -> showTranscriptAlert(actionErrorMessage(result))
+            }
+        }
     }
 
     private fun exportAudio(file: RecordingFile) {
@@ -895,47 +1011,6 @@ class FileDetailActivity : AppCompatActivity() {
                 }
             }
         }
-    }
-
-    private fun showRenameDialog(file: RecordingFile) {
-        val editText = EditText(this).apply {
-            setText(file.displayName)
-            selectAll()
-            setPadding(48, 32, 48, 32)
-        }
-        AlertDialog.Builder(this)
-            .setTitle(R.string.rename)
-            .setView(editText)
-            .setPositiveButton(R.string.confirm) { _, _ ->
-                val newName = editText.text.toString().trim()
-                if (newName.isNotEmpty()) {
-                    syncManager.renameFile(file, newName)
-                    loadFile(file.id)
-                }
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
-    }
-
-    private fun showServerRenameDialog(rec: ServerRecording) {
-        val editText = EditText(this).apply {
-            setText(rec.displayTitle)
-            selectAll()
-            setPadding(48, 32, 48, 32)
-        }
-        AlertDialog.Builder(this)
-            .setTitle(R.string.rename)
-            .setView(editText)
-            .setPositiveButton(R.string.confirm) { _, _ ->
-                val newName = editText.text.toString().trim()
-                if (newName.isEmpty()) {
-                    Toast.makeText(this, R.string.title_required, Toast.LENGTH_SHORT).show()
-                } else {
-                    renameOnServer(rec, newName)
-                }
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
     }
 
     private fun copySummary(model: DetailModel) {
@@ -1013,31 +1088,5 @@ class FileDetailActivity : AppCompatActivity() {
         )
     } catch (e: Exception) {
         Pair(null, null)
-    }
-
-    private fun showDeleteConfirmation(file: RecordingFile) {
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.delete_recording))
-            // Accurate scope: this removes ONLY the phone's downloaded copy; any copy still on
-            // the recorder and anything already uploaded to your server are untouched.
-            .setMessage(
-                "This removes the downloaded copy of \"${file.displayName}\" from this phone. " +
-                    "Copies on the recorder or on your server are not deleted."
-            )
-            .setPositiveButton(R.string.delete) { _, _ ->
-                syncManager.deleteFile(file)
-                finish()
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
-    }
-
-    private fun showServerDeleteConfirmation(rec: ServerRecording) {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.delete_from_server)
-            .setMessage(getString(R.string.delete_from_server_confirm_fmt, rec.displayTitle))
-            .setPositiveButton(R.string.delete) { _, _ -> deleteOnServer(rec) }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
     }
 }

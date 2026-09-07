@@ -29,6 +29,7 @@ object RecordingStore {
     private const val KEY_LAST_UPDATE_CHECK_HOST = "last_update_check_host"
     private const val KEY_CACHED_PLAUD_TOKEN = "cached_plaud_token"
     private const val KEY_CACHED_PLAUD_TOKEN_EXPIRY = "cached_plaud_token_expiry"
+    private const val KEY_ADVANCED_SETTINGS_EXPANDED = "advanced_settings_expanded"
     private const val RECORDINGS_FILE = "recordings.json"
 
     private lateinit var appContext: Context
@@ -222,6 +223,15 @@ object RecordingStore {
     var fastTransferNeverShowAgain: Boolean
         get() = prefs.getBoolean(KEY_FAST_TRANSFER_HIDE, false)
         set(value) = prefs.edit().putBoolean(KEY_FAST_TRANSFER_HIDE, value).apply()
+
+    /**
+     * The Settings "Advanced" section (Plaud region, user id, SDK logs) is open. Collapsed by
+     * default: those rows are plumbing most users never need, but someone who opened them once
+     * is probably debugging and should not have to reopen them on every visit.
+     */
+    var advancedSettingsExpanded: Boolean
+        get() = prefs.getBoolean(KEY_ADVANCED_SETTINGS_EXPANDED, false)
+        set(value) = prefs.edit().putBoolean(KEY_ADVANCED_SETTINGS_EXPANDED, value).apply()
 
     // --- Recording Files (JSON persistence) ---
 

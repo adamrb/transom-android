@@ -213,7 +213,7 @@
                 android:textSize="14sp"
                 android:visibility="gone" />
 
-            <!-- Empty state (mirrors iOS: centered title + subtitle + black Generate button) -->
+            <!-- Empty state (mirrors iOS: centered title + subtitle + black Check for transcript button) -->
             <LinearLayout
                 android:id="@+id/emptyState"
                 android:layout_width="match_parent"
@@ -257,7 +257,7 @@
                     android:background="@drawable/bg_primary_button"
                     app:backgroundTint="@null"
                     android:fontFamily="sans-serif"
-                    android:text="@string/generate_ai_insights"
+                    android:text="@string/check_transcript"
                     android:textAllCaps="false"
                     android:textColor="@color/white"
                     android:textSize="15sp"
@@ -268,7 +268,7 @@
     </ScrollView>
   </LinearLayout>
 
-    <!-- Floating audio player (shown only when the file is synced / has a local audio file) -->
+    <!-- Floating audio player (local audio when the phone has it, else the server stream) -->
     <LinearLayout
         android:id="@+id/audioPlayer"
         android:layout_width="match_parent"
