@@ -157,7 +157,10 @@ class LibraryFragment : Fragment() {
         }
 
         showWeb()
-        binding.webView.loadUrl(url)
+        // ?embedded=1 tells the dashboard it is inside the app: it hides the brand,
+        // "Connect a phone" and "Lock" (which would log this WebView out), and pads
+        // the bottom so content clears the floating tab bar.
+        binding.webView.loadUrl(embeddedUrl(url))
     }
 
     private fun showError(message: String) {
@@ -280,5 +283,9 @@ class LibraryFragment : Fragment() {
 
     companion object {
         private const val TAG = "LibraryFragment"
+
+        /** Dashboard URL for in-app display: same origin, plus the embedded flag. */
+        fun embeddedUrl(base: String): String =
+            Uri.parse(base).buildUpon().appendQueryParameter("embedded", "1").build().toString()
     }
 }
