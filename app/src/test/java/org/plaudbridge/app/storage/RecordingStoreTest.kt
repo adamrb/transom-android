@@ -190,6 +190,35 @@ class RecordingStoreTest {
         assertEquals(start + 3, RecordingStore.serverConfigGeneration)
     }
 
+    // MARK: - Background sync settings
+
+    @Test
+    fun backgroundSyncDefaultsToEnabledAndPersistsChanges() {
+        // Fresh install (clearAll in setUp): on by default, because keeping the recorder linked
+        // while the phone is pocketed is the reason the bridge exists.
+        assertTrue(RecordingStore.isBackgroundSyncEnabled)
+
+        RecordingStore.isBackgroundSyncEnabled = false
+        assertFalse(RecordingStore.isBackgroundSyncEnabled)
+
+        RecordingStore.isBackgroundSyncEnabled = true
+        assertTrue(RecordingStore.isBackgroundSyncEnabled)
+    }
+
+    @Test
+    fun notificationPermissionAskedDefaultsToFalse() {
+        assertFalse(RecordingStore.notificationPermissionAsked)
+        RecordingStore.notificationPermissionAsked = true
+        assertTrue(RecordingStore.notificationPermissionAsked)
+    }
+
+    @Test
+    fun clearAllResetsBackgroundSyncToDefault() {
+        RecordingStore.isBackgroundSyncEnabled = false
+        RecordingStore.clearAll()
+        assertTrue(RecordingStore.isBackgroundSyncEnabled)
+    }
+
     // MARK: - Missing local file reconciliation
 
     @Test

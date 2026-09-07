@@ -1,6 +1,10 @@
 package org.plaudbridge.app
 
 import android.app.Application
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.plaudbridge.app.managers.DeviceManager
 import org.plaudbridge.app.managers.DeviceManagerProtocol
 import org.plaudbridge.app.managers.RecordingManager
@@ -10,6 +14,8 @@ import org.plaudbridge.app.managers.SyncManagerProtocol
 import org.plaudbridge.app.managers.mock.MockDeviceManager
 import org.plaudbridge.app.managers.mock.MockRecordingManager
 import org.plaudbridge.app.managers.mock.MockSyncManager
+import org.plaudbridge.app.models.DeviceConnectionState
+import org.plaudbridge.app.service.DeviceConnectionService
 import org.plaudbridge.app.storage.RecordingStore
 
 /**
@@ -53,7 +59,30 @@ class PlaudBridgeApp : Application() {
             )
         }.start()
         registerForegroundReconnect()
+        startBackgroundSync()
     }
+
+    /**
+     * Background sync lives in a foreground service (DeviceConnectionService). Start it at process
+     * start when a device is already paired, and again the moment a device connects: that is the
+     * only reliable "pairing completed" signal (DeviceManager writes lastConnectedDeviceSN there),
+     * and it covers first-time onboarding as well as "Add device" from Home. sync() is idempotent
+     * and applies the policy (paired + configured + setting on), so a connect while the setting is
+     * off does nothing. On API 31+ a start from the background is refused by the OS; the service
+     * logs and the next foreground entry retries via MainActivity.
+     */
+    private fun startBackgroundSync() {
+        if (USE_MOCK) return
+        DeviceConnectionService.sync(this)
+        appScope.launch {
+            deviceManager.connectionState.collect { state ->
+                if (state is DeviceConnectionState.Connected) DeviceConnectionService.sync(this@PlaudBridgeApp)
+            }
+        }
+    }
+
+    /** Process-lifetime scope for app-wide observers (the Application object is never destroyed). */
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     /**
      * App-wide foreground reconnect trigger (mirrors iOS sceneDidBecomeActive): whenever the app

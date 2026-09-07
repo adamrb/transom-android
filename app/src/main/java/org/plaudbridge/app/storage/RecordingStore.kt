@@ -16,6 +16,8 @@ object RecordingStore {
     private const val KEY_PAIRED_NAMES = "paired_device_names"
     private const val KEY_USER_ID = "user_id"
     private const val KEY_AUTO_SYNC = "is_auto_sync_enabled"
+    private const val KEY_BACKGROUND_SYNC = "is_background_sync_enabled"
+    private const val KEY_NOTIF_PERMISSION_ASKED = "notification_permission_asked"
     private const val KEY_FAST_TRANSFER_HIDE = "fast_transfer_never_show"
     private const val KEY_SERVER_BASE_URL = "server_base_url"
     private const val KEY_SERVER_AUTH_TOKEN = "server_auth_token"
@@ -201,6 +203,20 @@ object RecordingStore {
     var isAutoSyncEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUTO_SYNC, true)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_SYNC, value).apply()
+
+    /**
+     * Keep the BLE link alive from a foreground service while the app is in the background, so a
+     * recording stopped with the phone in a pocket syncs without opening the app. Default ON: it
+     * is the whole point of pairing a recorder to a bridge; the user can opt out in Settings.
+     */
+    var isBackgroundSyncEnabled: Boolean
+        get() = prefs.getBoolean(KEY_BACKGROUND_SYNC, true)
+        set(value) = prefs.edit().putBoolean(KEY_BACKGROUND_SYNC, value).apply()
+
+    /** POST_NOTIFICATIONS (API 33+) has been requested once; never nag again after a denial. */
+    var notificationPermissionAsked: Boolean
+        get() = prefs.getBoolean(KEY_NOTIF_PERMISSION_ASKED, false)
+        set(value) = prefs.edit().putBoolean(KEY_NOTIF_PERMISSION_ASKED, value).apply()
 
     /** "Never show again" preference for the WiFi fast-transfer confirmation sheet. */
     var fastTransferNeverShowAgain: Boolean

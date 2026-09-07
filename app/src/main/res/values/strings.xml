@@ -123,6 +123,12 @@
     <string name="exit_now">Exit Now</string>
     <string name="later">Later</string>
     <string name="user_id">User ID</string>
+    <string name="background_sync">Background sync</string>
+    <string name="background_sync_subtitle">Stay connected to the device while the app is in the background so new recordings sync right away</string>
+    <string name="battery_optimization">Battery optimization</string>
+    <string name="battery_optimization_exempt">Unrestricted. Background sync can run reliably</string>
+    <string name="battery_optimization_restricted">Optimized. Tap to allow background activity so sync keeps running</string>
+    <string name="battery_optimization_unavailable">Could not open battery settings on this device</string>
     <string name="delete_after_upload">Delete after upload</string>
     <string name="delete_after_upload_subtitle">Remove recordings from the device once your server confirms the upload</string>
     <string name="sdk_logs_desc">Export SDK log files for debugging</string>
@@ -181,6 +187,13 @@
     <string name="update_allow_installs">To install updates from your server, allow Plaud Bridge to install unknown apps, then try again.</string>
     <string name="update_install_success">Update installed</string>
     <string name="update_install_failed_fmt">Update install failed: %1$s</string>
+    <!-- Background sync foreground service -->
+    <string name="bg_sync_channel_name">Device connection</string>
+    <string name="bg_sync_channel_desc">Shows whether Plaud Bridge is connected to your recorder while running in the background</string>
+    <string name="bg_sync_notif_connected_fmt">Connected to %1$s</string>
+    <string name="bg_sync_notif_searching_fmt">Searching for %1$s…</string>
+    <string name="bg_sync_notif_disconnected">Disconnected</string>
+
     <string name="qr_confirm_title">Connect to this server?</string>
     <string name="qr_confirm_fmt">Server: %1$s\n\nThe URL and auth token from the QR code will be verified against this server before saving.</string>
 </resources>

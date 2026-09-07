@@ -77,6 +77,9 @@ class DevicePanelActivity : AppCompatActivity() {
                 .setMessage(R.string.confirm_unpair)
                 .setPositiveButton(R.string.confirm) { _, _ ->
                     deviceManager.unpair()
+                    // Unpairing the last device leaves nothing to reconnect: stop the
+                    // background-sync service (no-op while other devices remain).
+                    org.plaudbridge.app.service.DeviceConnectionService.sync(this)
                     // If other paired devices remain, return to Home (which reconnects the new
                     // active device); otherwise go back to onboarding Welcome.
                     if (deviceManager.getPairedDevices().isEmpty()) {

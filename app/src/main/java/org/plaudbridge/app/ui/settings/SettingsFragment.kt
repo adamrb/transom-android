@@ -4,7 +4,11 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -20,8 +24,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
+import org.plaudbridge.app.common.AppLog
 import org.plaudbridge.app.databinding.FragmentSettingsBinding
 import org.plaudbridge.app.net.ApiClient
+import org.plaudbridge.app.service.DeviceConnectionService
 import org.plaudbridge.app.storage.RecordingStore
 import org.plaudbridge.app.ui.onboarding.WelcomeActivity
 
@@ -29,6 +35,10 @@ import org.plaudbridge.app.ui.onboarding.WelcomeActivity
  * Settings Tab — sync toggles, bridge-server config, Plaud region, user id, firmware, unpair.
  */
 class SettingsFragment : Fragment() {
+
+    companion object {
+        private const val TAG = "SettingsFragment"
+    }
 
     private var _binding: FragmentSettingsBinding? = null
     private val binding get() = _binding!!
@@ -53,6 +63,22 @@ class SettingsFragment : Fragment() {
         binding.autoSyncToggle.onToggleChanged = { isChecked ->
             RecordingStore.isAutoSyncEnabled = isChecked
             deviceManager.setAutoSync(isChecked)
+        }
+
+        // Background sync toggle (default ON): runs the DeviceConnectionService foreground service
+        // so the BLE link survives Doze. sync() starts or stops it according to the new value.
+        binding.backgroundSyncToggle.isChecked = RecordingStore.isBackgroundSyncEnabled
+        binding.backgroundSyncToggle.onToggleChanged = { isChecked ->
+            RecordingStore.isBackgroundSyncEnabled = isChecked
+            DeviceConnectionService.sync(requireContext())
+        }
+
+        // Battery optimization: Doze still throttles a foreground service's timers unless the app
+        // is exempt, so surface the state and hand off to the system dialog. API 23+ only.
+        if (Build.VERSION.SDK_INT >= 23) {
+            binding.batteryOptimizationRow.setOnClickListener { requestBatteryExemption() }
+        } else {
+            binding.batteryOptimizationRow.visibility = View.GONE
         }
 
         // Delete-after-upload toggle (default OFF): remove the recording from the device only
@@ -88,6 +114,57 @@ class SettingsFragment : Fragment() {
         binding.signOutButton.setOnClickListener { showUnpairConfirmation() }
 
         observeDevice()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // The user may have just returned from the system battery dialog.
+        renderBatteryOptimizationRow()
+    }
+
+    // MARK: - Battery optimization
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        if (Build.VERSION.SDK_INT < 23) return true
+        val pm = requireContext().getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return true
+        return pm.isIgnoringBatteryOptimizations(requireContext().packageName)
+    }
+
+    private fun renderBatteryOptimizationRow() {
+        if (_binding == null || Build.VERSION.SDK_INT < 23) return
+        val exempt = isIgnoringBatteryOptimizations()
+        binding.batteryOptimizationLabel.text = getString(
+            if (exempt) R.string.battery_optimization_exempt else R.string.battery_optimization_restricted
+        )
+        binding.batteryOptimizationChevron.visibility = if (exempt) View.INVISIBLE else View.VISIBLE
+    }
+
+    /**
+     * Ask the system to exempt this package from battery optimizations. The direct request dialog
+     * is preferred (one tap); some OEM builds do not resolve it, so fall back to the full list
+     * screen where the user finds the app manually.
+     */
+    private fun requestBatteryExemption() {
+        if (Build.VERSION.SDK_INT < 23) return
+        if (isIgnoringBatteryOptimizations()) {
+            renderBatteryOptimizationRow()
+            return
+        }
+        val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:${requireContext().packageName}")
+        }
+        try {
+            startActivity(direct)
+            return
+        } catch (e: Exception) {
+            AppLog.w(TAG, "direct battery-exemption request failed, falling back to settings list", e)
+        }
+        try {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        } catch (e: Exception) {
+            AppLog.w(TAG, "battery optimization settings screen unavailable", e)
+            binding.batteryOptimizationLabel.text = getString(R.string.battery_optimization_unavailable)
+        }
     }
 
     private fun observeDevice() {
@@ -358,6 +435,8 @@ class SettingsFragment : Fragment() {
                 // Unpair the CURRENT device only: other paired devices and synced
                 // recordings survive. unpair() falls the active SN back to the next device.
                 deviceManager.unpair()
+                // No device left means nothing to reconnect: stop the background-sync service.
+                DeviceConnectionService.sync(requireContext())
                 if (RecordingStore.pairedDeviceSNs.isEmpty()) {
                     navigateToWelcome()
                 } else {

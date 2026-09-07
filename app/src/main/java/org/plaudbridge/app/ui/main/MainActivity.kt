@@ -1,8 +1,12 @@
 package org.plaudbridge.app.ui.main
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.View
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -19,6 +23,7 @@ import org.plaudbridge.app.R
 import org.plaudbridge.app.databinding.ActivityMainBinding
 import org.plaudbridge.app.models.DeviceConnectionState
 import org.plaudbridge.app.net.UpdateManager
+import org.plaudbridge.app.service.DeviceConnectionService
 import org.plaudbridge.app.storage.RecordingStore
 import org.plaudbridge.app.ui.files.FilesFragment
 import org.plaudbridge.app.ui.home.HomeFragment
@@ -46,6 +51,15 @@ class MainActivity : AppCompatActivity() {
     private var selectedTab = 0
 
     private val deviceManager get() = (application as PlaudBridgeApp).deviceManager
+
+    /**
+     * API 33+ POST_NOTIFICATIONS. Granted or denied, the connection service starts either way: a
+     * foreground service without the permission is allowed, the user simply sees no notification.
+     */
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
+            DeviceConnectionService.sync(this)
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,10 +103,32 @@ class MainActivity : AppCompatActivity() {
             binding.root.postDelayed({ deviceManager.attemptReconnect() }, 2_000)
         }
 
+        // We are in the foreground, so a foreground-service start is allowed here even on API 31+
+        // (the process-start attempt in PlaudBridgeApp may have been refused). Ask for the
+        // notification permission first, once, so the very first start can show its notification.
+        ensureBackgroundSyncService()
+
         // Continue an app update that was waiting on the unknown-sources permission, then
         // (at most once per 24h) check the server for a newer hosted APK.
         AppUpdateFlow.resumePendingInstall(this)
         maybeAutoCheckForUpdate()
+    }
+
+    private fun ensureBackgroundSyncService() {
+        if (!DeviceConnectionService.isEligible()) {
+            DeviceConnectionService.sync(this) // stops a stale instance, no-op otherwise
+            return
+        }
+        val needsPrompt = Build.VERSION.SDK_INT >= 33 &&
+            !RecordingStore.notificationPermissionAsked &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+        if (needsPrompt) {
+            RecordingStore.notificationPermissionAsked = true
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            DeviceConnectionService.sync(this)
+        }
     }
 
     /**
