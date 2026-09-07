@@ -21,6 +21,7 @@ import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.runBlocking
 
 /**
  * UploadManager queue + delete-after-upload safety, with the BLE SDK faked out behind
@@ -29,6 +30,8 @@ import java.util.concurrent.atomic.AtomicInteger
  *  - blank device SN: uploaded, but NEVER device-deleted (finding 2)
  *  - SN mismatch: no delete on the wrong device; deferred via deletePendingOnDevice and
  *    retried once the matching device is connected (findings 2 + 7)
+ *  - durable retry: kick() schedules the WorkManager request exactly once per call, and
+ *    runPass() (the worker's entry point) classifies its outcome by counts
  */
 @RunWith(RobolectricTestRunner::class)
 class UploadManagerTest {
@@ -45,6 +48,7 @@ class UploadManagerTest {
     private lateinit var context: Context
     private lateinit var server: MockWebServer
     private lateinit var fakeLink: FakeDeviceLink
+    private val scheduleCalls = AtomicInteger()
 
     @Before
     fun setUp() {
@@ -61,6 +65,8 @@ class UploadManagerTest {
         fakeLink = FakeDeviceLink()
         UploadManager.deviceLink = fakeLink
         UploadManager.onFilesChanged = {} // SyncManager touches the real SDK — not under test
+        scheduleCalls.set(0)
+        UploadManager.scheduler = { scheduleCalls.incrementAndGet() } // no real WorkManager here
     }
 
     @After
@@ -295,5 +301,106 @@ class UploadManagerTest {
         awaitCondition("run finished") { UploadManager.state.value is UploadState.Failed }
         assertFalse(RecordingStore.allFiles.single().uploaded)
         assertTrue(fakeLink.deletedSnapshot().isEmpty())
+    }
+
+    // MARK: - Durable retry (WorkManager seam + runPass classification)
+
+    @Test
+    fun kickSchedulesDurableRetryExactlyOnce() {
+        addSyncedRecording("SN-A", 80)
+        server.enqueue(okUploadResponse("srv-80"))
+
+        UploadManager.kick()
+
+        awaitCondition("recording uploaded") { RecordingStore.allFiles.single().uploaded }
+        awaitCondition("run finished") { UploadManager.state.value is UploadState.Idle }
+        Thread.sleep(200) // any re-kick from the dirty-flag tail would land here
+        assertEquals(1, scheduleCalls.get())
+    }
+
+    @Test
+    fun kickWithoutServerConfigDoesNotSchedule() {
+        RecordingStore.serverBaseUrl = null
+        UploadManager.kick()
+        assertEquals(0, scheduleCalls.get())
+    }
+
+    @Test
+    fun ensureScheduledSchedulesWithoutUploading() {
+        addSyncedRecording("SN-A", 81)
+
+        UploadManager.ensureScheduled()
+
+        Thread.sleep(200)
+        assertEquals(1, scheduleCalls.get())
+        assertEquals(0, server.requestCount)
+        assertFalse(RecordingStore.allFiles.single().uploaded)
+    }
+
+    @Test
+    fun runPassAllUploadedReportsNothingRemaining() = runBlocking {
+        addSyncedRecording("SN-A", 90)
+        addSyncedRecording("SN-A", 91)
+        server.enqueue(okUploadResponse("srv-90"))
+        server.enqueue(okUploadResponse("srv-91"))
+
+        val result = UploadManager.runPass()
+
+        assertFalse(result.alreadyRunning)
+        assertEquals(2, result.uploaded)
+        assertEquals(0, result.failed)
+        assertEquals(0, result.remaining)
+        assertTrue(RecordingStore.allFiles.all { it.uploaded })
+        assertEquals(0, scheduleCalls.get()) // runPass itself never schedules; kick does
+    }
+
+    @Test
+    fun runPassServerErrorCountsFailureAndKeepsPending() = runBlocking {
+        addSyncedRecording("SN-A", 92)
+        server.enqueue(MockResponse().setResponseCode(503).setBody("down"))
+
+        val result = UploadManager.runPass()
+
+        assertEquals(0, result.uploaded)
+        assertEquals(1, result.failed)
+        assertEquals(1, result.remaining)
+        assertFalse(RecordingStore.allFiles.single().uploaded)
+        assertTrue(UploadManager.state.value is UploadState.Failed)
+    }
+
+    @Test
+    fun runPassWithNothingPendingMakesNoNetworkCalls() = runBlocking {
+        val result = UploadManager.runPass()
+
+        assertEquals(UploadManager.PassResult(uploaded = 0, failed = 0, remaining = 0), result)
+        assertEquals(0, server.requestCount)
+        assertTrue(UploadManager.state.value is UploadState.Idle)
+    }
+
+    @Test
+    fun runPassWhileAnotherPassRunsReportsAlreadyRunning() = runBlocking {
+        val firstRequestStarted = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                firstRequestStarted.countDown()
+                releaseFirst.await(10, TimeUnit.SECONDS)
+                return MockResponse().setResponseCode(201)
+                    .setBody("""{"id":"srv-93","duplicate":false}""")
+            }
+        }
+        addSyncedRecording("SN-A", 93)
+        UploadManager.kick()
+        assertTrue(firstRequestStarted.await(10, TimeUnit.SECONDS))
+
+        // Second pass (what the worker would do) must not touch the file mid-upload.
+        val result = UploadManager.runPass()
+        assertTrue(result.alreadyRunning)
+        assertEquals(0, result.uploaded)
+        assertEquals(1, result.remaining)
+
+        releaseFirst.countDown()
+        awaitCondition("recording uploaded") { RecordingStore.allFiles.single().uploaded }
+        assertEquals("exactly one upload request", 1, server.requestCount)
     }
 }

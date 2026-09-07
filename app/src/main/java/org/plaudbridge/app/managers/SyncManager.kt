@@ -489,6 +489,10 @@ class SyncManager private constructor() : SyncManagerProtocol {
                         wifiSyncedSessionIds.add(sessionId)
                         wifiCompletedCount++
                         scope.launch { _files.value = RecordingStore.allFiles }
+                        // No kick() here: the phone is on the recorder's hotspot without internet,
+                        // so the upload runs when the transfer ends. Schedule the durable retry
+                        // now so the file still reaches the server if the process dies first.
+                        UploadManager.ensureScheduled()
                         exportNextWiFiFile()
                     }
 
