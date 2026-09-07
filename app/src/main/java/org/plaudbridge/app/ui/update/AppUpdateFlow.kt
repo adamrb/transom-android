@@ -11,10 +11,10 @@ import org.plaudbridge.app.net.UpdateManager
 import java.io.File
 
 /**
- * Dialog flow for a self-hosted app update: prompt (version + notes) → download + verify →
- * unknown-sources consent if needed → system installer. Thin UI shell around the tested
- * seams in [UpdateManager]; used by both the Settings manual check and the foreground
- * auto-check in MainActivity.
+ * Dialog flow for a self-hosted app update: prompt (version + notes) → bounded download +
+ * sha256 + APK-identity verification → unknown-sources consent if needed → PackageInstaller
+ * session. Thin UI shell around the tested seams in [UpdateManager]; used by both the Settings
+ * manual check and the foreground auto-check in MainActivity.
  */
 object AppUpdateFlow {
 
@@ -83,7 +83,35 @@ object AppUpdateFlow {
                 .show()
             return
         }
-        activity.startActivity(UpdateManager.installIntent(activity, apk))
+        commitInstall(activity, apk)
+    }
+
+    /**
+     * Re-validate the APK's identity (package/version/signer vs. the installed app) IMMEDIATELY
+     * before handing it to the installer — the file sat on disk since download — then commit a
+     * PackageInstaller session. Identity failure deletes the file and surfaces the reason.
+     */
+    private fun commitInstall(activity: FragmentActivity, apk: File) {
+        val appContext = activity.applicationContext
+        activity.lifecycleScope.launch {
+            val error = withContext(Dispatchers.IO) {
+                val identityFailure = UpdateManager.validateApkIdentity(appContext, apk)
+                if (identityFailure != null) {
+                    apk.delete()
+                    identityFailure
+                } else {
+                    runCatching { UpdateManager.installViaPackageInstaller(appContext, apk) }
+                        .exceptionOrNull()?.message?.let { "installer session failed: $it" }
+                }
+            }
+            if (error != null && !activity.isFinishing && !activity.isDestroyed) {
+                AlertDialog.Builder(activity)
+                    .setTitle(R.string.update_available_title)
+                    .setMessage(activity.getString(R.string.update_install_failed_fmt, error))
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show()
+            }
+        }
     }
 
     /** Continue a parked install after the unknown-sources detour (call from onResume). */
@@ -91,6 +119,6 @@ object AppUpdateFlow {
         val apk = pendingInstall ?: return
         if (!UpdateManager.canRequestInstalls(activity)) return // still not granted
         pendingInstall = null
-        if (apk.exists()) activity.startActivity(UpdateManager.installIntent(activity, apk))
+        if (apk.exists()) commitInstall(activity, apk)
     }
 }

@@ -21,9 +21,10 @@ import java.io.IOException
 import java.security.MessageDigest
 
 /**
- * Self-update checks: version comparison against the server manifest, MANDATORY sha256/size
- * verification before install, and the 24h auto-check throttle. The installer intent itself
- * stays untested (thin plumbing around the verified file).
+ * Self-update checks: version comparison against the server manifest, bounded downloads,
+ * MANDATORY sha256/size verification, APK identity rules, and the success/failure auto-check
+ * throttle. The PackageInstaller session itself stays untested (thin plumbing around the
+ * verified file).
  */
 @RunWith(RobolectricTestRunner::class)
 class UpdateManagerTest {
@@ -192,65 +193,222 @@ class UpdateManagerTest {
         tampered.delete()
     }
 
+    private fun manifest(
+        sha256: String,
+        sizeBytes: Long,
+        versionCode: Int = 3
+    ): UpdateManager.Manifest = UpdateManager.Manifest(
+        versionCode = versionCode, versionName = "0.3.0", filename = "a.apk",
+        sha256 = sha256, sizeBytes = sizeBytes, uploadedAt = null, notes = null
+    )
+
+    /** No leftover final or temp (.part) files in the download dir. */
+    private fun assertDownloadDirEmpty() {
+        val leftovers = UpdateManager.apkDir(context).listFiles()?.map { it.name } ?: emptyList()
+        assertTrue("expected no leftover files, found $leftovers", leftovers.isEmpty())
+    }
+
     @Test
     fun downloadAndVerifyReturnsVerifiedFile() {
         val apkBytes = ByteArray(1024) { (it % 251).toByte() }
         server.enqueue(MockResponse().setResponseCode(200).setBody(Buffer().write(apkBytes)))
-        val manifest = UpdateManager.Manifest(
-            versionCode = 3, versionName = "0.3.0", filename = "a.apk",
-            sha256 = sha256Hex(apkBytes), sizeBytes = apkBytes.size.toLong(),
-            uploadedAt = null, notes = null
-        )
-        val file = UpdateManager.downloadAndVerify(context, manifest)
+        val file = UpdateManager.downloadAndVerify(
+            context, manifest(sha256Hex(apkBytes), apkBytes.size.toLong())
+        ) { null } // identity checked separately; see validateIdentityCore tests
         assertTrue(file.exists())
         assertEquals(apkBytes.size.toLong(), file.length())
         assertEquals("update-3.apk", file.name)
+        assertEquals(
+            "temp .part file must be renamed away",
+            listOf("update-3.apk"),
+            UpdateManager.apkDir(context).listFiles()?.map { it.name }
+        )
     }
 
     @Test
     fun downloadAndVerifyDeletesFileOnHashMismatch() {
         val apkBytes = ByteArray(64) { 7 }
         server.enqueue(MockResponse().setResponseCode(200).setBody(Buffer().write(apkBytes)))
-        val manifest = UpdateManager.Manifest(
-            versionCode = 3, versionName = "0.3.0", filename = "a.apk",
-            sha256 = "ab".repeat(32), // wrong hash
-            sizeBytes = apkBytes.size.toLong(), uploadedAt = null, notes = null
-        )
         var thrown: Exception? = null
         try {
-            UpdateManager.downloadAndVerify(context, manifest)
+            UpdateManager.downloadAndVerify(
+                context, manifest("ab".repeat(32), apkBytes.size.toLong())
+            ) { null }
         } catch (e: IOException) {
             thrown = e
         }
         assertNotNull("verification must throw on hash mismatch", thrown)
-        assertFalse(
-            "unverified apk must be deleted",
-            File(UpdateManager.apkDir(context), "update-3.apk").exists()
+        assertDownloadDirEmpty()
+    }
+
+    @Test
+    fun downloadAndVerifyDeletesFileOnIdentityFailure() {
+        val apkBytes = ByteArray(64) { 7 }
+        server.enqueue(MockResponse().setResponseCode(200).setBody(Buffer().write(apkBytes)))
+        var thrown: IOException? = null
+        try {
+            UpdateManager.downloadAndVerify(
+                context, manifest(sha256Hex(apkBytes), apkBytes.size.toLong())
+            ) { "apk package 'evil' is not ours" }
+        } catch (e: IOException) {
+            thrown = e
+        }
+        assertNotNull("identity failure must throw", thrown)
+        assertTrue(thrown!!.message!!.contains("evil"))
+        assertDownloadDirEmpty()
+    }
+
+    // MARK: - Bounded download
+
+    @Test
+    fun downloadAbortsOnContentLengthMismatch() {
+        // Server advertises (and would send) 64 bytes; the manifest says 10.
+        server.enqueue(MockResponse().setResponseCode(200).setBody(Buffer().write(ByteArray(64))))
+        var thrown: Exception? = null
+        try {
+            UpdateManager.downloadAndVerify(context, manifest("ab".repeat(32), 10)) { null }
+        } catch (e: Exception) {
+            thrown = e
+        }
+        assertNotNull("content-length mismatch must abort", thrown)
+        assertTrue(thrown!!.message!!.contains("Content-Length"))
+        assertDownloadDirEmpty()
+    }
+
+    @Test
+    fun downloadAbortsWhenChunkedStreamExceedsManifestSize() {
+        // Chunked response (no Content-Length): the byte counter must abort past size_bytes.
+        server.enqueue(
+            MockResponse().setResponseCode(200).setChunkedBody(Buffer().write(ByteArray(4096)), 1024)
+        )
+        var thrown: Exception? = null
+        try {
+            UpdateManager.downloadAndVerify(context, manifest("ab".repeat(32), 100)) { null }
+        } catch (e: Exception) {
+            thrown = e
+        }
+        assertNotNull("oversized stream must abort", thrown)
+        assertTrue(thrown!!.message!!.contains("exceeded"))
+        assertDownloadDirEmpty()
+    }
+
+    @Test
+    fun oversizedManifestIsRefusedBeforeAnyRequest() {
+        var thrown: Exception? = null
+        try {
+            UpdateManager.downloadAndVerify(
+                context, manifest("ab".repeat(32), UpdateManager.MAX_APK_BYTES + 1)
+            ) { null }
+        } catch (e: IOException) {
+            thrown = e
+        }
+        assertNotNull(thrown)
+        assertEquals("no request may be made for an oversized apk", 0, server.requestCount)
+        val hugeInfo = infoJson(versionCode = 99, size = UpdateManager.MAX_APK_BYTES + 1)
+        server.enqueue(MockResponse().setResponseCode(200).setBody(hugeInfo))
+        assertTrue(
+            "oversized hosted apk must never be offered",
+            UpdateManager.checkForUpdate(2) is UpdateManager.CheckResult.Error
         )
     }
 
-    // MARK: - 24h auto-check throttle
+    // MARK: - APK identity rules (pure core; the PackageManager wrapper is thin)
+
+    private val signerA = "aa".repeat(32)
+    private val signerB = "bb".repeat(32)
+
+    private fun identity(
+        archivePackage: String? = "org.plaudbridge.app",
+        archiveVersion: Long = 3,
+        installedVersion: Long = 2,
+        archiveSigners: Set<String> = setOf(signerA),
+        installedLineage: Set<String> = setOf(signerA),
+        parsed: Boolean = true
+    ): String? = UpdateManager.validateIdentityCore(
+        expectedPackage = "org.plaudbridge.app",
+        archivePackage = archivePackage,
+        archiveVersionCode = archiveVersion,
+        installedVersionCode = installedVersion,
+        archiveSigners = archiveSigners,
+        installedLineage = installedLineage,
+        archiveParsed = parsed
+    )
+
+    @Test
+    fun identityAcceptsMatchingNewerApk() {
+        assertNull(identity())
+        // Rotated lineage: archive signed with a cert from the installed history
+        assertNull(identity(archiveSigners = setOf(signerA), installedLineage = setOf(signerA, signerB)))
+    }
+
+    @Test
+    fun identityRejectsForeignPackage() {
+        assertNotNull(identity(archivePackage = "com.evil.lookalike"))
+        assertNotNull(identity(archivePackage = null))
+    }
+
+    @Test
+    fun identityRejectsNonNewerVersion() {
+        assertNotNull("same version", identity(archiveVersion = 2))
+        assertNotNull("downgrade", identity(archiveVersion = 1))
+    }
+
+    @Test
+    fun identityRejectsSignerMismatchOrMissing() {
+        assertNotNull("unknown signer", identity(archiveSigners = setOf(signerB)))
+        assertNotNull("no archive signers", identity(archiveSigners = emptySet()))
+        assertNotNull("no installed lineage", identity(installedLineage = emptySet()))
+        assertNotNull(
+            "extra signer not in lineage",
+            identity(archiveSigners = setOf(signerA, signerB), installedLineage = setOf(signerA))
+        )
+    }
+
+    @Test
+    fun identityRejectsUnparseableArchive() {
+        assertNotNull(identity(parsed = false))
+    }
+
+    @Test
+    fun validateApkIdentityRejectsGarbageFile() {
+        // End-to-end wrapper: a non-APK file cannot be parsed by PackageManager.
+        val junk = File.createTempFile("junk", ".apk").apply { writeBytes(ByteArray(16) { 1 }) }
+        assertNotNull(UpdateManager.validateApkIdentity(context, junk))
+        junk.delete()
+    }
+
+    // MARK: - Auto-check throttle (24h success / 1h failure backoff / host reset)
 
     @Test
     fun autoCheckThrottle() {
         val now = 1_000_000_000_000L
-        assertTrue("never checked -> due", UpdateManager.isAutoCheckDue(0L, now))
+        val host = "bridge.example.com"
+        fun due(success: Long = 0, failure: Long = 0, lastHost: String? = host, current: String? = host) =
+            UpdateManager.isAutoCheckDue(success, failure, now, lastHost, current)
+
+        assertTrue("never checked -> due", due())
+        assertTrue("success 25h ago -> due", due(success = now - 25 * 60 * 60 * 1000L))
+        assertTrue("success exactly 24h ago -> due", due(success = now - UpdateManager.CHECK_INTERVAL_MS))
+        assertFalse("success 1h ago -> not due", due(success = now - 60 * 60 * 1000L))
+        assertTrue("future success timestamp (clock rollback) -> due", due(success = now + 60 * 60 * 1000L))
+
+        assertFalse("failure 10min ago -> backoff blocks", due(failure = now - 10 * 60 * 1000L))
+        assertTrue("failure 61min ago -> due again", due(failure = now - 61 * 60 * 1000L))
+        assertTrue("future failure timestamp -> due", due(failure = now + 60 * 1000L))
+
         assertTrue(
-            "25h ago -> due",
-            UpdateManager.isAutoCheckDue(now - 25 * 60 * 60 * 1000L, now)
+            "host change resets the throttle",
+            due(success = now - 1000L, lastHost = "old.example.com", current = host)
         )
-        assertTrue(
-            "exactly 24h ago -> due",
-            UpdateManager.isAutoCheckDue(now - UpdateManager.CHECK_INTERVAL_MS, now)
-        )
-        assertFalse(
-            "1h ago -> not due",
-            UpdateManager.isAutoCheckDue(now - 60 * 60 * 1000L, now)
-        )
-        assertTrue(
-            "future timestamp (clock rollback) -> due, never wedged",
-            UpdateManager.isAutoCheckDue(now + 60 * 60 * 1000L, now)
-        )
+    }
+
+    @Test
+    fun autoCheckInFlightGuardIsExclusive() {
+        assertTrue(UpdateManager.tryBeginAutoCheck())
+        assertFalse("second concurrent check refused", UpdateManager.tryBeginAutoCheck())
+        UpdateManager.endAutoCheck()
+        assertTrue("free again after end", UpdateManager.tryBeginAutoCheck())
+        UpdateManager.endAutoCheck()
     }
 
     // MARK: - stale download cleanup

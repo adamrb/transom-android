@@ -179,4 +179,8 @@
     <string name="update_downloading">Downloading update…</string>
     <string name="update_download_failed_fmt">Update download failed: %1$s</string>
     <string name="update_allow_installs">To install updates from your server, allow Plaud Bridge to install unknown apps, then try again.</string>
+    <string name="update_install_success">Update installed</string>
+    <string name="update_install_failed_fmt">Update install failed: %1$s</string>
+    <string name="qr_confirm_title">Connect to this server?</string>
+    <string name="qr_confirm_fmt">Server: %1$s\n\nThe URL and auth token from the QR code will be verified against this server before saving.</string>
 </resources>

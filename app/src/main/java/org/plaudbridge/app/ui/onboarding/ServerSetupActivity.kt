@@ -52,16 +52,30 @@ class ServerSetupActivity : AppCompatActivity() {
     private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
         val contents = result.contents ?: return@registerForActivityResult // cancelled
         when (val parsed = QrSetupPayload.parse(contents)) {
-            is QrSetupPayload.Result.Success -> {
-                binding.serverUrlInput.setText(parsed.payload.url)
-                binding.serverTokenInput.setText(parsed.payload.token)
-                testConnection()
-            }
+            is QrSetupPayload.Result.Success -> confirmScannedServer(parsed.payload)
             is QrSetupPayload.Result.Failure -> {
                 AppLog.w(TAG, "QR parse failed: ${parsed.error} — ${parsed.reason}")
                 showStatus(getString(R.string.qr_invalid_fmt, parsed.reason), isError = true)
             }
         }
+    }
+
+    /**
+     * A scanned server is never contacted or persisted silently: show the canonical ASCII
+     * host:port (punycode for Unicode homographs, so lookalike domains are visible) and only
+     * fill the fields + run the verification after explicit confirmation.
+     */
+    private fun confirmScannedServer(payload: QrSetupPayload) {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(R.string.qr_confirm_title)
+            .setMessage(getString(R.string.qr_confirm_fmt, "${payload.host}:${payload.port}"))
+            .setPositiveButton(R.string.connect) { _, _ ->
+                binding.serverUrlInput.setText(payload.url)
+                binding.serverTokenInput.setText(payload.token)
+                testConnection()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

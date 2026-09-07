@@ -23,6 +23,8 @@ object RecordingStore {
     private const val KEY_DELETE_AFTER_UPLOAD = "delete_after_upload"
     private const val KEY_LIBRARY_WEBVIEW_HOST = "library_webview_host"
     private const val KEY_LAST_UPDATE_CHECK_AT = "last_update_check_at"
+    private const val KEY_LAST_UPDATE_CHECK_FAILURE_AT = "last_update_check_failure_at"
+    private const val KEY_LAST_UPDATE_CHECK_HOST = "last_update_check_host"
     private const val KEY_CACHED_PLAUD_TOKEN = "cached_plaud_token"
     private const val KEY_CACHED_PLAUD_TOKEN_EXPIRY = "cached_plaud_token_expiry"
     private const val RECORDINGS_FILE = "recordings.json"
@@ -138,10 +140,20 @@ object RecordingStore {
         get() = prefs.getString(KEY_LIBRARY_WEBVIEW_HOST, null)
         set(value) = prefs.edit().putString(KEY_LIBRARY_WEBVIEW_HOST, value).apply()
 
-    /** Last automatic app-update check (epoch ms); 0 = never. Throttles to once per 24h. */
+    /** Last SUCCESSFUL automatic app-update check (epoch ms); 0 = never. 24h throttle. */
     var lastUpdateCheckAt: Long
         get() = prefs.getLong(KEY_LAST_UPDATE_CHECK_AT, 0L)
         set(value) = prefs.edit().putLong(KEY_LAST_UPDATE_CHECK_AT, value).apply()
+
+    /** Last FAILED automatic app-update check (epoch ms); 0 = none. 1h retry backoff. */
+    var lastUpdateCheckFailureAt: Long
+        get() = prefs.getLong(KEY_LAST_UPDATE_CHECK_FAILURE_AT, 0L)
+        set(value) = prefs.edit().putLong(KEY_LAST_UPDATE_CHECK_FAILURE_AT, value).apply()
+
+    /** Server host the last auto-check ran against; a different host resets the throttle. */
+    var lastUpdateCheckHost: String?
+        get() = prefs.getString(KEY_LAST_UPDATE_CHECK_HOST, null)
+        set(value) = prefs.edit().putString(KEY_LAST_UPDATE_CHECK_HOST, value).apply()
 
     /** Server configuration complete (onboarding gate). */
     val isServerConfigured: Boolean

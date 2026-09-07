@@ -77,6 +77,11 @@
             android:name=".ui.filedetail.FileDetailActivity"
             android:exported="false" />
 
+        <!-- PackageInstaller session status for self-updates (never exported) -->
+        <receiver
+            android:name=".ui.update.UpdateResultReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

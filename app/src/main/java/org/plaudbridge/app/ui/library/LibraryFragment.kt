@@ -12,6 +12,7 @@ import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebStorage
 import android.webkit.WebView
@@ -22,6 +23,7 @@ import org.plaudbridge.app.R
 import org.plaudbridge.app.common.AppLog
 import org.plaudbridge.app.databinding.FragmentLibraryBinding
 import org.plaudbridge.app.storage.RecordingStore
+import java.io.ByteArrayInputStream
 
 /**
  * Library Tab — the self-hosted server's web dashboard, embedded.
@@ -205,11 +207,30 @@ class LibraryFragment : Fragment() {
             return true
         }
 
+        /**
+         * POST navigations (form submissions) bypass shouldOverrideUrlLoading entirely, so the
+         * origin policy is ALSO enforced here for main-frame loads: a disallowed main-frame
+         * request gets an empty response instead of rendering a foreign origin in the tab.
+         * (Runs on a background thread; the policy is pure.)
+         */
+        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+            if (request.isForMainFrame && !originPolicy.allows(request.url.toString())) {
+                return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+            }
+            return null
+        }
+
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+            // Defense in depth: if a disallowed URL somehow committed anyway, stop it and never
+            // run the token injection against it.
+            if (!originPolicy.allows(url)) {
+                view.stopLoading()
+                return
+            }
             mainFrameError = false
             // Early best-effort injection — only ever into our own origin.
             val token = configuredToken
-            if (token != null && originPolicy.allows(url)) {
+            if (token != null) {
                 view.evaluateJavascript(TokenInjection.setTokenScript(token), null)
             }
         }

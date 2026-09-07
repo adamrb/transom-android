@@ -1,6 +1,7 @@
 package org.plaudbridge.app.common
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -50,6 +51,36 @@ class QrSetupPayloadTest {
     fun urlWithPortAndPathIsAccepted() {
         val p = success("""{"v":1,"url":"https://h.example:8443/bridge","token":"t"}""")
         assertEquals("https://h.example:8443/bridge", p.url)
+        assertEquals("h.example", p.host)
+        assertEquals(8443, p.port)
+    }
+
+    @Test
+    fun defaultPortIsCanonicalizedAndExposed() {
+        val implicit = success("""{"v":1,"url":"https://h.example","token":"t"}""")
+        assertEquals(443, implicit.port)
+        assertEquals("https://h.example", implicit.url)
+        // Explicit :443 canonicalizes to the same origin (port dropped from the URL)
+        val explicit = success("""{"v":1,"url":"https://h.example:443","token":"t"}""")
+        assertEquals("https://h.example", explicit.url)
+        assertEquals(443, explicit.port)
+    }
+
+    @Test
+    fun hostIsLowercasedInCanonicalForm() {
+        val p = success("""{"v":1,"url":"https://BRIDGE.Example.COM","token":"t"}""")
+        assertEquals("bridge.example.com", p.host)
+        assertEquals("https://bridge.example.com", p.url)
+    }
+
+    @Test
+    fun unicodeHomographHostIsShownAsPunycode() {
+        // Cyrillic "е" (U+0435) in "bridgе" — must surface as its ASCII punycode form so the
+        // confirmation dialog exposes the lookalike instead of rendering it invisibly.
+        val p = success("""{"v":1,"url":"https://bridgе.example.com","token":"t"}""")
+        assertTrue("expected punycode host, got ${p.host}", p.host.startsWith("xn--"))
+        assertFalse(p.host.contains('е'))
+        assertTrue(p.url.contains(p.host))
     }
 
     // MARK: - Wrong version
@@ -136,6 +167,43 @@ class QrSetupPayloadTest {
         assertEquals(
             QrSetupPayload.Error.BAD_URL,
             failure("""{"v":1,"url":"http://s.example","token":"t"}""")
+        )
+    }
+
+    @Test
+    fun userinfoTrickIsRejected() {
+        // The real host here is evil.com — prefix matching would have been fooled
+        assertEquals(
+            QrSetupPayload.Error.BAD_URL,
+            failure("""{"v":1,"url":"https://good.com@evil.com/","token":"t"}""")
+        )
+        assertEquals(
+            QrSetupPayload.Error.BAD_URL,
+            failure("""{"v":1,"url":"https://user:pass@evil.com/","token":"t"}""")
+        )
+    }
+
+    @Test
+    fun fragmentAndQueryAreRejected() {
+        assertEquals(
+            QrSetupPayload.Error.BAD_URL,
+            failure("""{"v":1,"url":"https://s.example/#frag","token":"t"}""")
+        )
+        assertEquals(
+            QrSetupPayload.Error.BAD_URL,
+            failure("""{"v":1,"url":"https://s.example/?q=1","token":"t"}""")
+        )
+    }
+
+    @Test
+    fun malformedAuthorityIsRejected() {
+        assertEquals(
+            QrSetupPayload.Error.BAD_URL,
+            failure("""{"v":1,"url":"https://","token":"t"}""")
+        )
+        assertEquals(
+            QrSetupPayload.Error.BAD_URL,
+            failure("""{"v":1,"url":"https://h .example","token":"t"}""")
         )
     }
 }

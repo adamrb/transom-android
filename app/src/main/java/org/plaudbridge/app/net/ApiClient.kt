@@ -238,11 +238,15 @@ object ApiClient {
     }
 
     /**
-     * GET /api/v1/apk/file (Bearer auth) → stream the APK binary to [dest]. Throws on any
-     * HTTP/IO failure (deleting the partial file). The caller MUST verify the sha256 + size
-     * against the manifest before doing anything with the file — see UpdateManager.
+     * GET /api/v1/apk/file (Bearer auth) → stream the APK binary to [dest], BOUNDED:
+     * a Content-Length (when present) must equal [expectedSizeBytes], and streaming aborts as
+     * soon as more than the expected size arrives — the server never gets to fill the disk and
+     * fail verification afterwards. Throws on any HTTP/IO/bound failure (deleting the partial
+     * file). The caller MUST still verify sha256/size/identity before doing anything with the
+     * file — see UpdateManager.
      */
-    fun downloadApk(dest: File) {
+    fun downloadApk(dest: File, expectedSizeBytes: Long) {
+        require(expectedSizeBytes > 0) { "expectedSizeBytes must be positive" }
         val req = Request.Builder()
             .url("${baseUrl()}/api/v1/apk/file")
             .header("Authorization", authHeader())
@@ -255,8 +259,30 @@ object ApiClient {
                     throw ApiException(resp.code, "apk download rejected")
                 }
                 val body = resp.body ?: throw ApiException(resp.code, "empty apk response")
+                val contentLength = body.contentLength() // -1 when chunked/unknown
+                if (contentLength >= 0 && contentLength != expectedSizeBytes) {
+                    throw ApiException(
+                        resp.code,
+                        "apk Content-Length $contentLength does not match manifest size $expectedSizeBytes"
+                    )
+                }
+                var written = 0L
                 body.byteStream().use { input ->
-                    dest.outputStream().use { output -> input.copyTo(output) }
+                    dest.outputStream().use { output ->
+                        val buf = ByteArray(64 * 1024)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            written += n
+                            if (written > expectedSizeBytes) {
+                                throw ApiException(
+                                    resp.code,
+                                    "apk stream exceeded manifest size $expectedSizeBytes — aborted"
+                                )
+                            }
+                            output.write(buf, 0, n)
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {

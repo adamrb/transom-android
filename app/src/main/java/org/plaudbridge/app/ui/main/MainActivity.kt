@@ -95,18 +95,44 @@ class MainActivity : AppCompatActivity() {
         maybeAutoCheckForUpdate()
     }
 
-    /** Foreground auto-check against the server's hosted APK, throttled to once per 24h. */
+    /**
+     * Foreground auto-check against the server's hosted APK. Throttle: 24h after a successful
+     * response, 1h after a transient failure; reset when the server host or the config
+     * generation changes; timestamps are recorded AFTER the response (never before), and an
+     * in-flight guard prevents concurrent checks across rapid resume cycles.
+     */
     private fun maybeAutoCheckForUpdate() {
         if (!RecordingStore.isServerConfigured) return
         val now = System.currentTimeMillis()
-        if (!UpdateManager.isAutoCheckDue(RecordingStore.lastUpdateCheckAt, now)) return
-        RecordingStore.lastUpdateCheckAt = now
+        val host = RecordingStore.serverBaseUrl?.let { android.net.Uri.parse(it).host }
+        val gen = RecordingStore.serverConfigGeneration
+        val configChanged = gen != UpdateManager.lastCheckedConfigGeneration
+        val due = configChanged || UpdateManager.isAutoCheckDue(
+            RecordingStore.lastUpdateCheckAt,
+            RecordingStore.lastUpdateCheckFailureAt,
+            now,
+            RecordingStore.lastUpdateCheckHost,
+            host
+        )
+        if (!due || !UpdateManager.tryBeginAutoCheck()) return
         lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                UpdateManager.checkForUpdate(BuildConfig.VERSION_CODE)
-            }
-            if (result is UpdateManager.CheckResult.UpdateAvailable && !isFinishing && !isDestroyed) {
-                AppUpdateFlow.promptInstall(this@MainActivity, result.manifest)
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    UpdateManager.checkForUpdate(BuildConfig.VERSION_CODE)
+                }
+                UpdateManager.lastCheckedConfigGeneration = gen
+                RecordingStore.lastUpdateCheckHost = host
+                if (result is UpdateManager.CheckResult.Error) {
+                    RecordingStore.lastUpdateCheckFailureAt = System.currentTimeMillis()
+                } else {
+                    RecordingStore.lastUpdateCheckAt = System.currentTimeMillis()
+                    RecordingStore.lastUpdateCheckFailureAt = 0L
+                }
+                if (result is UpdateManager.CheckResult.UpdateAvailable && !isFinishing && !isDestroyed) {
+                    AppUpdateFlow.promptInstall(this@MainActivity, result.manifest)
+                }
+            } finally {
+                UpdateManager.endAutoCheck()
             }
         }
     }

@@ -111,11 +111,19 @@ origin. Changing the server host (or unpairing) wipes the WebView's storage.
 
 If your server hosts an APK (`GET /api/v1/apk/info` + `GET /api/v1/apk/file`, Bearer auth),
 the app offers updates from it: automatically on foregrounding (at most once per 24 hours) and
-manually via **Settings → Version → Check**. The download is streamed to app-private storage
-and its **sha256 is verified against the server's manifest before the installer ever sees
-it** — a mismatched file is deleted. On Android 8+ the first install asks you to allow
-Plaud Bridge to install unknown apps (the standard sideload consent). Downloaded APKs are
-cleaned up automatically after a successful update (or after 7 days).
+manually via **Settings → Version → Check**. The download is bounded (200 MB ceiling,
+Content-Length and streamed-byte enforcement against the manifest's `size_bytes`) and streamed
+to app-private storage, where its **sha256 is verified against the server's manifest and the
+APK's identity is validated** — package name, a strictly newer `versionCode`, and signing
+certificates matching the installed app — **before the installer ever sees it**; anything that
+fails is deleted. Installation goes through a `PackageInstaller` session (no implicit install
+intents). On Android 8+ the first install asks you to allow Plaud Bridge to install unknown
+apps (the standard sideload consent). Downloaded APKs are cleaned up automatically after a
+successful update (or after 7 days). A failed check retries after 1 hour instead of consuming
+the 24-hour throttle, and changing servers resets the throttle.
+
+Scanned setup QRs are confirmed before use: the app shows the canonical ASCII host:port
+(punycode for Unicode lookalikes) and only contacts or saves the server after you confirm.
 
 **Every APK uploaded to the server must increment `version_code`** (the app updates only when
 the hosted `version_code` is strictly greater than the installed one). Bump `versionCode` /
