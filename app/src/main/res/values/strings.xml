@@ -172,11 +172,35 @@
     <string name="qr_scan_prompt">Scan the setup QR from your server\'s dashboard</string>
     <string name="qr_invalid_fmt">QR code not recognized: %1$s</string>
 
-    <!-- Library (embedded server dashboard) -->
+    <!-- Library (server recordings, native list) -->
     <string name="library">Library</string>
     <string name="library_not_configured">Configure your bridge server in Settings to browse the Library.</string>
     <string name="library_load_failed">Couldn\'t reach your server. Check that it\'s running and that you\'re online.</string>
+    <string name="library_auth_failed">The server rejected the auth token (401/403). Check the token in Settings.</string>
+    <string name="library_empty">No recordings on the server yet</string>
+    <string name="library_search_hint">Search titles and transcripts</string>
     <string name="retry">Retry</string>
+    <string name="status_transcribing">Transcribing…</string>
+    <string name="status_pending">Pending</string>
+    <string name="status_failed">Failed</string>
+    <string name="status_stored">Stored</string>
+    <string name="status_done">Transcribed</string>
+    <string name="retranscribe">Re-transcribe</string>
+    <string name="transcribe">Transcribe</string>
+    <string name="retranscribe_queued">Transcription queued on your server</string>
+    <string name="delete_from_server">Delete from server</string>
+    <string name="delete_from_server_confirm_fmt">This permanently deletes \"%1$s\" (audio and transcript) from your server. Copies on this phone or the recorder are not affected.</string>
+    <string name="recording_deleted">Recording deleted</string>
+    <string name="server_request_failed_fmt">Server request failed: %1$s</string>
+    <string name="recording_not_on_server">This recording is no longer on the server.</string>
+    <string name="transcription_failed">Transcription failed on your server.</string>
+    <string name="transcript_not_started">This recording has not been transcribed.</string>
+    <string name="title_required">Enter a title first.</string>
+
+    <!-- Web dashboard (the server\'s own UI, for automations and everything else the app does not do) -->
+    <string name="web_dashboard">Web dashboard</string>
+    <string name="web_dashboard_subtitle">Automations, routes and the full server view</string>
+    <string name="download_use_export">Use the app\'s Export instead</string>
 
     <!-- App update (APK hosted on the bridge server) -->
     <string name="check_updates">Check</string>

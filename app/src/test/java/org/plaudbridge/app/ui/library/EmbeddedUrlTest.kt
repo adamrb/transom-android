@@ -9,14 +9,14 @@ import org.robolectric.RobolectricTestRunner
 class EmbeddedUrlTest {
     @Test
     fun appendsEmbeddedFlagToBareOrigin() {
-        assertEquals("https://plaud.example.com?embedded=1", LibraryFragment.embeddedUrl("https://plaud.example.com"))
+        assertEquals("https://plaud.example.com?embedded=1", WebDashboardActivity.embeddedUrl("https://plaud.example.com"))
     }
 
     @Test
     fun appendsEmbeddedFlagKeepingPathAndExistingQuery() {
         assertEquals(
             "https://plaud.example.com/dash?x=1&embedded=1",
-            LibraryFragment.embeddedUrl("https://plaud.example.com/dash?x=1"),
+            WebDashboardActivity.embeddedUrl("https://plaud.example.com/dash?x=1"),
         )
     }
 }

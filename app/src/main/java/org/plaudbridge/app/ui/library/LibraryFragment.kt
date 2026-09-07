@@ -1,306 +1,278 @@
 package org.plaudbridge.app.ui.library
 
-import android.annotation.SuppressLint
 import android.content.Intent
-import android.graphics.Bitmap
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.webkit.CookieManager
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
-import android.webkit.WebStorage
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import androidx.activity.OnBackPressedCallback
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.plaudbridge.app.R
-import org.plaudbridge.app.common.AppLog
 import org.plaudbridge.app.databinding.FragmentLibraryBinding
+import org.plaudbridge.app.models.ServerRecording
+import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.storage.RecordingStore
-import java.io.ByteArrayInputStream
+import org.plaudbridge.app.ui.filedetail.FileDetailActivity
 
 /**
- * Library Tab — the self-hosted server's web dashboard, embedded.
+ * Library tab: the recordings on the self-hosted bridge server, as a native list.
  *
- * The server serves a mobile-friendly SPA at its root; it reads the bearer token from
- * localStorage key "pb_token", so the user never types a login here.
+ * This replaced an embedded WebView of the server dashboard. The web page never felt like part
+ * of the app (different rows, different typography, its own navigation) and its JavaScript
+ * confirm() dialogs did not work inside a WebView, so Delete silently did nothing. The list here
+ * reuses the Files tab's row and header layouts through [LibraryAdapter] and opens recordings in
+ * the same [FileDetailActivity] the Files tab uses (server mode). The dashboard itself is still
+ * reachable from Settings ([WebDashboardActivity]) for the automations editor.
  *
- * Token injection approach (KISS, two layers):
- *  1. onPageStarted: best-effort `localStorage.setItem('pb_token', …)` so the token is usually
- *     in place before the SPA boots.
- *  2. onPageFinished: verify the stored value matches the configured token; if not (the SPA read
- *     localStorage before step 1 landed, or the token changed), set it and reload ONCE per
- *     navigation — a guard flag prevents reload loops when the page itself misbehaves.
- * Both steps run ONLY when the page's URL passes [WebViewOriginPolicy]: the token must never be
- * written into a foreign origin's localStorage.
- *
- * Origin guard: shouldOverrideUrlLoading keeps same-origin navigation inside the WebView, sends
- * external http(s) links to the system browser, and drops everything else. Server changes are
- * handled by re-checking the stored config on every (re)entry to the tab; when the HOST changes
- * (or after unpair/clearAll, via the persisted [RecordingStore.libraryWebViewHost]), all WebView
- * storage is wiped so the old server's token/cookies never leak to the new one.
- *
- * Native hooks: `window.PlaudBridgeApp` ([PlaudBridgeJsInterface]) lets the dashboard copy text
- * to the clipboard and hand a markdown export to the share sheet, two things a WebView cannot do
- * on its own. The dashboard feature-detects it and falls back to browser behavior when absent.
+ * Data is fetched live on every visit (resume, tab shown, pull) and never persisted: the server
+ * is the source of truth for its own recordings, and writing them into RecordingStore would mix
+ * them up with the phone's own sync index.
  */
 class LibraryFragment : Fragment() {
 
     private var _binding: FragmentLibraryBinding? = null
     private val binding get() = _binding!!
 
-    private var originPolicy = WebViewOriginPolicy(null)
-    private var configuredUrl: String? = null
-    private var configuredToken: String? = null
+    private var loadJob: Job? = null
+    private var searchDebounce: Job? = null
+    private var currentQuery: String? = null
 
-    /**
-     * One token-triggered reload per requested load (reset in [loadDashboard] and on
-     * pull-to-refresh, NOT in onPageStarted — the token reload itself restarts the page, and
-     * resetting there would defeat the loop guard).
-     */
-    private var reloadedForToken = false
-
-    /** Set by onReceivedError for the main frame; checked in onPageFinished. */
-    private var mainFrameError = false
-
-    private val backCallback = object : OnBackPressedCallback(false) {
-        override fun handleOnBackPressed() {
-            if (_binding != null && binding.webView.canGoBack()) binding.webView.goBack()
-        }
-    }
+    private val adapter = LibraryAdapter(
+        onTapped = { rec ->
+            val intent = Intent(requireContext(), FileDetailActivity::class.java)
+            intent.putExtra(FileDetailActivity.EXTRA_SERVER_RECORDING_ID, rec.id)
+            startActivity(intent)
+        },
+        onLongPressed = { rec -> showRowActions(rec) }
+    )
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         _binding = FragmentLibraryBinding.inflate(inflater, container, false)
         return binding.root
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        binding.webView.settings.apply {
-            javaScriptEnabled = true          // the dashboard is an SPA
-            domStorageEnabled = true          // it keeps the token in localStorage
-            allowFileAccess = false
-            allowContentAccess = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-        }
-        binding.webView.webViewClient = LibraryWebViewClient()
-        // window.PlaudBridgeApp: copyText / shareMarkdown for the dashboard's export buttons.
-        // Safe to expose because the page is origin-locked and the interface only ever acts on
-        // data the page hands it (see PlaudBridgeJsInterface for the full reasoning).
-        binding.webView.addJavascriptInterface(
-            PlaudBridgeJsInterface(
-                appContext = requireContext().applicationContext,
-                pageIsTrusted = { _binding != null && originPolicy.allows(binding.webView.url) },
-                startActivity = { intent -> if (isAdded) startActivity(intent) }
-            ),
-            PlaudBridgeJsInterface.JS_NAME
-        )
+        binding.recordingsRecyclerView.layoutManager = LinearLayoutManager(requireContext())
+        binding.recordingsRecyclerView.adapter = adapter
 
-        binding.swipeRefresh.setOnRefreshListener {
-            if (binding.errorView.visibility == View.VISIBLE) {
-                loadDashboard(force = true)
-            } else {
-                reloadedForToken = false
-                binding.webView.reload()
-            }
-        }
-        // Only intercept the pull gesture at the very top of the page
+        binding.swipeRefresh.setOnRefreshListener { load() }
+        // The refresh layout's direct child is a FrameLayout, which never scrolls; ask the list
+        // instead so a pull mid-list scrolls up rather than triggering a refresh.
         binding.swipeRefresh.setOnChildScrollUpCallback { _, _ ->
-            _binding != null && binding.webView.scrollY > 0
+            _binding != null && binding.recordingsRecyclerView.canScrollVertically(-1)
         }
 
-        binding.retryButton.setOnClickListener { loadDashboard(force = true) }
+        binding.retryButton.setOnClickListener { load() }
 
-        // Back navigates WebView history before leaving the tab (enabled only while this
-        // fragment is visible AND there is history to go back to).
-        requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, backCallback)
-
-        loadDashboard()
+        binding.searchButton.setOnClickListener { toggleSearch() }
+        binding.searchField.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                // Debounce so each keystroke does not become a server round trip.
+                searchDebounce?.cancel()
+                searchDebounce = viewLifecycleOwner.lifecycleScope.launch {
+                    delay(300)
+                    val q = s?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+                    if (q != currentQuery) {
+                        currentQuery = q
+                        load()
+                    }
+                }
+            }
+        })
     }
 
     override fun onResume() {
         super.onResume()
-        loadDashboard() // no-op unless the server config changed
-        updateBackCallback()
+        load()
     }
 
     /** Tabs are switched with show/hide, which does not touch the lifecycle. */
     override fun onHiddenChanged(hidden: Boolean) {
         super.onHiddenChanged(hidden)
-        if (_binding == null) return
-        if (!hidden) loadDashboard()
-        updateBackCallback()
+        if (!hidden && _binding != null) load()
     }
 
+    // MARK: - Loading
+
     /**
-     * (Re)load the dashboard if this is the first load or the server config changed.
-     * Wipes all WebView storage when the server HOST differs from the one whose data the
-     * WebView last held (tracked persistently — covers restarts and unpair/clearAll).
+     * Fetch the list. The previous rows stay on screen while the spinner runs, and on failure
+     * they stay too, with a slim error line above them: a flaky connection should not blank a
+     * list the user was just reading.
      */
-    private fun loadDashboard(force: Boolean = false) {
+    private fun load() {
         if (_binding == null) return
-        val url = RecordingStore.serverBaseUrl
-        val token = RecordingStore.serverAuthToken
-        if (url.isNullOrBlank() || token.isNullOrBlank()) {
+        if (!RecordingStore.isServerConfigured) {
             showError(getString(R.string.library_not_configured))
+            adapter.submit(emptyList())
+            updateEmptyState(isEmpty = true)
             return
         }
-        val changed = url != configuredUrl || token != configuredToken
-        if (!force && !changed && binding.webView.url != null) return
-
-        originPolicy = WebViewOriginPolicy(url)
-        configuredUrl = url
-        configuredToken = token
-        reloadedForToken = false
-
-        val host = Uri.parse(url).host
-        if (host != null && RecordingStore.libraryWebViewHost != host) {
-            AppLog.i(TAG, "server host changed — wiping WebView storage")
-            binding.webView.clearHistory()
-            binding.webView.clearCache(true)
-            WebStorage.getInstance().deleteAllData()
-            CookieManager.getInstance().removeAllCookies(null)
-            RecordingStore.libraryWebViewHost = host
+        loadJob?.cancel()
+        binding.swipeRefresh.isRefreshing = true
+        val query = currentQuery
+        loadJob = viewLifecycleOwner.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) { ApiClient.listRecordings(query) }
+            if (_binding == null) return@launch
+            binding.swipeRefresh.isRefreshing = false
+            when (result) {
+                is ApiClient.ListResult.Ok -> {
+                    hideError()
+                    adapter.submit(result.recordings)
+                    updateEmptyState(result.recordings.isEmpty())
+                }
+                is ApiClient.ListResult.AuthError -> showError(getString(R.string.library_auth_failed))
+                is ApiClient.ListResult.Error -> showError(getString(R.string.library_load_failed))
+            }
         }
+    }
 
-        showWeb()
-        // ?embedded=1 tells the dashboard it is inside the app: it hides the brand,
-        // "Connect a phone" and "Lock" (which would log this WebView out), and pads
-        // the bottom so content clears the floating tab bar.
-        binding.webView.loadUrl(embeddedUrl(url))
+    private fun updateEmptyState(isEmpty: Boolean) {
+        binding.emptyLabel.visibility = if (isEmpty) View.VISIBLE else View.GONE
+        binding.recordingsRecyclerView.visibility = if (isEmpty) View.GONE else View.VISIBLE
     }
 
     private fun showError(message: String) {
         if (_binding == null) return
         binding.errorLabel.text = message
         binding.errorView.visibility = View.VISIBLE
-        binding.webView.visibility = View.INVISIBLE
         binding.swipeRefresh.isRefreshing = false
     }
 
-    private fun showWeb() {
+    private fun hideError() {
         binding.errorView.visibility = View.GONE
-        binding.webView.visibility = View.VISIBLE
     }
 
-    private fun updateBackCallback() {
-        backCallback.isEnabled =
-            _binding != null && !isHidden && binding.webView.canGoBack()
+    // MARK: - Search
+
+    private fun toggleSearch() {
+        val showing = binding.searchContainer.visibility == View.VISIBLE
+        if (showing) {
+            binding.searchContainer.visibility = View.GONE
+            binding.searchField.setText("")
+            hideKeyboard(binding.searchField)
+            if (currentQuery != null) {
+                currentQuery = null
+                load()
+            }
+        } else {
+            binding.searchContainer.visibility = View.VISIBLE
+            binding.searchField.requestFocus()
+            val imm = requireContext().getSystemService(InputMethodManager::class.java)
+            imm?.showSoftInput(binding.searchField, InputMethodManager.SHOW_IMPLICIT)
+        }
     }
 
-    private fun openExternally(uri: Uri) {
-        // External links (and anything non-same-origin) go to the system browser; only ever
-        // http(s) — javascript:, intent:, file: etc. are dropped outright.
-        val scheme = uri.scheme?.lowercase()
-        if (scheme != "http" && scheme != "https") return
-        try {
-            startActivity(Intent(Intent.ACTION_VIEW, uri))
-        } catch (e: Exception) {
-            AppLog.w(TAG, "no browser for $uri", e)
-        }
+    private fun hideKeyboard(view: View) {
+        val imm = requireContext().getSystemService(InputMethodManager::class.java)
+        imm?.hideSoftInputFromWindow(view.windowToken, 0)
     }
 
-    private inner class LibraryWebViewClient : WebViewClient() {
+    // MARK: - Row actions (long press)
 
-        // API 24+ path
-        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-            if (originPolicy.allows(request.url.toString())) return false
-            openExternally(request.url)
-            return true
-        }
-
-        // API 21–23 fall back to the deprecated String overload
-        @Deprecated("Deprecated in Java")
-        override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
-            if (originPolicy.allows(url)) return false
-            openExternally(Uri.parse(url))
-            return true
-        }
-
-        /**
-         * POST navigations (form submissions) bypass shouldOverrideUrlLoading entirely, so the
-         * origin policy is ALSO enforced here for main-frame loads: a disallowed main-frame
-         * request gets an empty response instead of rendering a foreign origin in the tab.
-         * (Runs on a background thread; the policy is pure.)
-         */
-        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-            if (request.isForMainFrame && !originPolicy.allows(request.url.toString())) {
-                return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-            }
-            return null
-        }
-
-        override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
-            // Defense in depth: if a disallowed URL somehow committed anyway, stop it and never
-            // run the token injection against it.
-            if (!originPolicy.allows(url)) {
-                view.stopLoading()
-                return
-            }
-            mainFrameError = false
-            // Early best-effort injection — only ever into our own origin.
-            val token = configuredToken
-            if (token != null) {
-                view.evaluateJavascript(TokenInjection.setTokenScript(token), null)
-            }
-        }
-
-        override fun onPageFinished(view: WebView, url: String) {
-            if (_binding == null) return
-            binding.swipeRefresh.isRefreshing = false
-            updateBackCallback()
-            if (mainFrameError) return
-            showWeb()
-            val token = configuredToken
-            if (token == null || !originPolicy.allows(url)) return
-            // Verify + set + reload once if the SPA booted before the token landed.
-            view.evaluateJavascript(TokenInjection.ensureTokenScript(token)) { result ->
-                if (result == "\"reload\"" && !reloadedForToken && _binding != null) {
-                    reloadedForToken = true
-                    binding.webView.reload()
+    private fun showRowActions(rec: ServerRecording) {
+        val actions = arrayOf(
+            getString(R.string.rename),
+            getString(R.string.retranscribe),
+            getString(R.string.delete_from_server)
+        )
+        AlertDialog.Builder(requireContext())
+            .setTitle(rec.displayTitle)
+            .setItems(actions) { _, which ->
+                when (which) {
+                    0 -> showRenameDialog(rec)
+                    1 -> retranscribe(rec)
+                    2 -> confirmDelete(rec)
                 }
             }
-        }
+            .show()
+    }
 
-        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-            if (Build.VERSION.SDK_INT >= 23 && request.isForMainFrame) {
-                mainFrameError = true
-                showError(getString(R.string.library_load_failed))
-            }
+    private fun showRenameDialog(rec: ServerRecording) {
+        val editText = EditText(requireContext()).apply {
+            setText(rec.displayTitle)
+            selectAll()
+            setPadding(48, 32, 48, 32)
         }
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.rename)
+            .setView(editText)
+            .setPositiveButton(R.string.confirm) { _, _ ->
+                val newTitle = editText.text.toString().trim()
+                if (newTitle.isEmpty()) {
+                    toast(getString(R.string.title_required))
+                } else {
+                    runServerAction { ApiClient.renameRecording(rec.id, newTitle).toActionResult() }
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
 
-        // API 21–22
-        @Deprecated("Deprecated in Java")
-        override fun onReceivedError(view: WebView, errorCode: Int, description: String?, failingUrl: String?) {
-            if (Build.VERSION.SDK_INT < 23) {
-                mainFrameError = true
-                showError(getString(R.string.library_load_failed))
-            }
+    private fun retranscribe(rec: ServerRecording) {
+        runServerAction(successMessage = getString(R.string.retranscribe_queued)) {
+            ApiClient.retranscribe(rec.id)
         }
+    }
+
+    private fun confirmDelete(rec: ServerRecording) {
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.delete_from_server)
+            .setMessage(getString(R.string.delete_from_server_confirm_fmt, rec.displayTitle))
+            .setPositiveButton(R.string.delete) { _, _ ->
+                runServerAction(successMessage = getString(R.string.recording_deleted)) {
+                    ApiClient.deleteRecording(rec.id)
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** Run a server write off the main thread, report the outcome, and refresh the list. */
+    private fun runServerAction(successMessage: String? = null, action: () -> ApiClient.ActionResult) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) { action() }
+            if (_binding == null) return@launch
+            when (result) {
+                is ApiClient.ActionResult.Ok -> successMessage?.let { toast(it) }
+                is ApiClient.ActionResult.NotFound -> toast(getString(R.string.recording_not_on_server))
+                is ApiClient.ActionResult.AuthError -> toast(getString(R.string.library_auth_failed))
+                is ApiClient.ActionResult.Error -> toast(getString(R.string.server_request_failed_fmt, result.message))
+            }
+            load()
+        }
+    }
+
+    private fun ApiClient.RecordingResult.toActionResult(): ApiClient.ActionResult = when (this) {
+        is ApiClient.RecordingResult.Ok -> ApiClient.ActionResult.Ok
+        is ApiClient.RecordingResult.NotFound -> ApiClient.ActionResult.NotFound
+        is ApiClient.RecordingResult.AuthError -> ApiClient.ActionResult.AuthError(code)
+        is ApiClient.RecordingResult.Error -> ApiClient.ActionResult.Error(message)
+    }
+
+    private fun toast(message: String) {
+        Toast.makeText(requireContext(), message, Toast.LENGTH_SHORT).show()
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
-        binding.webView.apply {
-            (parent as? ViewGroup)?.removeView(this)
-            destroy()
-        }
+        loadJob?.cancel()
+        searchDebounce?.cancel()
         _binding = null
-    }
-
-    companion object {
-        private const val TAG = "LibraryFragment"
-
-        /** Dashboard URL for in-app display: same origin, plus the embedded flag. */
-        fun embeddedUrl(base: String): String =
-            Uri.parse(base).buildUpon().appendQueryParameter("embedded", "1").build().toString()
     }
 }

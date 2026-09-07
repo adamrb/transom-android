@@ -11,14 +11,20 @@ import android.widget.EditText
 import android.widget.PopupMenu
 import android.widget.SeekBar
 import android.widget.Toast
+import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
+import androidx.media3.common.MediaItem
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.databinding.ActivityFileDetailBinding
@@ -27,6 +33,8 @@ import org.plaudbridge.app.export.TranscriptHighlight
 import org.plaudbridge.app.export.TranscriptMarkdown
 import org.plaudbridge.app.export.TranscriptShare
 import org.plaudbridge.app.models.RecordingFile
+import org.plaudbridge.app.models.ServerRecording
+import org.plaudbridge.app.net.ApiClient
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -34,6 +42,14 @@ import java.util.*
 /**
  * File detail page
  * Header (name/date/duration/status) + Summary + Highlights + Transcript + More Menu
+ *
+ * Two sources feed the same screen:
+ *  - a LOCAL file (`file_id` extra): a [RecordingFile] from RecordingStore, the Files tab path;
+ *  - a SERVER recording (`server_recording_id` extra): fetched live from the bridge server, the
+ *    Library tab path. Nothing from this mode is ever written into RecordingStore; the server
+ *    owns its recordings and the phone's index must stay the phone's.
+ * Both map onto [DetailModel], the handful of fields the header, summary, highlights and
+ * transcript blocks actually render, so the two paths cannot drift apart visually.
  */
 class FileDetailActivity : AppCompatActivity() {
 
@@ -42,10 +58,61 @@ class FileDetailActivity : AppCompatActivity() {
 
     private var currentFile: RecordingFile? = null
 
+    /** Server-mode state; null in local mode. */
+    private var serverRecordingId: String? = null
+    private var serverRecording: ServerRecording? = null
+    private val isServerMode get() = serverRecordingId != null
+
+    /** What the content blocks currently show, whichever source it came from. */
+    private var currentModel: DetailModel? = null
+
     // Audio player (media3 ExoPlayer)
-    private var preparedPath: String? = null
+    private var preparedKey: String? = null
     private val progressHandler = Handler(Looper.getMainLooper())
     private var progressRunnable: Runnable? = null
+
+    /**
+     * The fields the content blocks render. [transcriptJSON] is the server transcript document
+     * (text, segments, summary, highlights) in both modes; local files cache the same document.
+     */
+    data class DetailModel(
+        val title: String,
+        val recordedAtMillis: Long,
+        val durationSeconds: Long,
+        val summary: String?,
+        val transcriptJSON: String?
+    )
+
+    /**
+     * The server calls the screen makes in server mode. An interface (with the real client as
+     * the default) so a Robolectric test can drive the screen without a network stack; the
+     * default runs the blocking ApiClient calls on Dispatchers.IO.
+     */
+    interface ServerDetailSource {
+        suspend fun recording(id: String): ApiClient.RecordingResult
+        suspend fun transcript(id: String): ApiClient.TranscriptResult
+        suspend fun rename(id: String, title: String): ApiClient.RecordingResult
+        suspend fun retranscribe(id: String): ApiClient.ActionResult
+        suspend fun delete(id: String): ApiClient.ActionResult
+    }
+
+    private object ApiServerDetailSource : ServerDetailSource {
+        override suspend fun recording(id: String) = withContext(Dispatchers.IO) { ApiClient.fetchRecording(id) }
+        override suspend fun transcript(id: String) = withContext(Dispatchers.IO) { ApiClient.fetchTranscript(id) }
+        override suspend fun rename(id: String, title: String) =
+            withContext(Dispatchers.IO) { ApiClient.renameRecording(id, title) }
+        override suspend fun retranscribe(id: String) = withContext(Dispatchers.IO) { ApiClient.retranscribe(id) }
+        override suspend fun delete(id: String) = withContext(Dispatchers.IO) { ApiClient.deleteRecording(id) }
+    }
+
+    companion object {
+        /** Intent extra: open a recording that lives on the bridge server (Library tab). */
+        const val EXTRA_SERVER_RECORDING_ID = "server_recording_id"
+
+        /** Swapped by tests; production always uses the ApiClient-backed default. */
+        @VisibleForTesting
+        var serverSource: ServerDetailSource = ApiServerDetailSource
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,17 +122,24 @@ class FileDetailActivity : AppCompatActivity() {
         binding.backButton.setOnClickListener { finish() }
         binding.moreButton.setOnClickListener { showMoreMenu(it) }
         binding.copyTranscriptButton.setOnClickListener { copyTranscript() }
-        binding.exportMarkdownButton.setOnClickListener { currentFile?.let { f -> exportMarkdown(f) } }
+        binding.exportMarkdownButton.setOnClickListener { currentModel?.let { m -> exportMarkdown(m) } }
         setupAudioPlayerControls()
 
+        val serverId = intent.getStringExtra(EXTRA_SERVER_RECORDING_ID)
+        if (serverId != null) {
+            serverRecordingId = serverId
+            loadServerRecording(serverId)
+            return
+        }
         val fileId = intent.getStringExtra("file_id") ?: run { finish(); return }
         loadFile(fileId)
     }
 
     override fun onResume() {
         super.onResume()
-        // Refresh data (after returning from a rename)
-        currentFile?.let { loadFile(it.id) }
+        // Refresh data (after returning from a rename). Server mode re-renders in place after
+        // its own writes, so nothing to reload there.
+        if (!isServerMode) currentFile?.let { loadFile(it.id) }
     }
 
     private fun loadFile(fileId: String) {
@@ -83,59 +157,74 @@ class FileDetailActivity : AppCompatActivity() {
     private var transcriptPlainText: String? = null
 
     private fun bindFile(file: RecordingFile) {
-        binding.fileNameLabel.text = file.displayName
+        val model = DetailModel(
+            title = file.displayName,
+            recordedAtMillis = file.createdAt,
+            durationSeconds = file.duration,
+            summary = file.summaryText,
+            transcriptJSON = file.transcriptJSON
+        )
+        bindContent(model)
 
-        // Meta line "MMM d, yyyy \u00B7 HH:mm \u00B7 Xm Ys" (mirrors iOS)
-        val dateFormat = SimpleDateFormat("MMM d, yyyy \u00B7 HH:mm", Locale.getDefault())
-        binding.fileDateLabel.text =
-            "${dateFormat.format(Date(file.createdAt))} \u00B7 ${formatMetaDuration(file.duration)}"
-
-        // Self-heal: entries synced before the duration fix have duration 0 stored \u2014 recompute
+        // Self-heal: entries synced before the duration fix have duration 0 stored; recompute
         // from the local audio and backfill so old files show the real length too.
         val localPath = file.localPath
         if (file.duration <= 0 && localPath != null && File(localPath).exists()) {
-            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            lifecycleScope.launch(Dispatchers.IO) {
                 val d = org.plaudbridge.app.managers.SyncManager.shared.audioDurationSec(localPath)
                 if (d > 0) {
                     org.plaudbridge.app.storage.RecordingStore.updateDuration(file.id, d)
-                    runOnUiThread {
-                        binding.fileDateLabel.text =
-                            "${dateFormat.format(Date(file.createdAt))} \u00B7 ${formatMetaDuration(d)}"
-                    }
+                    runOnUiThread { bindMetaLine(file.createdAt, d) }
                 }
             }
         }
 
         // Status badge: upload state against the self-hosted bridge server
         when {
-            file.uploaded -> {
-                binding.statusBadge.text = getString(R.string.uploaded)
-                binding.statusBadge.setTextColor(ContextCompat.getColor(this, R.color.green))
-                binding.statusBadge.setBackgroundResource(R.drawable.bg_status_synced)
-            }
-            file.isSynced -> {
-                binding.statusBadge.text = getString(R.string.upload_pending)
-                binding.statusBadge.setTextColor(ContextCompat.getColor(this, R.color.orange))
-                binding.statusBadge.setBackgroundResource(R.drawable.bg_status_pending)
-            }
-            else -> {
-                binding.statusBadge.text = getString(R.string.on_device)
-                binding.statusBadge.setTextColor(ContextCompat.getColor(this, R.color.orange))
-                binding.statusBadge.setBackgroundResource(R.drawable.bg_status_pending)
+            file.uploaded -> setStatusBadge(getString(R.string.uploaded), R.color.green, R.drawable.bg_status_synced)
+            file.isSynced -> setStatusBadge(getString(R.string.upload_pending), R.color.orange, R.drawable.bg_status_pending)
+            else -> setStatusBadge(getString(R.string.on_device), R.color.orange, R.drawable.bg_status_pending)
+        }
+
+        // Transcript empty state (only when bindContent found no transcript)
+        if (transcriptPlainText == null) {
+            when {
+                file.uploaded -> {
+                    showEmptyState(getString(R.string.transcript), getString(R.string.transcription_pending),
+                        getString(R.string.check_transcript)) { fetchTranscriptFromServer(file, userInitiated = true) }
+                    // Auto-check once whenever the detail page opens for an uploaded file.
+                    fetchTranscriptFromServer(file, userInitiated = false)
+                }
+                file.isSynced -> showEmptyState(getString(R.string.no_transcript), getString(R.string.transcript_needs_upload))
+                else -> showEmptyState(getString(R.string.no_transcript), getString(R.string.transcript_needs_sync))
             }
         }
 
+        // Audio player: only available once the file has a local audio file
+        bindLocalAudioPlayer(file)
+    }
+
+    /**
+     * Header, summary, highlights and transcript blocks from a [DetailModel]. Shared by both
+     * sources. Leaves the empty state hidden; callers decide what it says because the reason a
+     * transcript is missing differs per source.
+     */
+    private fun bindContent(model: DetailModel) {
+        currentModel = model
+        binding.fileNameLabel.text = model.title
+        bindMetaLine(model.recordedAtMillis, model.durationSeconds)
+
         // Summary block (flat, only when a summary exists)
-        val hasSummary = !file.summaryText.isNullOrBlank()
+        val hasSummary = !model.summary.isNullOrBlank()
         binding.summaryHeader.visibility = if (hasSummary) View.VISIBLE else View.GONE
         binding.summaryText.visibility = if (hasSummary) View.VISIBLE else View.GONE
-        if (hasSummary) binding.summaryText.text = file.summaryText
+        if (hasSummary) binding.summaryText.text = model.summary
 
         // Highlights: the server's transcript-around-each-button-press rows, above the transcript
-        bindHighlights(file.transcriptJSON?.let { TranscriptHighlight.parse(it) } ?: emptyList())
+        bindHighlights(model.transcriptJSON?.let { TranscriptHighlight.parse(it) } ?: emptyList())
 
-        // Transcript: parsed segments from the bridge server, or the centered empty state
-        transcriptPlainText = file.transcriptJSON?.let { parseTranscript(it) }
+        // Transcript: parsed segments from the bridge server, or (caller-defined) empty state
+        transcriptPlainText = model.transcriptJSON?.let { parseTranscript(it) }
         binding.transcriptActions.visibility = if (transcriptPlainText != null) View.VISIBLE else View.GONE
         if (transcriptPlainText != null) {
             binding.transcriptText.text = transcriptPlainText
@@ -143,32 +232,184 @@ class FileDetailActivity : AppCompatActivity() {
             binding.emptyState.visibility = View.GONE
         } else {
             binding.transcriptText.visibility = View.GONE
-            binding.emptyState.visibility = View.VISIBLE
-            when {
-                file.uploaded -> {
-                    binding.emptyTitle.text = getString(R.string.transcript)
-                    binding.emptySubtitle.text = getString(R.string.transcription_pending)
-                    binding.generateButton.visibility = View.VISIBLE
-                    binding.generateButton.text = getString(R.string.check_transcript)
-                    binding.generateButton.setOnClickListener { fetchTranscriptFromServer(file, userInitiated = true) }
-                    // Auto-check once whenever the detail page opens for an uploaded file.
-                    fetchTranscriptFromServer(file, userInitiated = false)
+            binding.emptyState.visibility = View.GONE
+        }
+    }
+
+    /** Meta line "MMM d, yyyy · HH:mm · Xm Ys" (mirrors iOS). */
+    private fun bindMetaLine(recordedAtMillis: Long, durationSeconds: Long) {
+        val dateFormat = SimpleDateFormat("MMM d, yyyy · HH:mm", Locale.getDefault())
+        binding.fileDateLabel.text =
+            "${dateFormat.format(Date(recordedAtMillis))} · ${formatMetaDuration(durationSeconds)}"
+    }
+
+    private fun setStatusBadge(text: String, colorRes: Int, backgroundRes: Int) {
+        binding.statusBadge.text = text
+        binding.statusBadge.setTextColor(ContextCompat.getColor(this, colorRes))
+        binding.statusBadge.setBackgroundResource(backgroundRes)
+    }
+
+    /** Centered empty state under the Transcript tab; [buttonText] null hides the button. */
+    private fun showEmptyState(title: String, subtitle: String, buttonText: String? = null, onButton: (() -> Unit)? = null) {
+        binding.transcriptText.visibility = View.GONE
+        binding.emptyState.visibility = View.VISIBLE
+        binding.emptyTitle.text = title
+        binding.emptySubtitle.text = subtitle
+        if (buttonText != null) {
+            binding.generateButton.visibility = View.VISIBLE
+            binding.generateButton.text = buttonText
+            binding.generateButton.isEnabled = true
+            binding.generateButton.setOnClickListener { onButton?.invoke() }
+        } else {
+            binding.generateButton.visibility = View.GONE
+        }
+    }
+
+    // MARK: - Server mode (Library)
+
+    /**
+     * GET the recording, then its transcript. The header renders as soon as the recording
+     * arrives so the screen is not blank while a long transcript downloads; 409 (still
+     * transcribing) and the other outcomes become the empty state's wording.
+     */
+    private fun loadServerRecording(id: String) {
+        binding.fileNameLabel.text = ""
+        binding.fileDateLabel.text = getString(R.string.checking_transcript)
+        lifecycleScope.launch {
+            when (val result = serverSource.recording(id)) {
+                is ApiClient.RecordingResult.Ok -> {
+                    bindServerRecording(result.recording, transcriptJSON = null)
+                    loadServerTranscript(result.recording)
                 }
-                file.isSynced -> {
-                    binding.emptyTitle.text = getString(R.string.no_transcript)
-                    binding.emptySubtitle.text = getString(R.string.transcript_needs_upload)
-                    binding.generateButton.visibility = View.GONE
+                is ApiClient.RecordingResult.NotFound -> failServer(getString(R.string.recording_not_on_server))
+                is ApiClient.RecordingResult.AuthError -> failServer(getString(R.string.transcript_auth_error))
+                is ApiClient.RecordingResult.Error -> failServer(getString(R.string.transcript_server_error))
+            }
+        }
+    }
+
+    private fun loadServerTranscript(rec: ServerRecording) {
+        lifecycleScope.launch {
+            when (val outcome = serverSource.transcript(rec.id)) {
+                is ApiClient.TranscriptResult.Ready -> bindServerRecording(rec, outcome.rawJson)
+                is ApiClient.TranscriptResult.Pending -> bindServerRecording(rec, null)
+                is ApiClient.TranscriptResult.NotFound ->
+                    if (rec.status == ServerRecording.STATUS_DONE) failServer(getString(R.string.recording_not_on_server))
+                    else bindServerRecording(rec, null)
+                is ApiClient.TranscriptResult.AuthError -> failServer(getString(R.string.transcript_auth_error))
+                is ApiClient.TranscriptResult.Error -> failServer(getString(R.string.transcript_server_error))
+            }
+        }
+    }
+
+    /** Render a server recording; the empty state reflects the server's status word. */
+    private fun bindServerRecording(rec: ServerRecording, transcriptJSON: String?) {
+        serverRecording = rec
+        // The transcript's own summary/title win when present (they are the freshest), else the
+        // list object's fields. Same precedence the Files path applies via TitleSyncManager.
+        val transcriptSummary = transcriptJSON?.let { transcriptExportFields(it).second }
+        bindContent(
+            DetailModel(
+                title = rec.displayTitle,
+                recordedAtMillis = rec.recordedAt,
+                durationSeconds = rec.durationSeconds,
+                summary = transcriptSummary ?: rec.summary,
+                transcriptJSON = transcriptJSON
+            )
+        )
+        when (rec.status) {
+            ServerRecording.STATUS_DONE -> setStatusBadge(getString(R.string.status_done), R.color.green, R.drawable.bg_status_synced)
+            ServerRecording.STATUS_FAILED -> setStatusBadge(getString(R.string.status_failed), R.color.red, R.drawable.bg_status_pending)
+            ServerRecording.STATUS_TRANSCRIBING -> setStatusBadge(getString(R.string.status_transcribing), R.color.orange, R.drawable.bg_status_pending)
+            ServerRecording.STATUS_STORED -> setStatusBadge(getString(R.string.status_stored), R.color.orange, R.drawable.bg_status_pending)
+            else -> setStatusBadge(getString(R.string.status_pending), R.color.orange, R.drawable.bg_status_pending)
+        }
+        if (transcriptPlainText == null) {
+            when (rec.status) {
+                ServerRecording.STATUS_FAILED -> showEmptyState(
+                    getString(R.string.no_transcript),
+                    rec.error?.takeIf { it.isNotBlank() } ?: getString(R.string.transcription_failed),
+                    getString(R.string.retranscribe)
+                ) { retranscribeOnServer(rec) }
+                ServerRecording.STATUS_STORED -> showEmptyState(
+                    getString(R.string.no_transcript), getString(R.string.transcript_not_started),
+                    getString(R.string.transcribe)
+                ) { retranscribeOnServer(rec) }
+                else -> showEmptyState(
+                    getString(R.string.transcript), getString(R.string.transcription_pending),
+                    getString(R.string.check_transcript)
+                ) { refreshServerRecording(rec.id) }
+            }
+        }
+        bindServerAudioPlayer(rec)
+    }
+
+    /** Re-fetch both the recording (status may have moved on) and its transcript. */
+    private fun refreshServerRecording(id: String) {
+        binding.generateButton.isEnabled = false
+        binding.emptySubtitle.text = getString(R.string.checking_transcript)
+        loadServerRecording(id)
+    }
+
+    private fun failServer(message: String) {
+        if (serverRecording == null) {
+            binding.fileDateLabel.text = ""
+            showEmptyState(getString(R.string.transcript), message)
+        } else {
+            showEmptyState(getString(R.string.transcript), message, getString(R.string.retry)) {
+                serverRecordingId?.let { refreshServerRecording(it) }
+            }
+        }
+    }
+
+    private fun retranscribeOnServer(rec: ServerRecording) {
+        binding.generateButton.isEnabled = false
+        lifecycleScope.launch {
+            when (val result = serverSource.retranscribe(rec.id)) {
+                is ApiClient.ActionResult.Ok -> {
+                    Toast.makeText(this@FileDetailActivity, R.string.retranscribe_queued, Toast.LENGTH_SHORT).show()
+                    loadServerRecording(rec.id)
                 }
                 else -> {
-                    binding.emptyTitle.text = getString(R.string.no_transcript)
-                    binding.emptySubtitle.text = getString(R.string.transcript_needs_sync)
-                    binding.generateButton.visibility = View.GONE
+                    binding.generateButton.isEnabled = true
+                    showTranscriptAlert(actionErrorMessage(result))
                 }
             }
         }
+    }
 
-        // Audio player: only available once the file has a local audio file
-        bindAudioPlayer(file)
+    private fun actionErrorMessage(result: ApiClient.ActionResult): String = when (result) {
+        is ApiClient.ActionResult.Ok -> ""
+        is ApiClient.ActionResult.NotFound -> getString(R.string.recording_not_on_server)
+        is ApiClient.ActionResult.AuthError -> getString(R.string.transcript_auth_error)
+        is ApiClient.ActionResult.Error -> getString(R.string.server_request_failed_fmt, result.message)
+    }
+
+    private fun renameOnServer(rec: ServerRecording, newTitle: String) {
+        lifecycleScope.launch {
+            when (val result = serverSource.rename(rec.id, newTitle)) {
+                is ApiClient.RecordingResult.Ok -> {
+                    // Keep the transcript we already have; only the header changes.
+                    bindServerRecording(result.recording, currentModel?.transcriptJSON)
+                }
+                is ApiClient.RecordingResult.NotFound -> showTranscriptAlert(getString(R.string.recording_not_on_server))
+                is ApiClient.RecordingResult.AuthError -> showTranscriptAlert(getString(R.string.transcript_auth_error))
+                is ApiClient.RecordingResult.Error ->
+                    showTranscriptAlert(getString(R.string.server_request_failed_fmt, result.message))
+            }
+        }
+    }
+
+    private fun deleteOnServer(rec: ServerRecording) {
+        lifecycleScope.launch {
+            when (val result = serverSource.delete(rec.id)) {
+                is ApiClient.ActionResult.Ok, is ApiClient.ActionResult.NotFound -> {
+                    Toast.makeText(this@FileDetailActivity, R.string.recording_deleted, Toast.LENGTH_SHORT).show()
+                    finish() // the Library reloads on resume
+                }
+                else -> showTranscriptAlert(actionErrorMessage(result))
+            }
+        }
     }
 
     // MARK: - Highlights
@@ -189,7 +430,7 @@ class FileDetailActivity : AppCompatActivity() {
         val accent = ContextCompat.getColor(this, R.color.highlight_accent)
         val density = resources.displayMetrics.density
         for (h in highlights) {
-            val stamp = "\u2605 ${TranscriptMarkdown.formatTimestamp(h.at)}"
+            val stamp = "★ ${TranscriptMarkdown.formatTimestamp(h.at)}"
             val body = h.text.ifEmpty { getString(R.string.highlight_no_speech) }
             val row = android.widget.TextView(this).apply {
                 text = android.text.SpannableStringBuilder("$stamp  $body").apply {
@@ -245,54 +486,49 @@ class FileDetailActivity : AppCompatActivity() {
         binding.emptySubtitle.text = getString(R.string.checking_transcript)
 
         lifecycleScope.launch {
-            val outcome = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val outcome = withContext(Dispatchers.IO) {
                 try {
                     val cachedId = file.serverId
                     if (cachedId != null) {
-                        org.plaudbridge.app.net.ApiClient.fetchTranscript(cachedId)
+                        ApiClient.fetchTranscript(cachedId)
                     } else {
-                        // Look up with the recording's OWN device SN (blank stays blank — the
+                        // Look up with the recording's OWN device SN (blank stays blank: the
                         // upload sent the SN as-is, so substituting the connected device's SN
                         // could resolve to a DIFFERENT device's recording).
-                        when (val lookup = org.plaudbridge.app.net.ApiClient.lookupRecordingId(
-                            file.deviceSN, file.sessionId
-                        )) {
-                            is org.plaudbridge.app.net.ApiClient.LookupResult.Found -> {
+                        when (val lookup = ApiClient.lookupRecordingId(file.deviceSN, file.sessionId)) {
+                            is ApiClient.LookupResult.Found -> {
                                 org.plaudbridge.app.storage.RecordingStore.updateServerId(file.id, lookup.id)
-                                org.plaudbridge.app.net.ApiClient.fetchTranscript(lookup.id)
+                                ApiClient.fetchTranscript(lookup.id)
                             }
-                            is org.plaudbridge.app.net.ApiClient.LookupResult.NotFound ->
-                                org.plaudbridge.app.net.ApiClient.TranscriptResult.NotFound
-                            is org.plaudbridge.app.net.ApiClient.LookupResult.AuthError ->
-                                org.plaudbridge.app.net.ApiClient.TranscriptResult.AuthError(lookup.code)
-                            is org.plaudbridge.app.net.ApiClient.LookupResult.Error ->
-                                org.plaudbridge.app.net.ApiClient.TranscriptResult.Error(lookup.message)
+                            is ApiClient.LookupResult.NotFound -> ApiClient.TranscriptResult.NotFound
+                            is ApiClient.LookupResult.AuthError -> ApiClient.TranscriptResult.AuthError(lookup.code)
+                            is ApiClient.LookupResult.Error -> ApiClient.TranscriptResult.Error(lookup.message)
                         }
                     }
                 } catch (e: Exception) {
-                    org.plaudbridge.app.net.ApiClient.TranscriptResult.Error(e.message ?: "network error")
+                    ApiClient.TranscriptResult.Error(e.message ?: "network error")
                 }
             }
 
             binding.generateButton.isEnabled = true
             when (outcome) {
-                is org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready -> {
+                is ApiClient.TranscriptResult.Ready -> {
                     // Stores the transcript AND its AI title, then refreshes the list screens.
                     org.plaudbridge.app.managers.TitleSyncManager.storeTranscript(file.id, outcome.rawJson)
                     loadFile(file.id) // re-render: transcript body plus the title label
                 }
-                is org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending -> {
+                is ApiClient.TranscriptResult.Pending -> {
                     binding.emptySubtitle.text = getString(R.string.transcription_pending)
                 }
-                is org.plaudbridge.app.net.ApiClient.TranscriptResult.NotFound -> {
+                is ApiClient.TranscriptResult.NotFound -> {
                     binding.emptySubtitle.text = getString(R.string.transcript_not_on_server)
                     if (userInitiated) showTranscriptAlert(getString(R.string.transcript_not_on_server))
                 }
-                is org.plaudbridge.app.net.ApiClient.TranscriptResult.AuthError -> {
+                is ApiClient.TranscriptResult.AuthError -> {
                     binding.emptySubtitle.text = getString(R.string.transcript_auth_error)
                     if (userInitiated) showTranscriptAlert(getString(R.string.transcript_auth_error))
                 }
-                is org.plaudbridge.app.net.ApiClient.TranscriptResult.Error -> {
+                is ApiClient.TranscriptResult.Error -> {
                     binding.emptySubtitle.text = getString(R.string.transcript_server_error)
                     if (userInitiated) showTranscriptAlert(getString(R.string.transcript_server_error))
                 }
@@ -309,7 +545,7 @@ class FileDetailActivity : AppCompatActivity() {
     }
 
     /**
-     * Parse the cached transcript JSON into "Speaker N \u00B7 HH:MM:SS" paragraphs (mirrors iOS).
+     * Parse the cached transcript JSON into "Speaker N · HH:MM:SS" paragraphs (mirrors iOS).
      * Tolerant of both a bare segment array and an object wrapping one; returns null if nothing
      * parseable so the caller can fall back to the empty state.
      */
@@ -323,7 +559,7 @@ class FileDetailActivity : AppCompatActivity() {
                         ?: obj.optJSONArray("transaction")
                         ?: obj.optJSONArray("list")
                         ?: obj.optJSONArray("data")
-                        // Server shape is {"text": "...", "segments": [...]} — if there are no
+                        // Server shape is {"text": "...", "segments": [...]}; if there are no
                         // usable segments, fall back to the plain text body.
                         ?: return obj.optString("text").takeIf { it.isNotBlank() }
                 }
@@ -361,7 +597,7 @@ class FileDetailActivity : AppCompatActivity() {
         }
 
         return segments.joinToString("\n\n") { (speakerLabel, startMs, text) ->
-            "$speakerLabel \u00B7 ${formatClock(startMs)}\n$text"
+            "$speakerLabel · ${formatClock(startMs)}\n$text"
         }
     }
 
@@ -382,7 +618,7 @@ class FileDetailActivity : AppCompatActivity() {
 
     // Media3 ExoPlayer: OEM MediaPlayerNative frequently fails on Ogg/Opus (the sync/export
     // format); ExoPlayer's own extractor + platform decoder handles it reliably.
-    private var exoPlayer: androidx.media3.exoplayer.ExoPlayer? = null
+    private var exoPlayer: ExoPlayer? = null
 
     private fun setupAudioPlayerControls() {
         binding.playPauseButton.setOnClickListener { togglePlayPause() }
@@ -402,7 +638,7 @@ class FileDetailActivity : AppCompatActivity() {
         })
     }
 
-    private fun bindAudioPlayer(file: RecordingFile) {
+    private fun bindLocalAudioPlayer(file: RecordingFile) {
         val path = file.localPath
         val exists = path != null && File(path).exists()
         if (!exists) {
@@ -410,23 +646,62 @@ class FileDetailActivity : AppCompatActivity() {
             releasePlayer()
             return
         }
-        binding.audioPlayer.visibility = View.VISIBLE
-        // Avoid re-preparing the same file on every onResume
-        if (preparedPath == path && exoPlayer != null) return
-
         // Self-heal legacy files exported with the SDK's corrupt OpusTags header
         if (path!!.endsWith(".opus", ignoreCase = true)) {
             org.plaudbridge.app.common.OpusRepair.repairIfNeeded(path)
         }
+        preparePlayer(key = path, mediaItem = MediaItem.fromUri(android.net.Uri.fromFile(File(path))), httpFactory = null)
+    }
+
+    /**
+     * Stream the recording from the server. The audio endpoint is behind the same bearer token
+     * as the API, so ExoPlayer's HTTP source is given the Authorization header up front; it also
+     * sends Range requests, which the server honors, so seeking does not re-download the file.
+     */
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun bindServerAudioPlayer(rec: ServerRecording) {
+        val url = try { ApiClient.recordingAudioUrl(rec.id) } catch (e: IllegalStateException) {
+            binding.audioPlayer.visibility = View.GONE
+            releasePlayer()
+            return
+        }
+        val factory = DefaultHttpDataSource.Factory()
+            .setDefaultRequestProperties(mapOf("Authorization" to ApiClient.authHeader()))
+        preparePlayer(key = url, mediaItem = MediaItem.fromUri(url), httpFactory = factory)
+    }
+
+    /**
+     * Build and prepare the player for [mediaItem] unless the same [key] is already prepared
+     * (avoids re-preparing on every onResume / re-bind). [httpFactory] is only set for server
+     * streams; local files use the default file source.
+     */
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun preparePlayer(key: String, mediaItem: MediaItem, httpFactory: DataSource.Factory?) {
+        binding.audioPlayer.visibility = View.VISIBLE
+        if (preparedKey == key && exoPlayer != null) return
 
         releasePlayer()
-        val player = androidx.media3.exoplayer.ExoPlayer.Builder(this).build()
+        val player = try {
+            ExoPlayer.Builder(this).apply {
+                if (httpFactory != null) {
+                    setMediaSourceFactory(DefaultMediaSourceFactory(this@FileDetailActivity).setDataSourceFactory(httpFactory))
+                }
+            }.build()
+        } catch (e: Exception) {
+            // No usable player on this device (or JVM); the page still works without playback.
+            org.plaudbridge.app.common.AppLog.w("FileDetail", "ExoPlayer unavailable", e)
+            binding.audioPlayer.visibility = View.GONE
+            return
+        }
         exoPlayer = player
+        // Remember the key now, not at STATE_READY: a second bind of the same recording (the
+        // server path renders once for the header and again when the transcript lands) must not
+        // tear down a player that is still buffering. onPlayerError releases and clears it.
+        preparedKey = key
         player.addListener(object : androidx.media3.common.Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 when (state) {
                     androidx.media3.common.Player.STATE_READY -> {
-                        preparedPath = path
                         binding.totalTimeLabel.text = formatClock(player.duration.coerceAtLeast(0))
                     }
                     androidx.media3.common.Player.STATE_ENDED -> {
@@ -446,7 +721,7 @@ class FileDetailActivity : AppCompatActivity() {
                 releasePlayer()
             }
         })
-        player.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.fromFile(File(path!!))))
+        player.setMediaItem(mediaItem)
         player.prepare()
         binding.currentTimeLabel.text = formatClock(0)
         binding.progressSlider.progress = 0
@@ -500,7 +775,7 @@ class FileDetailActivity : AppCompatActivity() {
         stopProgressUpdates()
         exoPlayer?.release()
         exoPlayer = null
-        preparedPath = null
+        preparedKey = null
     }
 
     private fun formatClock(ms: Long): String {
@@ -523,41 +798,38 @@ class FileDetailActivity : AppCompatActivity() {
         releasePlayer()
     }
 
-    private fun formatDuration(seconds: Long): String {
-        if (seconds <= 0) return "--:--"
-        val total = seconds.toInt()
-        val h = total / 3600
-        val m = (total % 3600) / 60
-        val s = total % 60
-        return if (h > 0) String.format("%d:%02d:%02d", h, m, s)
-        else String.format("%d:%02d", m, s)
-    }
-
     // MARK: - More Menu
 
     private fun showMoreMenu(anchor: View) {
         val popup = PopupMenu(this, anchor)
         popup.menuInflater.inflate(R.menu.menu_file_detail, popup.menu)
 
-        val file = currentFile ?: return
+        val model = currentModel ?: return
+        val file = currentFile
+        val rec = serverRecording
 
         // Hide options that do not apply (Export Audio stays visible like iOS; failure alerts)
-        popup.menu.findItem(R.id.action_copy_summary)?.isVisible = file.summaryText != null
+        popup.menu.findItem(R.id.action_copy_summary)?.isVisible = model.summary != null
         popup.menu.findItem(R.id.action_copy_transcript)?.isVisible = transcriptPlainText != null
         popup.menu.findItem(R.id.action_export_markdown)?.isVisible = transcriptPlainText != null
+        // Local-only vs server-only items
+        popup.menu.findItem(R.id.action_export)?.isVisible = !isServerMode
+        popup.menu.findItem(R.id.action_retranscribe)?.isVisible = isServerMode
+        popup.menu.findItem(R.id.action_delete)?.isVisible = !isServerMode
+        popup.menu.findItem(R.id.action_delete_server)?.isVisible = isServerMode
 
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 R.id.action_export -> {
-                    exportAudio(file)
+                    file?.let { exportAudio(it) }
                     true
                 }
                 R.id.action_rename -> {
-                    showRenameDialog(file)
+                    if (rec != null) showServerRenameDialog(rec) else file?.let { showRenameDialog(it) }
                     true
                 }
                 R.id.action_copy_summary -> {
-                    copySummary(file)
+                    copySummary(model)
                     true
                 }
                 R.id.action_copy_transcript -> {
@@ -565,11 +837,19 @@ class FileDetailActivity : AppCompatActivity() {
                     true
                 }
                 R.id.action_export_markdown -> {
-                    exportMarkdown(file)
+                    exportMarkdown(model)
+                    true
+                }
+                R.id.action_retranscribe -> {
+                    rec?.let { retranscribeOnServer(it) }
                     true
                 }
                 R.id.action_delete -> {
-                    showDeleteConfirmation(file)
+                    file?.let { showDeleteConfirmation(it) }
+                    true
+                }
+                R.id.action_delete_server -> {
+                    rec?.let { showServerDeleteConfirmation(it) }
                     true
                 }
                 else -> false
@@ -626,10 +906,31 @@ class FileDetailActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun copySummary(file: RecordingFile) {
+    private fun showServerRenameDialog(rec: ServerRecording) {
+        val editText = EditText(this).apply {
+            setText(rec.displayTitle)
+            selectAll()
+            setPadding(48, 32, 48, 32)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.rename)
+            .setView(editText)
+            .setPositiveButton(R.string.confirm) { _, _ ->
+                val newName = editText.text.toString().trim()
+                if (newName.isEmpty()) {
+                    Toast.makeText(this, R.string.title_required, Toast.LENGTH_SHORT).show()
+                } else {
+                    renameOnServer(rec, newName)
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun copySummary(model: DetailModel) {
         // Silent copy (no toast, mirrors iOS convention)
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("Summary", file.summaryText))
+        clipboard.setPrimaryClip(ClipData.newPlainText("Summary", model.summary))
     }
 
     /** Copies the transcript as displayed (speaker/time paragraphs) and confirms with a toast. */
@@ -646,20 +947,20 @@ class FileDetailActivity : AppCompatActivity() {
      * own export byte for byte; the on-screen paragraph rendering is only the fallback for
      * legacy transcript shapes that carry no `text`.
      */
-    private fun exportMarkdown(file: RecordingFile) {
-        val json = file.transcriptJSON ?: return
+    private fun exportMarkdown(model: DetailModel) {
+        val json = model.transcriptJSON ?: return
         val (text, summary) = transcriptExportFields(json)
         val body = text ?: transcriptPlainText ?: return
         val markdown = TranscriptMarkdown.build(
-            title = file.displayName,
-            recordedAtMillis = file.createdAt,
-            durationSeconds = file.duration,
+            title = model.title,
+            recordedAtMillis = model.recordedAtMillis,
+            durationSeconds = model.durationSeconds,
             transcript = body,
-            summary = summary ?: file.summaryText,
+            summary = summary ?: model.summary,
             highlights = TranscriptHighlight.parse(json)
         )
         try {
-            TranscriptShare.share(this, ExportFileName.sanitize(file.displayName), file.displayName, markdown)
+            TranscriptShare.share(this, ExportFileName.sanitize(model.title), model.title, markdown)
         } catch (e: Exception) {
             org.plaudbridge.app.common.AppLog.w("FileDetail", "markdown export failed", e)
             AlertDialog.Builder(this)
@@ -684,7 +985,7 @@ class FileDetailActivity : AppCompatActivity() {
     private fun showDeleteConfirmation(file: RecordingFile) {
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.delete_recording))
-            // Accurate scope: this removes ONLY the phone's downloaded copy — any copy still on
+            // Accurate scope: this removes ONLY the phone's downloaded copy; any copy still on
             // the recorder and anything already uploaded to your server are untouched.
             .setMessage(
                 "This removes the downloaded copy of \"${file.displayName}\" from this phone. " +
@@ -694,6 +995,15 @@ class FileDetailActivity : AppCompatActivity() {
                 syncManager.deleteFile(file)
                 finish()
             }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun showServerDeleteConfirmation(rec: ServerRecording) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.delete_from_server)
+            .setMessage(getString(R.string.delete_from_server_confirm_fmt, rec.displayTitle))
+            .setPositiveButton(R.string.delete) { _, _ -> deleteOnServer(rec) }
             .setNegativeButton(R.string.cancel, null)
             .show()
     }

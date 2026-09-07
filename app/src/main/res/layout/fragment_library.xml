@@ -1,58 +1,143 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- Library tab: the server's recordings, laid out exactly like the Files tab (title row with
+     search icon, then the date-grouped card list). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_primary">
+    android:orientation="vertical">
 
-    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-        android:id="@+id/swipeRefresh"
+    <!-- Title row: Library + search icon -->
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="wrap_content"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="16dp">
 
-        <WebView
-            android:id="@+id/webView"
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-light"
+            android:text="@string/library"
+            android:textColor="@color/black"
+            android:textSize="44sp" />
+
+        <ImageButton
+            android:id="@+id/searchButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="end|center_vertical"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Search"
+            android:src="@drawable/ic_search"
+            android:tint="@color/text_primary" />
+    </FrameLayout>
+
+    <!-- Search field (revealed by the search icon): a card-styled single line -->
+    <FrameLayout
+        android:id="@+id/searchContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="12dp"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/searchField"
             android:layout_width="match_parent"
-            android:layout_height="match_parent" />
-    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+            android:layout_height="44dp"
+            android:background="@drawable/bg_card"
+            android:fontFamily="sans-serif"
+            android:hint="@string/library_search_hint"
+            android:imeOptions="actionSearch"
+            android:importantForAutofill="no"
+            android:inputType="text"
+            android:maxLines="1"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:textColor="@color/dark_gray"
+            android:textColorHint="@color/text_secondary"
+            android:textSize="14sp" />
+    </FrameLayout>
 
-    <!-- Slim error state: server unreachable / not configured -->
+    <!-- Slim inline error: message + Retry, list content stays underneath -->
     <LinearLayout
         android:id="@+id/errorView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="center"
-        android:gravity="center"
-        android:orientation="vertical"
-        android:paddingStart="40dp"
-        android:paddingEnd="40dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="12dp"
         android:visibility="gone">
 
         <TextView
             android:id="@+id/errorLabel"
-            android:layout_width="match_parent"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_weight="1"
             android:fontFamily="sans-serif"
-            android:gravity="center"
             android:text="@string/library_load_failed"
             android:textColor="@color/text_secondary"
-            android:textSize="14sp" />
+            android:textSize="13sp" />
 
         <Button
             android:id="@+id/retryButton"
             android:layout_width="wrap_content"
-            android:layout_height="44dp"
-            android:layout_marginTop="16dp"
+            android:layout_height="32dp"
+            android:layout_marginStart="8dp"
             android:background="@drawable/bg_secondary_button"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
             app:backgroundTint="@null"
             android:fontFamily="sans-serif"
-            android:minWidth="140dp"
-            android:paddingStart="24dp"
-            android:paddingEnd="24dp"
+            android:minWidth="0dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
             android:text="@string/retry"
             android:textAllCaps="false"
             android:textColor="@color/text_primary"
-            android:textSize="15sp" />
+            android:textSize="14sp" />
     </LinearLayout>
 
-</FrameLayout>
+    <!-- Recording list; the FrameLayout lets the empty label share the pull-to-refresh area -->
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+        android:id="@+id/swipeRefresh"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recordingsRecyclerView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingStart="24dp"
+                android:paddingEnd="24dp"
+                android:paddingTop="24dp"
+                android:paddingBottom="120dp"
+                android:scrollbars="none" />
+
+            <!-- Empty state: 80dp below the title (mirrors Files), not vertically centered -->
+            <TextView
+                android:id="@+id/emptyLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="80dp"
+                android:fontFamily="sans-serif"
+                android:gravity="center"
+                android:text="@string/library_empty"
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp"
+                android:visibility="gone" />
+        </FrameLayout>
+    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+</LinearLayout>

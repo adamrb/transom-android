@@ -5,13 +5,11 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.TextView
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.databinding.FragmentFilesBinding
@@ -20,9 +18,9 @@ import org.plaudbridge.app.models.SyncProgress
 import org.plaudbridge.app.models.SyncState
 import org.plaudbridge.app.storage.RecordingStore
 import org.plaudbridge.app.ui.filedetail.FileDetailActivity
+import org.plaudbridge.app.ui.list.DateGroupedAdapter
+import org.plaudbridge.app.ui.list.DateGrouping
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.*
 
 /**
  * Files Tab — File list grouped by date + Sync Banner
@@ -166,113 +164,26 @@ class FilesFragment : Fragment() {
 // MARK: - RecyclerView Adapter
 
 /**
- * File list adapter, supports date group headers
+ * File list adapter: the Files tab's rows on top of the shared [DateGroupedAdapter], so the
+ * Library tab (server recordings) draws the identical list.
  */
 class FilesAdapter(
     private val onFileTapped: (RecordingFile) -> Unit
-) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+) : DateGroupedAdapter<RecordingFile>(timestamp = { it.createdAt }) {
 
-    companion object {
-        private const val TYPE_HEADER = 0
-        private const val TYPE_FILE = 1
-    }
+    fun submitFiles(files: List<RecordingFile>) = submit(files)
 
-    private sealed class ListItem {
-        data class Header(val title: String) : ListItem()
-        data class FileItem(val file: RecordingFile) : ListItem()
-    }
+    override fun rowName(item: RecordingFile): String = item.displayName
 
-    private var items = listOf<ListItem>()
+    override fun onRowTapped(item: RecordingFile) = onFileTapped(item)
 
-    fun submitFiles(files: List<RecordingFile>) {
-        val sorted = files.sortedByDescending { it.createdAt }
-        val grouped = mutableListOf<ListItem>()
-        var lastDateKey = ""
-        val today = Calendar.getInstance()
-        val yesterday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
-        val dateFormat = SimpleDateFormat("EEE, MMM d", Locale.getDefault())
-        val dayFormat = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
-
-        for (file in sorted) {
-            val fileDate = Date(file.createdAt)
-            val dateKey = dayFormat.format(fileDate)
-            if (dateKey != lastDateKey) {
-                lastDateKey = dateKey
-                val cal = Calendar.getInstance().apply { time = fileDate }
-                val title = when {
-                    dayFormat.format(today.time) == dateKey -> "Today"
-                    dayFormat.format(yesterday.time) == dateKey -> "Yesterday"
-                    else -> dateFormat.format(fileDate)
-                }
-                grouped.add(ListItem.Header(title))
-            }
-            grouped.add(ListItem.FileItem(file))
+    override fun rowMeta(context: android.content.Context, item: RecordingFile): String {
+        val upload = when {
+            item.uploaded -> context.getString(R.string.uploaded)
+            item.isSynced -> context.getString(R.string.upload_pending)
+            else -> context.getString(R.string.on_device)
         }
-        items = grouped
-        notifyDataSetChanged()
-    }
-
-    override fun getItemViewType(position: Int): Int = when (items[position]) {
-        is ListItem.Header -> TYPE_HEADER
-        is ListItem.FileItem -> TYPE_FILE
-    }
-
-    override fun getItemCount(): Int = items.size
-
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
-        val inflater = LayoutInflater.from(parent.context)
-        return when (viewType) {
-            TYPE_HEADER -> HeaderViewHolder(inflater.inflate(R.layout.item_date_header, parent, false))
-            else -> FileViewHolder(inflater.inflate(R.layout.item_file_row, parent, false))
-        }
-    }
-
-    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
-        when (val item = items[position]) {
-            is ListItem.Header -> (holder as HeaderViewHolder).bind(item.title, position == 0)
-            is ListItem.FileItem -> (holder as FileViewHolder).bind(item.file)
-        }
-    }
-
-    inner class HeaderViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        fun bind(title: String, isFirst: Boolean) {
-            val label = itemView.findViewById<TextView>(R.id.dateHeaderLabel)
-            label.text = title
-            // Match iOS: 40dp gap before each group, none before the first.
-            val density = itemView.resources.displayMetrics.density
-            val topPad = if (isFirst) 0 else (40 * density).toInt()
-            label.setPadding(label.paddingLeft, topPad, label.paddingRight, label.paddingBottom)
-        }
-    }
-
-    inner class FileViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        fun bind(file: RecordingFile) {
-            itemView.findViewById<TextView>(R.id.fileNameLabel).text = file.displayName
-            itemView.findViewById<TextView>(R.id.fileMetaLabel).text = formatMeta(file)
-            itemView.setOnClickListener { onFileTapped(file) }
-        }
-
-        private fun formatMeta(file: RecordingFile): String {
-            val dateFormat = SimpleDateFormat("MMM d", Locale.getDefault())
-            val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-            val date = Date(file.createdAt)
-            val dur = formatDuration(file.duration)
-            val upload = when {
-                file.uploaded -> itemView.context.getString(R.string.uploaded)
-                file.isSynced -> itemView.context.getString(R.string.upload_pending)
-                else -> itemView.context.getString(R.string.on_device)
-            }
-            return "${dateFormat.format(date)}  \u00B7  ${timeFormat.format(date)}  \u00B7  $dur  \u00B7  $upload"
-        }
-
-        private fun formatDuration(seconds: Long): String {
-            if (seconds <= 0) return "--"
-            val total = seconds.toInt()
-            return if (total >= 3600) {
-                String.format("%dh %dm", total / 3600, (total % 3600) / 60)
-            } else {
-                String.format("%dm %ds", total / 60, total % 60)
-            }
-        }
+        return DateGrouping.formatDateTime(item.createdAt) + DateGrouping.SEPARATOR +
+            DateGrouping.formatDuration(item.duration) + DateGrouping.SEPARATOR + upload
     }
 }

@@ -1,5 +1,6 @@
 package org.plaudbridge.app.net
 
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -9,6 +10,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.plaudbridge.app.common.AppLog
+import org.plaudbridge.app.models.ServerRecording
 import org.plaudbridge.app.storage.RecordingStore
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -24,6 +26,12 @@ import java.util.concurrent.TimeUnit
  *   GET  /api/v1/recordings/lookup?device_sn=..&session_id=..
  *   GET  /api/v1/recordings/{id}/transcript      200 ready / 409 pending
  *   PATCH /api/v1/recordings/{id}/marks          {"marks": list of seconds} -> {id, marks, highlights}
+ *   GET  /api/v1/recordings?limit=&offset=&q=     {"recordings": [...]} newest first (Library)
+ *   GET  /api/v1/recordings/{id}                  one recording object
+ *   PATCH /api/v1/recordings/{id}                 {"title": ...} -> renamed object (422 on empty)
+ *   POST /api/v1/recordings/{id}/retranscribe     {"id", "status": "pending"}
+ *   DELETE /api/v1/recordings/{id}                204
+ *   GET  /api/v1/recordings/{id}/audio            audio/mpeg with Range support (streamed by ExoPlayer)
  *
  * Security notes:
  * - Redirects are disabled: a redirecting proxy must never turn into a spoofed "success"
@@ -47,11 +55,16 @@ object ApiClient {
 
     class ApiException(val code: Int, message: String) : Exception("HTTP $code: $message")
 
-    private fun baseUrl(): String =
+    /** Configured server root without a trailing slash; throws when onboarding never saved one. */
+    internal fun baseUrl(): String =
         RecordingStore.serverBaseUrl?.trimEnd('/')
             ?: throw IllegalStateException("Server URL not configured")
 
-    private fun authHeader(): String =
+    /**
+     * "Bearer <token>" for the Authorization header. Internal (not private) because the detail
+     * screen's ExoPlayer streams audio through its own HTTP stack and needs the same header.
+     */
+    internal fun authHeader(): String =
         "Bearer ${RecordingStore.serverAuthToken ?: throw IllegalStateException("Server auth token not configured")}"
 
     // MARK: - Health / auth verification
@@ -375,5 +388,149 @@ object ApiClient {
         } catch (e: Exception) {
             TranscriptResult.Error(e.message ?: "network error")
         }
+    }
+
+    // MARK: - Library (server-side recordings)
+
+    /** Streaming URL for a recording's audio; the caller must send [authHeader] with it. */
+    fun recordingAudioUrl(recordingId: String): String =
+        "${baseUrl()}/api/v1/recordings/$recordingId/audio"
+
+    /** Typed result of GET /api/v1/recordings. Never throws; auth and network problems are values. */
+    sealed class ListResult {
+        data class Ok(val recordings: List<ServerRecording>) : ListResult()
+        data class AuthError(val code: Int) : ListResult()
+        data class Error(val message: String) : ListResult()
+    }
+
+    /**
+     * GET /api/v1/recordings?limit=200&offset=0[&q=...]: the server's recordings, newest first.
+     * [query] is the dashboard's search (title and transcript text); blank means no filter.
+     * 200 rows is far more than a personal server holds today, so paging is deferred.
+     */
+    fun listRecordings(query: String? = null): ListResult {
+        val url = "${baseUrl()}/api/v1/recordings".toHttpUrl().newBuilder()
+            .addQueryParameter("limit", "200")
+            .addQueryParameter("offset", "0")
+            .apply { query?.trim()?.takeIf { it.isNotEmpty() }?.let { addQueryParameter("q", it) } }
+            .build()
+        val req = Request.Builder().url(url).header("Authorization", authHeader()).get().build()
+        return try {
+            client.newCall(req).execute().use { resp ->
+                val text = resp.body?.string() ?: ""
+                when {
+                    resp.code == 401 || resp.code == 403 -> ListResult.AuthError(resp.code)
+                    !resp.isSuccessful -> {
+                        AppLog.w(TAG, "list recordings failed: HTTP ${resp.code} (${text.length} bytes)")
+                        ListResult.Error("HTTP ${resp.code}")
+                    }
+                    else -> try {
+                        ListResult.Ok(ServerRecording.listFromJson(text))
+                    } catch (e: Exception) {
+                        ListResult.Error("list response is not valid JSON")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            ListResult.Error(e.message ?: "network error")
+        }
+    }
+
+    /** Typed result of the single-recording reads and writes that return the recording object. */
+    sealed class RecordingResult {
+        data class Ok(val recording: ServerRecording) : RecordingResult()
+        object NotFound : RecordingResult()
+        data class AuthError(val code: Int) : RecordingResult()
+        data class Error(val message: String) : RecordingResult()
+    }
+
+    /** GET /api/v1/recordings/{id}. */
+    fun fetchRecording(recordingId: String): RecordingResult {
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/recordings/$recordingId")
+            .header("Authorization", authHeader())
+            .get()
+            .build()
+        return executeForRecording(req, "fetch recording")
+    }
+
+    /**
+     * PATCH /api/v1/recordings/{id} with {"title": ...}. The server answers 422 for an empty
+     * title; that surfaces as [RecordingResult.Error] so the dialog can say why nothing changed.
+     */
+    fun renameRecording(recordingId: String, title: String): RecordingResult {
+        val body = JSONObject().put("title", title).toString().toRequestBody(jsonType)
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/recordings/$recordingId")
+            .header("Authorization", authHeader())
+            .patch(body)
+            .build()
+        return executeForRecording(req, "rename recording")
+    }
+
+    private fun executeForRecording(req: Request, what: String): RecordingResult = try {
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string() ?: ""
+            when {
+                resp.code == 404 -> RecordingResult.NotFound
+                resp.code == 401 || resp.code == 403 -> RecordingResult.AuthError(resp.code)
+                resp.code == 422 -> RecordingResult.Error("rejected by the server (422)")
+                !resp.isSuccessful -> {
+                    AppLog.w(TAG, "$what failed: HTTP ${resp.code} (${text.length} bytes)")
+                    RecordingResult.Error("HTTP ${resp.code}")
+                }
+                else -> try {
+                    RecordingResult.Ok(ServerRecording.fromJson(JSONObject(text)))
+                } catch (e: Exception) {
+                    RecordingResult.Error("$what response is not a recording")
+                }
+            }
+        }
+    } catch (e: Exception) {
+        RecordingResult.Error(e.message ?: "network error")
+    }
+
+    /** Typed result of the body-less server actions (delete, re-transcribe). */
+    sealed class ActionResult {
+        object Ok : ActionResult()
+        object NotFound : ActionResult()
+        data class AuthError(val code: Int) : ActionResult()
+        data class Error(val message: String) : ActionResult()
+    }
+
+    /** DELETE /api/v1/recordings/{id} (204). Removes audio and transcript on the server. */
+    fun deleteRecording(recordingId: String): ActionResult {
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/recordings/$recordingId")
+            .header("Authorization", authHeader())
+            .delete()
+            .build()
+        return executeAction(req, "delete recording")
+    }
+
+    /** POST /api/v1/recordings/{id}/retranscribe: queue the recording for transcription again. */
+    fun retranscribe(recordingId: String): ActionResult {
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/recordings/$recordingId/retranscribe")
+            .header("Authorization", authHeader())
+            .post(ByteArray(0).toRequestBody(null))
+            .build()
+        return executeAction(req, "retranscribe")
+    }
+
+    private fun executeAction(req: Request, what: String): ActionResult = try {
+        client.newCall(req).execute().use { resp ->
+            when {
+                resp.isSuccessful -> ActionResult.Ok
+                resp.code == 404 -> ActionResult.NotFound
+                resp.code == 401 || resp.code == 403 -> ActionResult.AuthError(resp.code)
+                else -> {
+                    AppLog.w(TAG, "$what failed: HTTP ${resp.code}")
+                    ActionResult.Error("HTTP ${resp.code}")
+                }
+            }
+        }
+    } catch (e: Exception) {
+        ActionResult.Error(e.message ?: "network error")
     }
 }

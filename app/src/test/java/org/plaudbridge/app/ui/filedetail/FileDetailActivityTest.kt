@@ -190,4 +190,89 @@ class FileDetailActivityTest {
         assertNotNull(send.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM))
         assertTrue(send.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
     }
+
+    // MARK: - Server mode (Library)
+
+    /** Fake seam: answers the screen's server calls synchronously, no network. */
+    private class FakeServerSource(
+        val rec: org.plaudbridge.app.models.ServerRecording,
+        val transcript: org.plaudbridge.app.net.ApiClient.TranscriptResult
+    ) : FileDetailActivity.ServerDetailSource {
+        val deleted = mutableListOf<String>()
+        override suspend fun recording(id: String) =
+            if (id == rec.id) org.plaudbridge.app.net.ApiClient.RecordingResult.Ok(rec)
+            else org.plaudbridge.app.net.ApiClient.RecordingResult.NotFound
+        override suspend fun transcript(id: String) = transcript
+        override suspend fun rename(id: String, title: String) =
+            org.plaudbridge.app.net.ApiClient.RecordingResult.Ok(rec.copy(title = title))
+        override suspend fun retranscribe(id: String) = org.plaudbridge.app.net.ApiClient.ActionResult.Ok
+        override suspend fun delete(id: String): org.plaudbridge.app.net.ApiClient.ActionResult {
+            deleted += id
+            return org.plaudbridge.app.net.ApiClient.ActionResult.Ok
+        }
+    }
+
+    private fun serverRecording(status: String = "done") = org.plaudbridge.app.models.ServerRecording.fromJson(
+        org.json.JSONObject(
+            """{"id":"srv-9","device_sn":"SN-A","session_id":9,"filename":"9.mp3","size_bytes":1,
+            "duration_s":61.0,"started_at":"2026-09-07T05:27:31Z","uploaded_at":"2026-09-07T05:30:00Z",
+            "source":"plaud-bridge-android","status":"$status","title":"Server side \"Q3\" call",
+            "summary":"From the list.","marks":[6.0],"has_transcript":true,"text_preview":null,"error":null}"""
+        )
+    )
+
+    private fun launchServer(source: FileDetailActivity.ServerDetailSource, id: String = "srv-9"): FileDetailActivity {
+        FileDetailActivity.serverSource = source
+        RecordingStore.serverBaseUrl = "https://bridge.example.com"
+        RecordingStore.serverAuthToken = "tok"
+        val intent = Intent(context, FileDetailActivity::class.java)
+            .putExtra(FileDetailActivity.EXTRA_SERVER_RECORDING_ID, id)
+        return Robolectric.buildActivity(FileDetailActivity::class.java, intent).setup().get()
+    }
+
+    @Test
+    fun serverModeShowsFetchedTitleAndTranscript() {
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptWithHighlights))
+        val activity = launchServer(fake)
+        assertEquals("Server side \"Q3\" call", activity.findViewById<android.widget.TextView>(R.id.fileNameLabel).text.toString())
+        assertEquals("Transcribed", activity.findViewById<android.widget.TextView>(R.id.statusBadge).text.toString())
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.transcriptActions).visibility)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.highlightsHeader).visibility)
+        assertEquals(2, activity.findViewById<android.widget.LinearLayout>(R.id.highlightsList).childCount)
+        // The transcript's own summary wins over the list object's.
+        assertEquals("A greeting.", activity.findViewById<android.widget.TextView>(R.id.summaryText).text.toString())
+        // Nothing from the server is written into the phone's index.
+        assertTrue(RecordingStore.allFiles.isEmpty())
+    }
+
+    @Test
+    fun serverModePendingTranscriptShowsEmptyStateWithCheckButton() {
+        val fake = FakeServerSource(serverRecording("transcribing"), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending)
+        val activity = launchServer(fake)
+        assertEquals("Server side \"Q3\" call", activity.findViewById<android.widget.TextView>(R.id.fileNameLabel).text.toString())
+        assertEquals("Transcribing…", activity.findViewById<android.widget.TextView>(R.id.statusBadge).text.toString())
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.emptyState).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.transcriptActions).visibility)
+        assertEquals("Check for transcript", activity.findViewById<android.widget.Button>(R.id.generateButton).text.toString())
+    }
+
+    @Test
+    fun serverModeExportUsesFetchedFields() {
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
+        val activity = launchServer(fake)
+        activity.findViewById<View>(R.id.exportMarkdownButton).performClick()
+        val exported = File(context.cacheDir, "exports/Server side -Q3- call.md")
+        assertTrue("export file missing: ${exported.path}", exported.exists())
+        val text = exported.readText()
+        assertTrue(text, text.startsWith("---\ntitle: \"Server side \\\"Q3\\\" call\"\nrecorded: \"2026-09-07T05:27:31Z\"\nduration_s: \"61\"\n"))
+    }
+
+    @Test
+    fun serverModeNotFoundShowsMessageWithoutCrashing() {
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending)
+        val activity = launchServer(fake, id = "missing")
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.emptyState).visibility)
+        assertEquals("This recording is no longer on the server.",
+            activity.findViewById<android.widget.TextView>(R.id.emptySubtitle).text.toString())
+    }
 }

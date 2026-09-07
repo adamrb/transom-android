@@ -336,4 +336,155 @@ class ApiClientTest {
         server.enqueue(MockResponse().setResponseCode(200).setBody("""{"id":123}"""))
         assertTrue(ApiClient.lookupRecordingId("SN1", 42L) is ApiClient.LookupResult.Error)
     }
+
+    // MARK: - Library: list / fetch / rename / delete / retranscribe
+
+    private val recordingJson = """{"id":"rec-1","device_sn":"SN1","session_id":42,"filename":"42.mp3",
+        "size_bytes":10,"duration_s":61.0,"started_at":"2026-09-07T05:27:31Z","uploaded_at":"2026-09-07T05:30:00Z",
+        "source":"plaud-bridge-android","status":"done","title":"Budget call","summary":null,"marks":[6.0],
+        "has_transcript":true,"text_preview":"Hello","error":null}"""
+
+    @Test
+    fun listRecordingsHitsPathWithPagingAndAuth() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"recordings":[$recordingJson]}"""))
+        val result = ApiClient.listRecordings()
+        assertTrue(result is ApiClient.ListResult.Ok)
+        val recordings = (result as ApiClient.ListResult.Ok).recordings
+        assertEquals(1, recordings.size)
+        assertEquals("Budget call", recordings[0].displayTitle)
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals("/api/v1/recordings?limit=200&offset=0", recorded.path)
+        assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+    }
+
+    @Test
+    fun listRecordingsEncodesSearchQuery() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"recordings":[]}"""))
+        ApiClient.listRecordings("budget q3")
+        assertEquals("/api/v1/recordings?limit=200&offset=0&q=budget%20q3", server.takeRequest().path)
+    }
+
+    @Test
+    fun listRecordingsBlankQueryIsNoFilter() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"recordings":[]}"""))
+        ApiClient.listRecordings("   ")
+        assertEquals("/api/v1/recordings?limit=200&offset=0", server.takeRequest().path)
+    }
+
+    @Test
+    fun listRecordings401IsAuthError() {
+        server.enqueue(MockResponse().setResponseCode(401))
+        assertEquals(ApiClient.ListResult.AuthError(401), ApiClient.listRecordings())
+    }
+
+    @Test
+    fun listRecordings500IsError() {
+        server.enqueue(MockResponse().setResponseCode(500))
+        assertTrue(ApiClient.listRecordings() is ApiClient.ListResult.Error)
+    }
+
+    @Test
+    fun listRecordingsHtmlBodyIsError() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("<html>login</html>"))
+        assertTrue(ApiClient.listRecordings() is ApiClient.ListResult.Error)
+    }
+
+    @Test
+    fun listRecordingsUnreachableServerIsError() {
+        RecordingStore.serverBaseUrl = "http://127.0.0.1:1" // nothing listens on port 1
+        assertTrue(ApiClient.listRecordings() is ApiClient.ListResult.Error)
+    }
+
+    @Test
+    fun fetchRecordingParsesObject() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(recordingJson))
+        val result = ApiClient.fetchRecording("rec-1")
+        assertTrue(result is ApiClient.RecordingResult.Ok)
+        assertEquals("rec-1", (result as ApiClient.RecordingResult.Ok).recording.id)
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals("/api/v1/recordings/rec-1", recorded.path)
+        assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+    }
+
+    @Test
+    fun fetchRecording404IsNotFound() {
+        server.enqueue(MockResponse().setResponseCode(404))
+        assertEquals(ApiClient.RecordingResult.NotFound, ApiClient.fetchRecording("gone"))
+    }
+
+    @Test
+    fun renameRecordingPatchesTitle() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(recordingJson.replace("Budget call", "New name")))
+        val result = ApiClient.renameRecording("rec-1", "New name")
+        assertTrue(result is ApiClient.RecordingResult.Ok)
+        assertEquals("New name", (result as ApiClient.RecordingResult.Ok).recording.title)
+        val recorded = server.takeRequest()
+        assertEquals("PATCH", recorded.method)
+        assertEquals("/api/v1/recordings/rec-1", recorded.path)
+        assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+        assertEquals("""{"title":"New name"}""", recorded.body.readUtf8())
+    }
+
+    @Test
+    fun renameRecording422IsError() {
+        server.enqueue(MockResponse().setResponseCode(422).setBody("""{"detail":"title required"}"""))
+        assertTrue(ApiClient.renameRecording("rec-1", "") is ApiClient.RecordingResult.Error)
+    }
+
+    @Test
+    fun renameRecording403IsAuthError() {
+        server.enqueue(MockResponse().setResponseCode(403))
+        assertEquals(ApiClient.RecordingResult.AuthError(403), ApiClient.renameRecording("rec-1", "x"))
+    }
+
+    @Test
+    fun deleteRecording204IsOk() {
+        server.enqueue(MockResponse().setResponseCode(204))
+        assertEquals(ApiClient.ActionResult.Ok, ApiClient.deleteRecording("rec-1"))
+        val recorded = server.takeRequest()
+        assertEquals("DELETE", recorded.method)
+        assertEquals("/api/v1/recordings/rec-1", recorded.path)
+        assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+    }
+
+    @Test
+    fun deleteRecording404IsNotFound() {
+        server.enqueue(MockResponse().setResponseCode(404))
+        assertEquals(ApiClient.ActionResult.NotFound, ApiClient.deleteRecording("rec-1"))
+    }
+
+    @Test
+    fun deleteRecording401IsAuthError() {
+        server.enqueue(MockResponse().setResponseCode(401))
+        assertEquals(ApiClient.ActionResult.AuthError(401), ApiClient.deleteRecording("rec-1"))
+    }
+
+    @Test
+    fun deleteRecording500IsError() {
+        server.enqueue(MockResponse().setResponseCode(500))
+        assertTrue(ApiClient.deleteRecording("rec-1") is ApiClient.ActionResult.Error)
+    }
+
+    @Test
+    fun retranscribePostsToSubresource() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"id":"rec-1","status":"pending"}"""))
+        assertEquals(ApiClient.ActionResult.Ok, ApiClient.retranscribe("rec-1"))
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals("/api/v1/recordings/rec-1/retranscribe", recorded.path)
+        assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+    }
+
+    @Test
+    fun retranscribe403IsAuthError() {
+        server.enqueue(MockResponse().setResponseCode(403))
+        assertEquals(ApiClient.ActionResult.AuthError(403), ApiClient.retranscribe("rec-1"))
+    }
+
+    @Test
+    fun recordingAudioUrlIsUnderTheApi() {
+        assertEquals(RecordingStore.serverBaseUrl + "/api/v1/recordings/rec-1/audio", ApiClient.recordingAudioUrl("rec-1"))
+    }
 }

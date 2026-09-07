@@ -92,6 +92,12 @@ class SettingsFragment : Fragment() {
         renderServerCard()
         binding.editServerButton.setOnClickListener { showEditServerDialog() }
 
+        // The server's own web UI, for the Automations editor and anything else the native
+        // screens do not cover. Lives here rather than in a tab so the Library can stay native.
+        binding.webDashboardRow.setOnClickListener {
+            startActivity(Intent(requireContext(), org.plaudbridge.app.ui.library.WebDashboardActivity::class.java))
+        }
+
         // Plaud cloud region (SDK auth handshake only; restart to apply)
         renderRegionCard()
         binding.switchRegionButton.setOnClickListener { showSwitchRegionDialog() }

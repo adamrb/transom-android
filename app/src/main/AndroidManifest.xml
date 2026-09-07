@@ -88,6 +88,11 @@
             android:name=".ui.filedetail.FileDetailActivity"
             android:exported="false" />
 
+        <!-- Web dashboard (the server's own UI, from Settings; formerly the Library tab) -->
+        <activity
+            android:name=".ui.library.WebDashboardActivity"
+            android:exported="false" />
+
         <!-- PackageInstaller session status for self-updates (never exported) -->
         <receiver
             android:name=".ui.update.UpdateResultReceiver"
