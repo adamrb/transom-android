@@ -26,8 +26,10 @@ import java.util.concurrent.atomic.AtomicInteger
  *  - Ready: transcript stored, title captured, list observers notified
  *  - Pending (409): counted as remaining so the worker retries
  *  - Error / non-JSON 200: counted as remaining (transient), nothing stored
- *  - NotFound / AuthError: skipped, NOT remaining (retrying cannot change the answer); AuthError
- *    aborts the pass so one bad token does not produce N rejected requests
+ *  - AuthError: skipped, NOT remaining (retrying cannot change the answer) and aborts the pass so
+ *    one bad token does not produce N rejected requests
+ *  - NotFound: one lookup by device_sn + session_id; a new id is stored and fetched next pass,
+ *    no id clears the stale one so the file leaves the work list for good
  *  - only records with a serverId and no cached transcript are fetched
  *  - kick(): schedules once, polls while pending, no-op without server config or work
  */
@@ -53,10 +55,22 @@ class TitleSyncManagerTest {
         fun callsSnapshot(): List<String> = synchronized(calls) { calls.toList() }
     }
 
+    /** Scripted lookup answers per (SN, session); anything unscripted is a hard failure. */
+    private class FakeLookup : TitleSyncManager.IdLookup {
+        val responses = mutableMapOf<Pair<String, Long>, ApiClient.LookupResult>()
+        val calls = mutableListOf<Pair<String, Long>>()
+        override fun lookup(deviceSN: String, sessionId: Long): ApiClient.LookupResult {
+            synchronized(calls) { calls.add(deviceSN to sessionId) }
+            return responses[deviceSN to sessionId] ?: error("unexpected lookup for $deviceSN/$sessionId")
+        }
+    }
+
     private lateinit var context: Context
     private lateinit var source: FakeSource
+    private lateinit var lookup: FakeLookup
     private val filesChanged = AtomicInteger()
     private val scheduleCalls = AtomicInteger()
+    private val repairKicks = AtomicInteger()
 
     @Before
     fun setUp() {
@@ -69,17 +83,36 @@ class TitleSyncManagerTest {
 
         source = FakeSource()
         TitleSyncManager.transcriptSource = source
+        lookup = FakeLookup()
+        TitleSyncManager.idLookup = lookup
+        repairKicks.set(0)
+        TitleSyncManager.onServerIdRepaired = { repairKicks.incrementAndGet() } // MarksSyncManager not under test
         filesChanged.set(0)
         TitleSyncManager.onFilesChanged = { filesChanged.incrementAndGet() }
         scheduleCalls.set(0)
         TitleSyncManager.scheduler = { scheduleCalls.incrementAndGet() }
         TitleSyncManager.inAppPollDelayMs = 50L
         TitleSyncManager.resetLegacyAttemptsForTest()
+        org.plaudbridge.app.ui.recordings.RecordingsRepository.reset()
     }
 
     @After
     fun tearDown() {
         TitleSyncManager.inAppPollDelayMs = 20_000L
+        org.plaudbridge.app.ui.recordings.RecordingsRepository.reset()
+    }
+
+    /** Put server rows into the shared list snapshot, as a Recordings tab refresh would. */
+    private fun seedServerList(vararg ids: String) = runBlocking {
+        val repo = org.plaudbridge.app.ui.recordings.RecordingsRepository
+        repo.listSource = org.plaudbridge.app.ui.recordings.RecordingsRepository.ListSource {
+            ApiClient.ListResult.Ok(ids.map {
+                org.plaudbridge.app.models.ServerRecording.fromJson(
+                    org.json.JSONObject("""{"id":"$it","device_sn":"SN-A","session_id":1,"filename":"$it.mp3","status":"done","title":"$it"}""")
+                )
+            })
+        }
+        repo.refresh()
     }
 
     private fun addRecording(session: Long, serverId: String?, transcript: String? = null): RecordingFile {
@@ -225,21 +258,203 @@ class TitleSyncManagerTest {
         assertEquals(1, RecordingStore.awaitingTranscript.size)
     }
 
+    // MARK: - 404 repair
+
     @Test
-    fun notFoundIsSkippedNotRemaining() = runBlocking {
-        // The server does not know this id (stale/foreign id). Repeating the request cannot
-        // help, so it must not keep the worker retrying; the record is left untouched for the
-        // detail screen's lookup path.
+    fun notFoundWithASuccessfulLookupReplacesTheServerIdAndFetchesUnderItNextPass() = runBlocking {
+        // Server database was rebuilt: the old id is gone but the recording was re-registered.
+        addRecording(1, "srv-stale")
+        source.script("srv-stale", ApiClient.TranscriptResult.NotFound)
+        source.script("srv-fresh", ready("Recovered title"))
+        lookup.responses["SN-A" to 1L] = ApiClient.LookupResult.Found("srv-fresh")
+
+        val first = TitleSyncManager.runPass()
+
+        assertEquals(TitleSyncManager.PassResult(stored = 0, pending = 1, failed = 0, skipped = 0), first)
+        assertEquals("srv-fresh", RecordingStore.allFiles.single().serverId)
+        assertEquals(listOf("SN-A" to 1L), lookup.calls)
+        assertEquals("lists must learn the new id even before the transcript lands", 1, filesChanged.get())
+
+        val second = TitleSyncManager.runPass()
+        assertEquals(1, second.stored)
+        assertEquals("Recovered title", RecordingStore.allFiles.single().displayName)
+        assertEquals(listOf("srv-stale", "srv-fresh"), source.callsSnapshot())
+        assertEquals("one lookup was enough", 1, lookup.calls.size)
+    }
+
+    @Test
+    fun legacyRecordWithARepairedIdIsRefetchedUnderTheNewIdNextPass() = runBlocking {
+        // Pre-title cached transcript AND a stale id: the one legacy attempt went to an id the
+        // server does not know, so the repaired id must still get its fetch.
+        addRecording(1, "srv-stale", transcript = """{"text":"old","segments":[]}""")
+        source.script("srv-stale", ApiClient.TranscriptResult.NotFound)
+        source.script("srv-fresh", ready("Recovered legacy title"))
+        lookup.responses["SN-A" to 1L] = ApiClient.LookupResult.Found("srv-fresh")
+
+        val first = TitleSyncManager.runPass()
+        assertEquals(1, first.pending)
+        assertEquals("srv-fresh", RecordingStore.allFiles.single().serverId)
+
+        val second = TitleSyncManager.runPass()
+        assertEquals(1, second.stored)
+        assertEquals("Recovered legacy title", RecordingStore.allFiles.single().displayName)
+        assertEquals(listOf("srv-stale", "srv-fresh"), source.callsSnapshot())
+
+        // And it is once more a one-shot: a third pass makes no calls.
+        TitleSyncManager.runPass()
+        assertEquals(2, source.callsSnapshot().size)
+    }
+
+    @Test
+    fun repairAndClearDropTheStaleRowFromTheServerListSnapshot() = runBlocking {
+        // The list was fetched before the server lost the id; the merged row would keep opening
+        // the dead id through that row until the next refresh.
+        addRecording(1, "srv-stale")
+        addRecording(2, "srv-gone")
+        seedServerList("srv-stale", "srv-gone", "srv-other")
+        source.script("srv-stale", ApiClient.TranscriptResult.NotFound)
+        source.script("srv-gone", ApiClient.TranscriptResult.NotFound)
+        lookup.responses["SN-A" to 1L] = ApiClient.LookupResult.Found("srv-fresh")
+        lookup.responses["SN-A" to 2L] = ApiClient.LookupResult.NotFound
+
+        TitleSyncManager.runPass()
+
+        assertEquals(listOf("srv-other"), org.plaudbridge.app.ui.recordings.RecordingsRepository.server.value.map { it.id })
+    }
+
+    @Test
+    fun notFoundWithAFailedLookupClearsTheStaleIdAndStopsFetching() = runBlocking {
         addRecording(1, "srv-gone")
         source.script("srv-gone", ApiClient.TranscriptResult.NotFound)
+        lookup.responses["SN-A" to 1L] = ApiClient.LookupResult.NotFound
+
+        val first = TitleSyncManager.runPass()
+
+        assertEquals(TitleSyncManager.PassResult(stored = 0, pending = 0, failed = 0, skipped = 1), first)
+        assertEquals(0, first.remaining)
+        val rec = RecordingStore.allFiles.single()
+        assertNull(rec.serverId)
+        assertTrue("the upload itself is not in doubt", rec.uploaded)
+        assertNull(rec.transcriptJSON)
+        assertTrue(RecordingStore.awaitingTranscript.isEmpty())
+        assertEquals(1, filesChanged.get())
+
+        // The next pass (every resume used to repeat the 404) has nothing to do.
+        val second = TitleSyncManager.runPass()
+        assertEquals(TitleSyncManager.PassResult(stored = 0, pending = 0, failed = 0, skipped = 0), second)
+        assertEquals(listOf("srv-gone"), source.callsSnapshot())
+        assertEquals(1, lookup.calls.size)
+    }
+
+    @Test
+    fun notFoundWithLookupAuthOrTransientErrorLeavesTheIdAlone() = runBlocking {
+        // Neither answer proves the id is stale, so nothing is changed. A transient lookup
+        // failure is still worth another pass (failed, so the worker keeps retrying); an auth
+        // error is not (skipped).
+        addRecording(1, "srv-a")
+        addRecording(2, "srv-b")
+        source.script("srv-a", ApiClient.TranscriptResult.NotFound)
+        source.script("srv-b", ApiClient.TranscriptResult.NotFound)
+        lookup.responses["SN-A" to 1L] = ApiClient.LookupResult.Error("timeout")
+        lookup.responses["SN-A" to 2L] = ApiClient.LookupResult.AuthError(403)
 
         val result = TitleSyncManager.runPass()
 
-        assertEquals(TitleSyncManager.PassResult(stored = 0, pending = 0, failed = 0, skipped = 1), result)
-        assertEquals(0, result.remaining)
-        val rec = RecordingStore.allFiles.single()
-        assertEquals("srv-gone", rec.serverId)
-        assertNull(rec.transcriptJSON)
+        assertEquals(TitleSyncManager.PassResult(stored = 0, pending = 0, failed = 1, skipped = 1), result)
+        assertEquals(1, result.remaining)
+        assertEquals(setOf("srv-a", "srv-b"), RecordingStore.allFiles.map { it.serverId }.toSet())
+    }
+
+    @Test
+    fun notFoundWithLookupConfirmingTheSameIdChangesNothingAndIsNotAskedAgain() = runBlocking {
+        addRecording(1, "srv-odd")
+        source.script("srv-odd", ApiClient.TranscriptResult.NotFound)
+        lookup.responses["SN-A" to 1L] = ApiClient.LookupResult.Found("srv-odd")
+
+        val result = TitleSyncManager.runPass()
+
+        assertEquals(1, result.skipped)
+        assertEquals("srv-odd", RecordingStore.allFiles.single().serverId)
+
+        // Every resume kicks a pass; the contradiction must not cost two requests each time.
+        val again = TitleSyncManager.runPass()
+        assertEquals(TitleSyncManager.PassResult(stored = 0, pending = 0, failed = 0, skipped = 0), again)
+        assertEquals(listOf("srv-odd"), source.callsSnapshot())
+        assertEquals(1, lookup.calls.size)
+
+        // A different id for the same file (detail screen, later upload) is a fresh question.
+        RecordingStore.updateServerId(RecordingStore.allFiles.single().id, "srv-new")
+        source.script("srv-new", ready("Now it works"))
+        assertEquals(1, TitleSyncManager.runPass().stored)
+    }
+
+    @Test
+    fun retranscribeReopensASettledMiss() = runBlocking {
+        addRecording(1, "srv-odd")
+        source.script("srv-odd", ApiClient.TranscriptResult.NotFound, ready("Transcribed at last"))
+        lookup.responses["SN-A" to 1L] = ApiClient.LookupResult.Found("srv-odd")
+        TitleSyncManager.runPass()
+        assertEquals(0, TitleSyncManager.runPass().stored + TitleSyncManager.runPass().skipped) // settled
+
+        TitleSyncManager.reopen("srv-odd") // what RecordingActions.retranscribe does on success
+
+        assertEquals(1, TitleSyncManager.runPass().stored)
+        assertEquals("Transcribed at last", RecordingStore.allFiles.single().displayName)
+    }
+
+    @Test
+    fun repairedIdSendsTheMarksAgain() = runBlocking {
+        val rec = addRecording(1, "srv-stale")
+        RecordingStore.updateMarks(rec.id, listOf(2.0))
+        RecordingStore.markMarksSynced(rec.id, listOf(2.0))
+        source.script("srv-stale", ApiClient.TranscriptResult.NotFound)
+        lookup.responses["SN-A" to 1L] = ApiClient.LookupResult.Found("srv-fresh")
+
+        TitleSyncManager.runPass()
+
+        // The new record never saw the marks; MarksSyncManager's work list has the file again,
+        // and it was kicked, since no upload or device connect may be coming to do it.
+        assertEquals(listOf(rec.id), RecordingStore.awaitingMarksSync.map { it.id })
+        assertEquals(1, repairKicks.get())
+    }
+
+    @Test
+    fun clearedOrSettledIdsDoNotKickTheMarksSync() = runBlocking {
+        addRecording(1, "srv-gone")
+        addRecording(2, "srv-odd")
+        source.script("srv-gone", ApiClient.TranscriptResult.NotFound)
+        source.script("srv-odd", ApiClient.TranscriptResult.NotFound)
+        lookup.responses["SN-A" to 1L] = ApiClient.LookupResult.NotFound
+        lookup.responses["SN-A" to 2L] = ApiClient.LookupResult.Found("srv-odd")
+
+        TitleSyncManager.runPass()
+
+        assertEquals(0, repairKicks.get())
+    }
+
+    @Test
+    fun notFoundWithABlankDeviceSnIsNotLookedUp() = runBlocking {
+        RecordingStore.addFiles(listOf(RecordingFile(sessionId = 9, deviceSN = "", name = "legacy", duration = 5, createdAt = 9_000)))
+        RecordingStore.markAsUploaded("", 9, "srv-legacy")
+        source.script("srv-legacy", ApiClient.TranscriptResult.NotFound)
+
+        val result = TitleSyncManager.runPass()
+
+        assertEquals(1, result.skipped)
+        assertTrue(lookup.calls.isEmpty())
+        assertEquals("srv-legacy", RecordingStore.allFiles.single().serverId)
+    }
+
+    @Test
+    fun transcriptAuthErrorStillAbortsWithoutAnyLookup() = runBlocking {
+        addRecording(1, "srv-1")
+        source.script("srv-1", ApiClient.TranscriptResult.AuthError(401))
+
+        val result = TitleSyncManager.runPass()
+
+        assertEquals(1, result.skipped)
+        assertTrue(lookup.calls.isEmpty())
+        assertEquals("srv-1", RecordingStore.allFiles.single().serverId)
     }
 
     @Test
@@ -268,13 +483,15 @@ class TitleSyncManagerTest {
         source.script("srv-pending", ApiClient.TranscriptResult.Pending)
         source.script("srv-missing", ApiClient.TranscriptResult.NotFound)
         source.script("srv-down", ApiClient.TranscriptResult.Error("timeout"))
+        lookup.responses["SN-A" to 3L] = ApiClient.LookupResult.NotFound
 
         val result = TitleSyncManager.runPass()
 
         assertEquals(TitleSyncManager.PassResult(stored = 1, pending = 1, failed = 1, skipped = 1), result)
         assertEquals(2, result.remaining)
         assertEquals("Titled", RecordingStore.allFiles.first { it.sessionId == 1L }.displayName)
-        assertEquals(3, RecordingStore.awaitingTranscript.size)
+        // The missing one lost its stale id and left the work list; pending and down remain.
+        assertEquals(setOf(2L, 4L), RecordingStore.awaitingTranscript.map { it.sessionId }.toSet())
     }
 
     // MARK: - Work list

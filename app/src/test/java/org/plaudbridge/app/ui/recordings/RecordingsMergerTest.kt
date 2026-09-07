@@ -28,10 +28,13 @@ class RecordingsMergerTest {
         name: String = "Untitled Recording",
         serverTitle: String? = null,
         marks: List<Double>? = null,
-        duration: Long = 61
+        duration: Long = 61,
+        nameEditedByUser: Boolean = false,
+        removedFromPhone: Boolean = false
     ) = RecordingFile(
         sessionId = session, deviceSN = sn, name = name, duration = duration, createdAt = createdAt,
-        localPath = localPath, uploaded = uploaded, serverId = serverId, serverTitle = serverTitle, marks = marks
+        localPath = localPath, uploaded = uploaded, serverId = serverId, serverTitle = serverTitle, marks = marks,
+        nameEditedByUser = nameEditedByUser, removedFromPhone = removedFromPhone
     )
 
     private fun server(
@@ -118,6 +121,43 @@ class RecordingsMergerTest {
         assertEquals("Cached", RecordingItem(local(1, serverTitle = "Cached"), server("srv-1", title = null)).title)
         assertEquals("Untitled Recording", RecordingItem(local(1), null).title)
         assertEquals("srv-2.mp3", RecordingItem(null, server("srv-2", title = "  ")).title)
+    }
+
+    @Test
+    fun manualRenameOnThePhoneWinsOverTheServerTitle() {
+        val renamed = local(1, name = "Walk with Sam", nameEditedByUser = true, serverTitle = "AI title")
+        assertEquals("Walk with Sam", RecordingItem(renamed, server("srv-1", title = "Server title")).title)
+        assertEquals("Walk with Sam", RecordingItem(renamed, null).title)
+        // The pin only applies to a name the user typed; a stored name that was never edited loses.
+        assertEquals("Server title srv-1", RecordingItem(local(1, name = "Walk with Sam"), server("srv-1")).title)
+        // A blank pinned name is not a title; fall through as if there were no rename.
+        assertEquals("Server title srv-1", RecordingItem(local(1, name = "  ", nameEditedByUser = true), server("srv-1")).title)
+    }
+
+    @Test
+    fun removedFromPhoneRowIsServerBackedWithNoStatusWord() {
+        val gone = local(1, localPath = null, uploaded = true, serverId = "srv-1", removedFromPhone = true)
+        // Without the flag a missing localPath reads as "downloading"; with it, nothing is happening.
+        assertEquals(RecordingItem.Status.NONE, RecordingItem(gone, null).status)
+        assertEquals(RecordingItem.Status.NONE, RecordingItem(gone, server("srv-1")).status)
+        assertEquals(false, RecordingItem(gone, server("srv-1")).hasLocalAudio)
+        assertEquals("srv-1", RecordingItem(gone, null).serverId)
+    }
+
+    @Test
+    fun removeFromPhoneIsOfferedOnlyForServerBackedRowsWithAudioOnThePhone() {
+        assertEquals(true, RecordingItem(local(1, serverId = "srv-1"), server("srv-1")).canRemoveFromPhone)
+        assertEquals(true, RecordingItem(local(1), server("srv-1", session = 1)).canRemoveFromPhone) // matched by session
+        assertEquals(true, RecordingItem(local(1, serverId = "srv-1"), null).canRemoveFromPhone) // id remembered by the phone
+        assertEquals(false, RecordingItem(local(1), null).canRemoveFromPhone) // phone-only: Delete is the action
+        assertEquals(false, RecordingItem(null, server("srv-1")).canRemoveFromPhone)
+        // Still downloading: nothing on the phone to remove, and offering it would race the download.
+        assertEquals(false, RecordingItem(local(1, localPath = null), server("srv-1", session = 1)).canRemoveFromPhone)
+        assertEquals(false, RecordingItem(local(1, localPath = null, serverId = "srv-1", removedFromPhone = true), server("srv-1")).canRemoveFromPhone)
+        // Legacy blank-SN entry: only with a server row that knows the real identity.
+        assertEquals(true, RecordingItem(local(1, sn = "", serverId = "srv-1"), server("srv-1", session = 1)).canRemoveFromPhone)
+        assertEquals(false, RecordingItem(local(1, sn = "", serverId = "srv-1"), null).canRemoveFromPhone)
+        assertEquals(false, RecordingItem(local(1, sn = "", serverId = "srv-1"), server("srv-1", session = null)).canRemoveFromPhone)
     }
 
     @Test

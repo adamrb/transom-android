@@ -364,6 +364,17 @@ class FileDetailActivityTest {
     }
 
     @Test
+    fun manualRenameOnThePhoneHeadsThePageOverTheServerTitle() {
+        val file = storeFile(transcriptJson, serverId = "srv-9")
+        RecordingStore.renameFile(file, "Walk with Sam")
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
+        configureServer(fake)
+        val activity = launchBoth(file.id)
+        // The server says "Server side Q3 call"; the user's own name is pinned and wins.
+        assertEquals("Walk with Sam", activity.findViewById<android.widget.TextView>(R.id.fileNameLabel).text.toString())
+    }
+
+    @Test
     fun unifiedOpenKeepsThePhoneContentWhenTheServerIsUnreachable() {
         val file = storeFile(transcriptJson, serverId = "srv-9")
         val fake = object : FileDetailActivity.ServerDetailSource by FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending) {
@@ -405,7 +416,8 @@ class FileDetailActivityTest {
     fun menuOffersOnlyWhatAppliesToTheRecording() {
         val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
         configureServer(fake)
-        val file = storeFile(null, serverId = "srv-9")
+        // Remove from phone needs audio on the phone, so the phone copy has a path here.
+        val file = storeFile(null, serverId = "srv-9", localPath = File(context.filesDir, "7.mp3").absolutePath)
         val both = launchBoth(file.id)
         val menuBoth = android.widget.PopupMenu(both, both.findViewById(R.id.moreButton)).also {
             it.menuInflater.inflate(R.menu.menu_file_detail, it.menu)
@@ -453,8 +465,21 @@ class FileDetailActivityTest {
         assertTrue(activity.onMenuAction(R.id.action_remove_from_phone))
         confirmLatestDialog()
         assertTrue(fake.deleted.isEmpty())
-        assertTrue(RecordingStore.allFiles.isEmpty())
+        // The entry stays, flagged, so the row keeps its server link and the sync flows do not
+        // download the session again; only the audio path is gone.
+        val kept = RecordingStore.allFiles.single()
+        assertTrue(kept.removedFromPhone)
+        assertEquals(null, kept.localPath)
+        assertEquals("srv-9", kept.serverId)
         assertEquals("Removed from this phone", ShadowToast.getTextOfLatestToast())
+        // Phone actions are gone with the audio; the server ones stay.
+        val menu = android.widget.PopupMenu(activity, activity.findViewById(R.id.moreButton)).also {
+            it.menuInflater.inflate(R.menu.menu_file_detail, it.menu)
+            activity.applyMenuVisibility(it.menu)
+        }.menu
+        assertEquals(false, menu.findItem(R.id.action_export).isVisible)
+        assertEquals(false, menu.findItem(R.id.action_remove_from_phone).isVisible)
+        assertTrue(menu.findItem(R.id.action_retranscribe).isVisible)
         assertEquals(false, activity.isFinishing)
         // Still showing the server copy.
         assertEquals("Server side \"Q3\" call", activity.findViewById<android.widget.TextView>(R.id.fileNameLabel).text.toString())

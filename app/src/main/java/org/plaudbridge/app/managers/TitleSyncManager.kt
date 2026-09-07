@@ -10,6 +10,7 @@ import org.plaudbridge.app.common.AppLog
 import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.models.RecordingFile
 import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.ui.recordings.RecordingsRepository
 import org.plaudbridge.app.work.TitleSyncScheduler
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -31,11 +32,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  * usually gets its title while the user is still looking at the list; WorkManager's backoff is
  * the fallback, not the primary path.
  *
- * Result classes: 409 Pending and transient errors are retried; 404 NotFound (the server does not
- * know this id: stale/foreign id, server database reset) and 401/403 AuthError (wrong token) are
- * NOT retried by this manager because repeating the same request cannot change the answer. They
- * are left for the user-facing paths: the detail screen re-resolves ids via the lookup endpoint,
- * and a fixed token comes with the next kick.
+ * Result classes: 409 Pending and transient errors are retried; 401/403 AuthError (wrong token)
+ * is NOT retried by this manager because repeating the same request cannot change the answer,
+ * and a fixed token comes with the next kick. 404 NotFound (the server does not know this id:
+ * stale/foreign id, server database reset) gets exactly one repair attempt: the id is re-resolved
+ * through the lookup endpoint by device_sn + session_id. A new id is stored and fetched on the
+ * next pass; no id means the stale one is cleared so the file leaves the work list instead of
+ * producing the same 404 on every resume. The detail screen's lookup (or a later upload) puts an
+ * id back if the server ever has the recording again.
  */
 object TitleSyncManager {
 
@@ -49,8 +53,23 @@ object TitleSyncManager {
     /** Replaceable for unit tests only. */
     internal var transcriptSource: TranscriptSource = TranscriptSource { ApiClient.fetchTranscript(it) }
 
+    /** Seam over ApiClient.lookupRecordingId, used once per 404 to repair or retire a stale id. */
+    fun interface IdLookup {
+        fun lookup(deviceSN: String, sessionId: Long): ApiClient.LookupResult
+    }
+
+    /** Replaceable for unit tests only. */
+    internal var idLookup: IdLookup = IdLookup { sn, sid -> ApiClient.lookupRecordingId(sn, sid) }
+
     /** Propagates new titles to lists observing SyncManager.files (test seam). */
     internal var onFilesChanged: () -> Unit = { SyncManager.shared.refreshFilesFromStore() }
+
+    /**
+     * Runs after a stale server id was replaced (test seam). The default starts the marks sync:
+     * RecordingStore.replaceServerId resets marksSynced so the rebuilt record gets its marks, and
+     * with no upload or device connect necessarily coming, nothing else would issue that PATCH.
+     */
+    internal var onServerIdRepaired: () -> Unit = { MarksSyncManager.kick() }
 
     /**
      * Enqueues the durable WorkManager retry (test seam). Same shape as UploadManager.scheduler:
@@ -116,8 +135,44 @@ object TitleSyncManager {
         files.forEach { legacyAttempted.add(it.id) }
     }
 
-    /** Test hook: forget which pre-title transcripts were already refetched. */
-    internal fun resetLegacyAttemptsForTest() = synchronized(legacyAttempted) { legacyAttempted.clear() }
+    /**
+     * A pre-title record whose stale id was just repaired gets its one refetch back: the attempt
+     * that was spent went to an id the server did not know, so it proved nothing about the title.
+     * Without this the record would sit in [legacyAttempted] with a valid id nobody ever asks for.
+     */
+    private fun unmarkLegacyAttempted(id: String) = synchronized(legacyAttempted) { legacyAttempted.remove(id) }
+
+    /**
+     * (file id, server id) pairs where the server contradicted itself in this process: the lookup
+     * confirms the id, the transcript endpoint says 404. Neither clearing the id nor asking again
+     * can help, and the file stays in the work list (no transcript to cache), so without this the
+     * pair of requests would repeat on every resume. Bounded to the process like [legacyAttempted];
+     * a new id from the detail screen or a later upload is a different pair and is tried again.
+     */
+    private val settledMisses = HashSet<Pair<String, String>>()
+
+    private fun isSettledMiss(rec: RecordingFile): Boolean = synchronized(settledMisses) {
+        val serverId = rec.serverId ?: return false
+        (rec.id to serverId) in settledMisses
+    }
+
+    private fun markSettledMiss(fileId: String, serverId: String) = synchronized(settledMisses) {
+        settledMisses.add(fileId to serverId)
+    }
+
+    /**
+     * The user asked the server to transcribe [serverId] again: whatever it answered before no
+     * longer describes it, so a settled miss for that id is forgotten and the next pass asks.
+     */
+    fun reopen(serverId: String) = synchronized(settledMisses) {
+        settledMisses.removeAll { it.second == serverId }
+    }
+
+    /** Test hook: forget which pre-title transcripts were already refetched, and settled misses. */
+    internal fun resetLegacyAttemptsForTest() {
+        synchronized(legacyAttempted) { legacyAttempted.clear() }
+        synchronized(settledMisses) { settledMisses.clear() }
+    }
 
     /**
      * Fetch outstanding titles now AND make sure the durable WorkManager retry is scheduled. Safe
@@ -184,7 +239,7 @@ object TitleSyncManager {
         val legacy = legacyCandidates()
         markLegacyAttempted(legacy)
         val legacyIds = legacy.map { it.id }.toHashSet()
-        val work = RecordingStore.awaitingTranscript + legacy
+        val work = (RecordingStore.awaitingTranscript + legacy).filterNot { isSettledMiss(it) }
         if (work.isEmpty()) return PassResult(0, 0, 0, 0)
         AppLog.i(TAG, "Checking ${work.size} recording(s) for a transcript/title")
         var stored = 0
@@ -220,9 +275,10 @@ object TitleSyncManager {
                     }
                 }
                 ApiClient.TranscriptResult.Pending -> if (rec.id in legacyIds) skipped++ else pending++
-                ApiClient.TranscriptResult.NotFound -> {
-                    skipped++
-                    AppLog.w(TAG, "Server has no recording $serverId; not retrying")
+                ApiClient.TranscriptResult.NotFound -> when (repairStaleServerId(rec, serverId, configGen)) {
+                    Repair.REPAIRED -> pending++
+                    Repair.TRANSIENT -> if (rec.id in legacyIds) skipped++ else failed++
+                    Repair.SETTLED -> skipped++
                 }
                 is ApiClient.TranscriptResult.AuthError -> {
                     // Every further request in this pass carries the same rejected token.
@@ -237,6 +293,91 @@ object TitleSyncManager {
             }
         }
         return PassResult(stored = stored, pending = pending, failed = failed, skipped = skipped)
+    }
+
+    /** Outcome of [repairStaleServerId]. */
+    private enum class Repair {
+        /** A different id was stored; the next pass fetches under it (pending). */
+        REPAIRED,
+        /** The lookup itself failed transiently; nothing changed, worth another pass (failed). */
+        TRANSIENT,
+        /** Nothing more a retry could do: id cleared, or left alone on purpose (skipped). */
+        SETTLED
+    }
+
+    /**
+     * The transcript endpoint answered 404 for [staleServerId]. Ask the server which id, if any,
+     * it holds for the recorder's own identity of this recording. A different id is stored (and
+     * published to the lists, which would otherwise keep opening the old record) and fetched on
+     * the next pass. A lookup 404 means the server has no such recording, so the stale id is
+     * cleared (see RecordingStore.clearStaleServerId) and the file leaves the work list. A
+     * network or 5xx failure of the lookup proves nothing and is reported as transient so the
+     * worker keeps its durable retry. An auth error, a server that contradicts itself, or a
+     * blank SN that cannot be looked up at all leave the record as it was.
+     */
+    private fun repairStaleServerId(rec: RecordingFile, staleServerId: String, configGen: Long): Repair {
+        if (rec.deviceSN.isBlank()) {
+            AppLog.w(TAG, "Server has no recording $staleServerId and the file has no device SN to look up; leaving it")
+            return Repair.SETTLED
+        }
+        val lookup = try {
+            idLookup.lookup(rec.deviceSN, rec.sessionId)
+        } catch (t: Throwable) {
+            ApiClient.LookupResult.Error(t.message ?: "network error")
+        }
+        if (RecordingStore.serverConfigGeneration != configGen) {
+            AppLog.w(TAG, "Lookup discarded, server config changed mid-request (serverId=$staleServerId)")
+            return Repair.TRANSIENT
+        }
+        return when (lookup) {
+            is ApiClient.LookupResult.Found -> {
+                if (lookup.id == staleServerId) {
+                    // The server contradicts itself (lookup knows the id, transcript does not).
+                    // Nothing to repair; do not clear an id the server just confirmed, and do
+                    // not ask again this process (see settledMisses).
+                    markSettledMiss(rec.id, staleServerId)
+                    AppLog.w(TAG, "Server has no transcript for $staleServerId but still lists it; not retrying")
+                    Repair.SETTLED
+                } else {
+                    RecordingStore.replaceServerId(rec.id, lookup.id)
+                    unmarkLegacyAttempted(rec.id)
+                    forgetStaleServerRow(staleServerId)
+                    notifyFilesChanged()
+                    notifyServerIdRepaired()
+                    AppLog.i(TAG, "Stale serverId $staleServerId replaced by ${lookup.id} via lookup")
+                    Repair.REPAIRED
+                }
+            }
+            ApiClient.LookupResult.NotFound -> {
+                RecordingStore.clearStaleServerId(rec.id, staleServerId)
+                forgetStaleServerRow(staleServerId)
+                notifyFilesChanged()
+                AppLog.w(TAG, "Server has no recording $staleServerId (lookup 404 too); cleared the stale id")
+                Repair.SETTLED
+            }
+            is ApiClient.LookupResult.AuthError -> {
+                AppLog.w(TAG, "Lookup for stale serverId $staleServerId rejected (HTTP ${lookup.code}); leaving it")
+                Repair.SETTLED
+            }
+            is ApiClient.LookupResult.Error -> {
+                AppLog.w(TAG, "Lookup for stale serverId $staleServerId failed: ${lookup.message}; will retry")
+                Repair.TRANSIENT
+            }
+        }
+    }
+
+    /**
+     * The server just said it does not know [staleServerId], so a list row still carrying that id
+     * (fetched before the server lost it) is stale too. RecordingsMerger would keep pairing it
+     * with the phone entry and RecordingItem.serverId prefers the row's id, so a tap would open
+     * the dead id until the next list refresh; drop the row now. Best-effort, like the UI refresh.
+     */
+    private fun forgetStaleServerRow(staleServerId: String) {
+        try {
+            RecordingsRepository.remove(staleServerId)
+        } catch (t: Throwable) {
+            AppLog.w(TAG, "could not drop stale server row $staleServerId", t)
+        }
     }
 
     /**
@@ -260,6 +401,15 @@ object TitleSyncManager {
             }
         } catch (e: Exception) {
             false
+        }
+    }
+
+    /** Best-effort like [notifyFilesChanged]: the new id is already persisted. */
+    private fun notifyServerIdRepaired() {
+        try {
+            onServerIdRepaired()
+        } catch (t: Throwable) {
+            AppLog.w(TAG, "marks sync kick after id repair failed", t)
         }
     }
 

@@ -80,6 +80,14 @@ object UploadManager {
     /** Replaceable for unit tests only. */
     internal var deviceLink: DeviceLink = SdkDeviceLink
 
+    /** Seam over ApiClient.renameRecording for the post-upload title push (see [pushPinnedName]). */
+    fun interface TitlePusher {
+        fun rename(serverId: String, title: String): ApiClient.RecordingResult
+    }
+
+    /** Replaceable for unit tests only. */
+    internal var titlePusher: TitlePusher = TitlePusher { id, title -> ApiClient.renameRecording(id, title) }
+
     /** Propagates the new upload badge to lists observing SyncManager.files (test seam). */
     internal var onFilesChanged: () -> Unit = { SyncManager.shared.refreshFilesFromStore() }
 
@@ -256,9 +264,21 @@ object UploadManager {
                     uploaded++
                     notifyFilesChanged()
                     AppLog.i(TAG, "Uploaded sessionId=${rec.sessionId} duplicate=${result.duplicate}")
+                    // The device delete is decided here, straight after the generation check and
+                    // before any further blocking request (the title PATCH below). Should the
+                    // configuration have changed in the few statements since that check, the
+                    // delete is deferred rather than issued or dropped: the flag is retried on a
+                    // same-host token rotation (the upload is still good there) and cleared by
+                    // clearServerState on a host change (the new server never saw the upload).
                     if (RecordingStore.deleteAfterUpload) {
-                        requestDeviceDelete(rec.deviceSN, rec.sessionId)
+                        if (RecordingStore.serverConfigGeneration == configGen) {
+                            requestDeviceDelete(rec.deviceSN, rec.sessionId)
+                        } else if (rec.deviceSN.isNotBlank()) {
+                            RecordingStore.setDeletePendingOnDevice(rec.deviceSN, rec.sessionId, true)
+                            AppLog.w(TAG, "delete-after-upload deferred, server config changed right after the upload (sessionId=${rec.sessionId})")
+                        }
                     }
+                    pushPinnedName(rec.id, result.id, configGen)
                 }
             } catch (e: Exception) {
                 failures++
@@ -268,6 +288,52 @@ object UploadManager {
         _state.value = if (failures == 0) UploadState.Idle
         else UploadState.Failed("$failures upload(s) failed — will retry on the next sync")
         return uploaded to failures
+    }
+
+    /** Rounds of [pushPinnedName] re-sends when the user keeps renaming during the push. */
+    private const val MAX_TITLE_PUSH_ROUNDS = 3
+
+    /**
+     * A recording renamed on the phone BEFORE it was uploaded has no server id at rename time, so
+     * RecordingActions.rename could not PATCH it. Push the pinned name right after the upload
+     * that produced the id. The record is re-read before each send, and again after a successful
+     * one: the list on screen learns the id only after this returns, so a rename typed meanwhile
+     * is stored locally without its own PATCH, and would otherwise leave the server holding the
+     * older name for every other client. Best-effort: the upload is already persisted, and the
+     * phone shows the pinned name regardless (RecordingItem.title), so a failed PATCH is logged
+     * and not retried rather than turning a finished upload into a failure. [configGen] is the
+     * generation the upload was validated under: the id belongs to THAT server, so once the
+     * configuration changes no further round is sent (it would PATCH whatever recording happens
+     * to carry the same id on the new server). Known residual, shared with every ApiClient call
+     * here: the client reads the URL and token when it builds the request, so a switch landing
+     * between this check and that read is not caught; server ids are server-generated UUIDs, so
+     * the same id existing on another server is not a realistic outcome of that window.
+     */
+    private fun pushPinnedName(fileId: String, serverId: String, configGen: Long) {
+        var sent: String? = null
+        repeat(MAX_TITLE_PUSH_ROUNDS) {
+            if (RecordingStore.serverConfigGeneration != configGen) {
+                AppLog.w(TAG, "Title push skipped, server config changed since the upload (serverId=$serverId)")
+                return
+            }
+            val current = RecordingStore.allFiles.firstOrNull { it.id == fileId } ?: return
+            if (!current.nameEditedByUser) return
+            val name = current.name.trim()
+            if (name.isEmpty() || name == sent) return
+            val ok = try {
+                when (val result = titlePusher.rename(serverId, name)) {
+                    is ApiClient.RecordingResult.Ok -> { AppLog.i(TAG, "Pushed manual title after upload (serverId=$serverId)"); true }
+                    is ApiClient.RecordingResult.NotFound -> { AppLog.w(TAG, "Title push: server has no recording $serverId"); false }
+                    is ApiClient.RecordingResult.AuthError -> { AppLog.w(TAG, "Title push rejected (HTTP ${result.code}) for serverId=$serverId"); false }
+                    is ApiClient.RecordingResult.Error -> { AppLog.w(TAG, "Title push failed for serverId=$serverId: ${result.message}"); false }
+                }
+            } catch (t: Throwable) {
+                AppLog.w(TAG, "Title push failed for serverId=$serverId", t)
+                false
+            }
+            if (!ok) return
+            sent = name
+        }
     }
 
     /**

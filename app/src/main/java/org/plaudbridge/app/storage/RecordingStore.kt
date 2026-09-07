@@ -30,6 +30,7 @@ object RecordingStore {
     private const val KEY_CACHED_PLAUD_TOKEN = "cached_plaud_token"
     private const val KEY_CACHED_PLAUD_TOKEN_EXPIRY = "cached_plaud_token_expiry"
     private const val KEY_ADVANCED_SETTINGS_EXPANDED = "advanced_settings_expanded"
+    private const val KEY_HIDDEN_SESSIONS = "hidden_sessions"
     private const val RECORDINGS_FILE = "recordings.json"
 
     private lateinit var appContext: Context
@@ -79,12 +80,18 @@ object RecordingStore {
         lastConnectedDeviceSN = sn
     }
 
-    /** Remove a paired device; if it was active, fall back to the first remaining one. */
+    /**
+     * Remove a paired device; if it was active, fall back to the first remaining one. The
+     * device's delete tombstones go with it: they exist to stop THIS pairing from re-syncing
+     * recordings the user deleted, and a re-pair is a fresh start where whatever is on the
+     * recorder is what the user wants to see.
+     */
     fun removePairedDevice(sn: String) {
         val sns = pairedDeviceSNs.toMutableList().apply { remove(sn) }
         savePairedDeviceSNs(sns)
         savePairedDeviceNames(pairedDeviceNames.toMutableMap().apply { remove(sn) })
         if (lastConnectedDeviceSN == sn) lastConnectedDeviceSN = sns.firstOrNull()
+        clearHiddenSessions(sn)
     }
 
     /** Display name for a paired device SN (falls back to the SN itself). */
@@ -233,6 +240,68 @@ object RecordingStore {
         get() = prefs.getBoolean(KEY_ADVANCED_SETTINGS_EXPANDED, false)
         set(value) = prefs.edit().putBoolean(KEY_ADVANCED_SETTINGS_EXPANDED, value).apply()
 
+    // --- Delete tombstones ---
+
+    /**
+     * A recording the user deleted, by the recorder's own identity for it. Persisted (prefs,
+     * small JSON list) because the recorder still holds the file whenever delete-after-upload
+     * is off: without a tombstone the next device file list would look like a brand-new
+     * session, and the app would download and upload the recording the user just deleted.
+     *
+     * [untilServerSwitch] marks the weaker flavour written by Remove from phone for a legacy
+     * entry whose own identity cannot carry the flag (see RecordingActions.removeFromPhone). It
+     * means "the server keeps the copy", so [clearServerState] drops it along with the
+     * removedFromPhone flags; a Delete tombstone is permanent and always wins over it.
+     */
+    private data class HiddenSession(
+        val deviceSN: String,
+        val sessionId: Long,
+        val untilServerSwitch: Boolean = false
+    )
+
+    private fun loadHiddenSessions(): List<HiddenSession> =
+        prefs.getString(KEY_HIDDEN_SESSIONS, null)?.let {
+            runCatching { gson.fromJson(it, Array<HiddenSession>::class.java).toList() }.getOrNull()
+        } ?: emptyList()
+
+    private fun saveHiddenSessions(value: List<HiddenSession>) =
+        prefs.edit().putString(KEY_HIDDEN_SESSIONS, gson.toJson(value)).apply()
+
+    /** (deviceSN, sessionId) pairs the sync flows must never re-add or re-download. */
+    val hiddenSessions: Set<Pair<String, Long>>
+        get() = synchronized(lock) { loadHiddenSessions().map { it.deviceSN to it.sessionId }.toSet() }
+
+    /**
+     * Suppress this session; idempotent, exact-match keyed (see [matches]). Permanent by default
+     * (the user deleted the recording); [untilServerSwitch] for the Remove from phone flavour.
+     * A permanent request upgrades an existing switch-scoped entry, never the other way round.
+     */
+    fun hideSession(deviceSN: String, sessionId: Long, untilServerSwitch: Boolean = false) {
+        synchronized(lock) {
+            val hidden = loadHiddenSessions()
+            val existing = hidden.find { it.deviceSN == deviceSN && it.sessionId == sessionId }
+            if (existing != null && (!existing.untilServerSwitch || untilServerSwitch)) return
+            saveHiddenSessions(
+                hidden.filterNot { it === existing } + HiddenSession(deviceSN, sessionId, untilServerSwitch)
+            )
+        }
+    }
+
+    fun isHidden(deviceSN: String, sessionId: Long): Boolean =
+        synchronized(lock) { loadHiddenSessions().any { it.deviceSN == deviceSN && it.sessionId == sessionId } }
+
+    /**
+     * Forget the Delete tombstones of one device (unpair). The switch-scoped flavour stays: it
+     * stands in for a removedFromPhone flag, and those flags live on index entries that unpairing
+     * does not touch, so the two must agree or a re-pair would download the removed recording
+     * next to its still-flagged legacy entry. A server switch clears both, see [clearServerState].
+     */
+    fun clearHiddenSessions(deviceSN: String) {
+        synchronized(lock) {
+            saveHiddenSessions(loadHiddenSessions().filterNot { it.deviceSN == deviceSN && !it.untilServerSwitch })
+        }
+    }
+
     // --- Recording Files (JSON persistence) ---
 
     val allFiles: List<RecordingFile>
@@ -240,26 +309,75 @@ object RecordingStore {
             loadFiles().sortedByDescending { it.createdAt }
         }
 
+    /**
+     * Add index entries for sessions not known yet. Deleted sessions ([hideSession]) are
+     * refused here as well as in the sync flows, so no code path can resurrect one by mistake.
+     */
     fun addFiles(files: List<RecordingFile>) {
         synchronized(lock) {
             val existing = loadFiles().toMutableList()
             val existingKeys = existing.map { it.deviceSN to it.sessionId }.toSet()
-            val newFiles = files.filter { (it.deviceSN to it.sessionId) !in existingKeys }
+            val hidden = loadHiddenSessions().map { it.deviceSN to it.sessionId }.toSet()
+            val newFiles = files.filter {
+                val key = it.deviceSN to it.sessionId
+                key !in existingKeys && key !in hidden
+            }
             existing.addAll(newFiles)
             saveFiles(existing)
         }
     }
 
+    /**
+     * The user deleted this recording: drop the index entry and the audio, and tombstone the
+     * session so the sync flows do not bring it back from the recorder (see [HiddenSession]).
+     * A legacy blank-SN entry can only be tombstoned under its blank identity, which the
+     * recorder's real serial never matches; Delete must still work, and guessing the serial from
+     * the connected device is the wildcard this store forbids (see [matches]), so such a
+     * recording may sync once more as a fresh entry. RecordingActions.delete tombstones the
+     * server row's real identity as well whenever one is on screen, which closes the common case.
+     */
     fun deleteFile(file: RecordingFile) {
+        val storedPath: String?
         synchronized(lock) {
             val files = loadFiles().toMutableList()
+            storedPath = files.find { it.id == file.id }?.localPath
             files.removeAll { it.id == file.id }
             saveFiles(files)
+            hideSession(file.deviceSN, file.sessionId)
         }
-        // Delete the local audio file
-        file.localPath?.let { path ->
+        deleteAudio(storedPath, file.localPath)
+    }
+
+    /**
+     * Remove exported audio. Both the path the index holds now and the one the caller's copy of
+     * the record holds are deleted: the UI can be working from a snapshot taken before a
+     * re-export (WiFi) moved the entry to a new file, and deleting only the caller's path would
+     * leave the newer MP3 orphaned in storage.
+     */
+    private fun deleteAudio(vararg paths: String?) {
+        paths.filterNotNull().toSet().forEach { path ->
             File(path).takeIf { it.exists() }?.delete()
         }
+    }
+
+    /**
+     * "Remove from phone": drop the audio but keep the entry, flagged, so the row stays linked
+     * to its server copy and the sync flows know this session is not missing, it is unwanted
+     * here (a plain localPath = null would read as "evicted, download again").
+     */
+    fun removeFromPhone(file: RecordingFile) {
+        var storedPath: String? = null
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.find { it.id == file.id }?.apply {
+                storedPath = this.localPath
+                this.localPath = null
+                this.syncedAt = null
+                this.removedFromPhone = true
+            }
+            saveFiles(files)
+        }
+        deleteAudio(storedPath, file.localPath)
     }
 
     /**
@@ -277,9 +395,67 @@ object RecordingStore {
         }
     }
 
-    fun replaceAllFiles(files: List<RecordingFile>) {
+    /** One session as the recorder lists it (BLE or WiFi file list). */
+    data class ListedSession(val sessionId: Long, val durationSec: Long, val createdAt: Long)
+
+    /** Outcome of [reconcileDeviceList]. */
+    data class DeviceListReconciliation(
+        /** The index as saved. */
+        val all: List<RecordingFile>,
+        /** Listed sessions that need a download (not synced, not suppressed). */
+        val newSessionIds: List<Long>,
+        /** Listed sessions that must not be downloaded: deleted, or removed from the phone. */
+        val suppressedSessionIds: Set<Long>
+    )
+
+    /**
+     * Merge a device file list for [deviceSN] into the index, in one step under the store lock so
+     * a Remove from phone, rename or delete landing while the list is processed cannot be
+     * overwritten by a stale read (both sync paths used to read, compute and replace outside it).
+     *
+     * Rules: entries with audio, and entries flagged removedFromPhone, are kept whatever the
+     * list says (the removed ones would otherwise lose their server link and be re-created as new
+     * below). Listed sessions already synced from THIS device are skipped; composite (SN, session)
+     * matching, so a session id synced from another device is still downloaded, and blank-SN
+     * legacy entries never stand in for a real device's session (that wildcard is exactly how
+     * cross-device suppression happened; a legacy blank record may cost one redundant download).
+     * Sessions the user deleted (tombstoned) or removed from the phone are neither re-added nor
+     * queued: the recorder still lists them whenever delete-after-upload is off. Every other
+     * listed session gets an entry: the existing audio-less one for that (SN, session) when there
+     * is one, so a pinned name, marks and upload state survive an evicted file or a lifted
+     * removal, else a fresh "Untitled Recording". Entries for sessions the recorder no longer
+     * lists are dropped, as before.
+     */
+    fun reconcileDeviceList(deviceSN: String, listed: List<ListedSession>): DeviceListReconciliation {
         synchronized(lock) {
-            saveFiles(files)
+            val index = loadFiles()
+            val kept = index.filter { it.isSynced || it.removedFromPhone }
+            val keptIds = kept.map { it.id }.toHashSet()
+            val reusable = index
+                .filter { it.id !in keptIds && it.deviceSN.isNotBlank() }
+                .associateBy { it.deviceSN to it.sessionId }
+            val hidden = loadHiddenSessions().filter { it.deviceSN == deviceSN }.map { it.sessionId }
+            val removed = index.filter { it.removedFromPhone && it.deviceSN == deviceSN }.map { it.sessionId }
+            val suppressed = (hidden + removed).toSet()
+            fun alreadySynced(sid: Long) = kept.any { it.sessionId == sid && it.deviceSN == deviceSN }
+            val fresh = listed.filter { !alreadySynced(it.sessionId) && it.sessionId !in suppressed }
+            val deviceFiles = fresh.map { s ->
+                reusable[deviceSN to s.sessionId] ?: RecordingFile(
+                    id = UUID.randomUUID().toString(),
+                    sessionId = s.sessionId,
+                    deviceSN = deviceSN,
+                    name = "Untitled Recording",
+                    duration = s.durationSec,
+                    createdAt = s.createdAt,
+                    syncedAt = null,
+                    localPath = null,
+                    summaryText = null,
+                    transcriptJSON = null
+                )
+            }
+            val all = kept + deviceFiles
+            saveFiles(all)
+            return DeviceListReconciliation(all, fresh.map { it.sessionId }, suppressed)
         }
     }
 
@@ -389,15 +565,32 @@ object RecordingStore {
     private fun matches(file: RecordingFile, deviceSN: String, sessionId: Long): Boolean =
         file.sessionId == sessionId && file.deviceSN == deviceSN
 
+    /**
+     * Record a finished download. A download that was already queued when the user chose Remove
+     * from phone (BLE list built earlier, WiFi export in progress) still completes; honouring the
+     * choice means discarding that audio, not attaching it and silently undoing the removal.
+     */
     fun markAsSynced(deviceSN: String, sessionId: Long, localPath: String, duration: Long) {
+        var discard = false
         synchronized(lock) {
             val files = loadFiles().toMutableList()
-            files.find { matches(it, deviceSN, sessionId) }?.apply {
-                this.localPath = localPath
-                this.syncedAt = System.currentTimeMillis()
-                this.duration = duration
+            val file = files.find { matches(it, deviceSN, sessionId) }
+            if (file?.removedFromPhone == true) {
+                discard = true
+            } else {
+                file?.apply {
+                    this.localPath = localPath
+                    this.syncedAt = System.currentTimeMillis()
+                    this.duration = duration
+                }
+                saveFiles(files)
             }
-            saveFiles(files)
+        }
+        if (discard) {
+            org.plaudbridge.app.common.AppLog.i(
+                "RecordingStore", "Discarding downloaded audio for a recording removed from the phone (sessionId=$sessionId)"
+            )
+            File(localPath).takeIf { it.exists() }?.delete()
         }
     }
 
@@ -432,6 +625,10 @@ object RecordingStore {
      * points the app at a DIFFERENT server: the old ids mean nothing there, and re-uploads are
      * deduplicated. The title goes too: it was produced by the old server and the new one will
      * generate its own once the recording is re-uploaded. Manual renames are local and survive.
+     * "Removed from phone" is lifted as well: it meant "the OLD server keeps the copy", and the
+     * new server has none, so the entry goes back to being an ordinary not-yet-downloaded
+     * session that the next sync fetches and uploads like every other recording. Left set, it
+     * would be a row with no audio and no server that nothing could ever repair.
      */
     fun clearServerState() {
         synchronized(lock) {
@@ -443,11 +640,14 @@ object RecordingStore {
                 it.deletePendingOnDevice = false
                 it.transcriptJSON = null
                 it.serverTitle = null
+                it.removedFromPhone = false
                 // The marks themselves are device facts and stay; the NEW server has not seen
                 // them, so they are re-sent with the re-upload.
                 it.marksSynced = false
             }
             saveFiles(files)
+            // Same reasoning as removedFromPhone above; Delete tombstones are permanent.
+            saveHiddenSessions(loadHiddenSessions().filterNot { it.untilServerSwitch })
         }
     }
 
@@ -455,12 +655,15 @@ object RecordingStore {
      * Reconcile the index with the filesystem: a record whose exported audio has vanished is no
      * longer synced — clear localPath/syncedAt so the sync flow re-downloads it while the device
      * copy still exists (recordings previously lived in cacheDir, which Android may evict).
+     * Entries the user removed from the phone are skipped: their audio is absent on purpose,
+     * and a deleted recording has no entry at all, so neither is ever queued for a re-download.
      */
     fun clearMissingLocalFiles() {
         synchronized(lock) {
             val files = loadFiles().toMutableList()
             var changed = false
             files.forEach { f ->
+                if (f.removedFromPhone) return@forEach
                 val path = f.localPath
                 if (path != null && !File(path).exists()) {
                     f.localPath = null
@@ -480,6 +683,48 @@ object RecordingStore {
                 this.serverId = serverId
                 this.uploaded = true
             }
+            saveFiles(files)
+        }
+    }
+
+    /**
+     * Swap in the id the server now holds for this recording (TitleSyncManager's 404 repair).
+     * Unlike [updateServerId] this also forgets that the marks were delivered: they went to the
+     * OLD record, and the rebuilt or re-registered one has never seen them, so they are PATCHed
+     * again. The marks themselves are device facts and stay.
+     */
+    fun replaceServerId(id: String, newServerId: String) {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.find { it.id == id }?.apply {
+                this.serverId = newServerId
+                this.uploaded = true
+                this.marksSynced = false
+            }
+            saveFiles(files)
+        }
+    }
+
+    /**
+     * Forget a server id the server no longer recognises (404 on the transcript AND on the
+     * lookup by device_sn + session_id). Only the id goes: the upload did happen, so the file
+     * must not be queued for another upload on the strength of one 404. Without an id the file
+     * leaves every server-side work list; the detail screen's lookup (or a server switch, which
+     * resets upload state) re-resolves it if the server has it again. Compares against
+     * [staleServerId] so an id resolved concurrently by another path is never wiped. "Removed
+     * from phone" is lifted too, as in [clearServerState]: it meant "the server keeps the copy",
+     * and the server just said it has none, so the entry must not stay a row with neither audio
+     * nor a server recording; the next sync treats it as an ordinary session again. For the same
+     * reason a deferred delete-after-upload is cancelled: it was earned by an upload the server
+     * no longer holds, and running it now could destroy the last copy of the recording.
+     */
+    fun clearStaleServerId(id: String, staleServerId: String) {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            val file = files.find { it.id == id && it.serverId == staleServerId } ?: return
+            file.serverId = null
+            file.removedFromPhone = false
+            file.deletePendingOnDevice = false
             saveFiles(files)
         }
     }
@@ -524,6 +769,8 @@ object RecordingStore {
         synchronized(lock) {
             saveFiles(emptyList())
         }
+        // Includes the delete tombstones (KEY_HIDDEN_SESSIONS): a fresh start must not carry
+        // over a list of recordings to ignore.
         prefs.edit().clear().apply()
         // Delete the audio directory
         File(appContext.filesDir, "audio").takeIf { it.exists() }?.deleteRecursively()

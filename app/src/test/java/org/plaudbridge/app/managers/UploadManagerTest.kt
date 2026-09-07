@@ -50,6 +50,9 @@ class UploadManagerTest {
     private lateinit var fakeLink: FakeDeviceLink
     private val scheduleCalls = AtomicInteger()
     private val uploadsCompletedCalls = AtomicInteger()
+    private val titlePushes = java.util.Collections.synchronizedList(mutableListOf<Pair<String, String>>())
+    @Volatile private var titlePushResult: () -> org.plaudbridge.app.net.ApiClient.RecordingResult =
+        { org.plaudbridge.app.net.ApiClient.RecordingResult.Error("not scripted") }
 
     @Before
     fun setUp() {
@@ -70,6 +73,11 @@ class UploadManagerTest {
         UploadManager.scheduler = { scheduleCalls.incrementAndGet() } // no real WorkManager here
         uploadsCompletedCalls.set(0)
         UploadManager.onUploadsCompleted = { uploadsCompletedCalls.incrementAndGet() } // TitleSyncManager not under test
+        titlePushes.clear()
+        UploadManager.titlePusher = UploadManager.TitlePusher { id, title ->
+            titlePushes.add(id to title)
+            titlePushResult()
+        }
     }
 
     @After
@@ -418,6 +426,94 @@ class UploadManagerTest {
         assertEquals(0, scheduleCalls.get()) // runPass itself never schedules; kick does
         // One title fetch is started per pass that uploaded something, not per file.
         assertEquals(1, uploadsCompletedCalls.get())
+    }
+
+    // MARK: - Manual rename before upload
+
+    private fun renamedServerRecording(id: String, title: String) = org.plaudbridge.app.net.ApiClient.RecordingResult.Ok(
+        org.plaudbridge.app.models.ServerRecording.fromJson(
+            org.json.JSONObject("""{"id":"$id","device_sn":"SN-A","session_id":1,"filename":"$id.mp3","status":"done","title":"$title"}""")
+        )
+    )
+
+    @Test
+    fun renameMadeBeforeUploadIsPushedToTheServerOnceAfterIt() = runBlocking {
+        addSyncedRecording("SN-A", 70)
+        RecordingStore.renameFile(RecordingStore.allFiles.single(), "Walk with Sam")
+        server.enqueue(okUploadResponse("srv-70"))
+        titlePushResult = { renamedServerRecording("srv-70", "Walk with Sam") }
+
+        val result = UploadManager.runPass()
+
+        assertEquals(1, result.uploaded)
+        assertEquals(listOf("srv-70" to "Walk with Sam"), titlePushes.toList())
+        assertEquals(1, server.requestCount) // the PATCH went through the seam, not the wire
+        // Nothing pending: a second pass pushes nothing again.
+        UploadManager.runPass()
+        assertEquals(1, titlePushes.size)
+    }
+
+    @Test
+    fun renameTypedWhileThePushIsInFlightIsSentToo() = runBlocking {
+        addSyncedRecording("SN-A", 73)
+        RecordingStore.renameFile(RecordingStore.allFiles.single(), "First name")
+        server.enqueue(okUploadResponse("srv-73"))
+        titlePushResult = {
+            // The list on screen has not learned the server id yet, so this rename is local only.
+            val file = RecordingStore.allFiles.single()
+            if (file.name == "First name") RecordingStore.renameFile(file, "Second name")
+            renamedServerRecording("srv-73", file.name)
+        }
+
+        UploadManager.runPass()
+
+        assertEquals(listOf("srv-73" to "First name", "srv-73" to "Second name"), titlePushes.toList())
+    }
+
+    @Test
+    fun titlePushStopsOnceTheServerConfigurationChanged() = runBlocking {
+        // The id came from the OLD server; a PATCH with it against the new one could rename an
+        // unrelated recording there. The first round goes out (same generation); the switch that
+        // lands during it must stop the second round even though the name changed again.
+        addSyncedRecording("SN-A", 74)
+        RecordingStore.renameFile(RecordingStore.allFiles.single(), "First name")
+        server.enqueue(okUploadResponse("srv-74"))
+        titlePushResult = {
+            RecordingStore.renameFile(RecordingStore.allFiles.single(), "Second name")
+            RecordingStore.serverAuthToken = "rotated"
+            renamedServerRecording("srv-74", "First name")
+        }
+
+        UploadManager.runPass()
+
+        assertEquals(listOf("srv-74" to "First name"), titlePushes.toList())
+    }
+
+    @Test
+    fun unrenamedUploadPushesNoTitle() = runBlocking {
+        addSyncedRecording("SN-A", 71)
+        server.enqueue(okUploadResponse("srv-71"))
+
+        UploadManager.runPass()
+
+        assertTrue(titlePushes.isEmpty())
+    }
+
+    @Test
+    fun failedTitlePushDoesNotFailTheUpload() = runBlocking {
+        addSyncedRecording("SN-A", 72)
+        RecordingStore.renameFile(RecordingStore.allFiles.single(), "Standup")
+        server.enqueue(okUploadResponse("srv-72"))
+        titlePushResult = { throw IllegalStateException("PATCH exploded") }
+
+        val result = UploadManager.runPass()
+
+        assertEquals(1, result.uploaded)
+        assertEquals(0, result.failed)
+        val stored = RecordingStore.allFiles.single()
+        assertTrue(stored.uploaded)
+        assertEquals("srv-72", stored.serverId)
+        assertEquals("Standup", stored.displayName) // the phone shows the pinned name regardless
     }
 
     @Test

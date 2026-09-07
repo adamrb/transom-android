@@ -13,7 +13,10 @@ interface SyncManagerProtocol {
     fun startSync()
     fun startWiFiTransfer()
     fun stopSync()
+    /** Delete the phone's index entry and audio, and keep the session from re-syncing. */
     fun deleteFile(file: RecordingFile)
+    /** Drop the audio only; the entry stays (flagged) so the session is not downloaded again. */
+    fun removeFromPhone(file: RecordingFile)
     fun renameFile(file: RecordingFile, newName: String)
     fun exportAudio(file: RecordingFile, callback: (Result<File>) -> Unit)
 }

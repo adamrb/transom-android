@@ -1,6 +1,7 @@
 package org.plaudbridge.app.models
 
 import com.google.gson.annotations.SerializedName
+import org.plaudbridge.app.storage.RecordingStore
 import java.util.UUID
 
 data class RecordingFile(
@@ -83,7 +84,18 @@ data class RecordingFile(
      * Gson, see [nameEditedByUser].
      */
     @SerializedName("marksSynced")
-    var marksSynced: Boolean = false
+    var marksSynced: Boolean = false,
+
+    /**
+     * The user chose "Remove from phone": the audio is gone and [localPath] is null, but the
+     * entry stays so the row keeps its server link (serverId, title, transcript) and, above all,
+     * so the sync flows know NOT to download this session again while the recorder still holds
+     * it. Sticky: a download that was already in flight when the user chose this is discarded
+     * on completion ([RecordingStore.markAsSynced]) rather than allowed to undo the choice; only
+     * Delete ends the entry. Primitive default false is safe with Gson, see [nameEditedByUser].
+     */
+    @SerializedName("removedFromPhone")
+    var removedFromPhone: Boolean = false
 ) {
     val isSynced: Boolean
         get() = localPath != null

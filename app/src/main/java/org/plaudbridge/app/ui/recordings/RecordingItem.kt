@@ -36,12 +36,39 @@ data class RecordingItem(
     val hasLocalAudio: Boolean get() = local?.isSynced == true
 
     /**
-     * Server title first: it is the AI title or a rename the user made on any client. Then the
-     * phone's display name (manual rename, then cached AI title, then "Untitled Recording"), and
+     * "Remove from phone" applies: the phone actually holds audio (an entry still waiting for its
+     * download has nothing to remove, and offering it there would only race the download), there
+     * is a server copy for the row to fall back to (without one the action would just be Delete),
+     * and the session has an identity the sync flows can suppress, see [suppressibleIdentity].
+     */
+    val canRemoveFromPhone: Boolean
+        get() = local != null && local.isSynced && !local.removedFromPhone && serverId != null &&
+            suppressibleIdentity != null
+
+    /**
+     * The recorder's (device SN, session id) for this row, from the phone entry or, for a legacy
+     * blank-SN entry, from the server row. Null when neither side knows it: then no marker could
+     * stop the next sync from downloading the recording again, so Remove from phone is refused
+     * (RecordingActions.removeFromPhone) rather than offered and silently undone.
+     */
+    val suppressibleIdentity: Pair<String, Long>?
+        get() {
+            local?.takeIf { it.deviceSN.isNotBlank() }?.let { return it.deviceSN to it.sessionId }
+            val sn = server?.deviceSn?.takeIf { it.isNotBlank() } ?: return null
+            val sid = server?.sessionId ?: return null
+            return sn to sid
+        }
+
+    /**
+     * A name the user typed on this phone wins outright: RecordingFile.nameEditedByUser pins it,
+     * and a server title (AI, or a rename made elsewhere before this one was pushed) must not
+     * undo the user's own choice. Then the server title, the AI title or a rename made on any
+     * client. Then the phone's display name (cached AI title, then "Untitled Recording"), and
      * only for server-only rows without a title the server file name.
      */
     val title: String
-        get() = server?.title?.trim()?.takeIf { it.isNotEmpty() }
+        get() = local?.takeIf { it.nameEditedByUser }?.name?.trim()?.takeIf { it.isNotEmpty() }
+            ?: server?.title?.trim()?.takeIf { it.isNotEmpty() }
             ?: local?.displayName
             ?: server!!.displayTitle
 
@@ -70,6 +97,8 @@ data class RecordingItem(
             }
             val l = local!!
             return when {
+                // Audio dropped on purpose; the row is a link to the server copy, not a download.
+                l.removedFromPhone -> Status.NONE
                 !l.isSynced -> Status.DOWNLOADING
                 !l.uploaded -> Status.UPLOADING
                 // Uploaded but absent from the server list we hold (stale snapshot, or removed

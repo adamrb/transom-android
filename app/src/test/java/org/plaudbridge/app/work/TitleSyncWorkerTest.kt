@@ -99,9 +99,22 @@ class TitleSyncWorkerTest {
     fun notFoundReturnsSuccessSoTheWorkerDoesNotRetryForever() {
         addUploaded(1, "srv-gone")
         response = { ApiClient.TranscriptResult.NotFound }
+        // The server does not know the recording under its device identity either.
+        TitleSyncManager.idLookup = TitleSyncManager.IdLookup { _, _ -> ApiClient.LookupResult.NotFound }
 
         assertEquals(ListenableWorker.Result.success(), runWorker())
-        assertEquals(1, RecordingStore.awaitingTranscript.size) // left for the detail screen's lookup
+        // The stale id was cleared, so the file left the work list instead of 404ing every run.
+        assertEquals(0, RecordingStore.awaitingTranscript.size)
+    }
+
+    @Test
+    fun notFoundWithATransientLookupFailureReturnsRetry() {
+        addUploaded(1, "srv-gone")
+        response = { ApiClient.TranscriptResult.NotFound }
+        TitleSyncManager.idLookup = TitleSyncManager.IdLookup { _, _ -> ApiClient.LookupResult.Error("HTTP 502") }
+
+        assertEquals(ListenableWorker.Result.retry(), runWorker())
+        assertEquals(1, RecordingStore.awaitingTranscript.size) // nothing decided yet
     }
 
     @Test

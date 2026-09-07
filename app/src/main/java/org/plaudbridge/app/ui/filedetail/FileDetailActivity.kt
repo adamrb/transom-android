@@ -853,18 +853,22 @@ class FileDetailActivity : AppCompatActivity() {
         popup.show()
     }
 
-    /** Hide what does not apply: phone-only items without a phone copy, server items without a server copy. */
+    /**
+     * Hide what does not apply: phone actions need audio on the phone (an entry that is still to
+     * be downloaded, or whose audio the user removed, has nothing to export or remove), server
+     * actions need a server copy.
+     */
     @VisibleForTesting
     internal fun applyMenuVisibility(menu: android.view.Menu) {
         val model = currentModel ?: return
-        val hasFile = currentFile != null
+        val hasAudio = currentFile?.isSynced == true
         val hasServer = serverRecordingId != null
-        menu.findItem(R.id.action_export)?.isVisible = hasFile
+        menu.findItem(R.id.action_export)?.isVisible = hasAudio
         menu.findItem(R.id.action_copy_summary)?.isVisible = model.summary != null
         menu.findItem(R.id.action_copy_transcript)?.isVisible = transcriptPlainText != null
         menu.findItem(R.id.action_export_markdown)?.isVisible = transcriptPlainText != null
         menu.findItem(R.id.action_retranscribe)?.isVisible = hasServer
-        menu.findItem(R.id.action_remove_from_phone)?.isVisible = hasFile
+        menu.findItem(R.id.action_remove_from_phone)?.isVisible = currentItem()?.canRemoveFromPhone == true
         menu.findItem(R.id.action_delete)?.isVisible = true
     }
 
@@ -890,7 +894,7 @@ class FileDetailActivity : AppCompatActivity() {
     private fun retranscribeOnServer(serverId: String) {
         binding.generateButton.isEnabled = false
         lifecycleScope.launch {
-            when (val result = serverSource.retranscribe(serverId)) {
+            when (val result = RecordingActions.retranscribe(serverId, serverSource)) {
                 is ApiClient.ActionResult.Ok -> {
                     Toast.makeText(this@FileDetailActivity, R.string.retranscribe_queued, Toast.LENGTH_SHORT).show()
                     loadServerRecording(serverId)
@@ -948,13 +952,14 @@ class FileDetailActivity : AppCompatActivity() {
     }
 
     /**
-     * Drop the phone's copy. With a server copy on screen the page stays open and switches to
-     * the server stream; without one there is nothing left to show.
+     * Drop the phone's audio. The index entry stays (flagged, see RecordingActions) so the page
+     * re-reads it: the audio player and the phone-only menu items go, the server content stays.
+     * Without a server copy on screen there is nothing left to show.
      */
     private fun removeFromPhone(item: RecordingItem) {
-        RecordingActions.removeFromPhone(item, syncManager)
+        if (!RecordingActions.removeFromPhone(item, syncManager)) return
         Toast.makeText(this, R.string.removed_from_phone, Toast.LENGTH_SHORT).show()
-        currentFile = null
+        currentFile = currentFile?.let { findFile(it.id) }
         if (serverRecording != null) render() else finish()
     }
 

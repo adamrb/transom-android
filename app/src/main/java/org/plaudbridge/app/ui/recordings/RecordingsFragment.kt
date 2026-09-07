@@ -269,13 +269,14 @@ class RecordingsFragment : Fragment() {
 
     /**
      * The sheet offers only what applies to this row: Re-transcribe needs a server copy, Remove
-     * from phone needs a phone copy. Rename and Delete always apply and route themselves.
+     * from phone needs audio on the phone plus a server copy to fall back to. Rename and Delete
+     * always apply and route themselves.
      */
     private fun showRowActions(item: RecordingItem) {
         val actions = mutableListOf<Pair<String, () -> Unit>>()
         actions += getString(R.string.rename) to { showRenameDialog(item) }
         if (item.serverId != null) actions += getString(R.string.retranscribe) to { retranscribe(item) }
-        if (item.local != null) actions += getString(R.string.remove_from_phone) to { confirmRemoveFromPhone(item) }
+        if (item.canRemoveFromPhone) actions += getString(R.string.remove_from_phone) to { confirmRemoveFromPhone(item) }
         actions += getString(R.string.delete) to { confirmDelete(item) }
         AlertDialog.Builder(requireContext())
             .setTitle(item.title)
@@ -306,7 +307,7 @@ class RecordingsFragment : Fragment() {
 
     private fun retranscribe(item: RecordingItem) {
         val serverId = item.serverId ?: return
-        runAction(successMessage = getString(R.string.retranscribe_queued)) { serverActions.retranscribe(serverId) }
+        runAction(successMessage = getString(R.string.retranscribe_queued)) { RecordingActions.retranscribe(serverId, serverActions) }
     }
 
     private fun confirmRemoveFromPhone(item: RecordingItem) {
@@ -314,8 +315,7 @@ class RecordingsFragment : Fragment() {
             .setTitle(R.string.remove_from_phone)
             .setMessage(getString(R.string.remove_from_phone_confirm_fmt, item.title))
             .setPositiveButton(R.string.remove_from_phone) { _, _ ->
-                RecordingActions.removeFromPhone(item, syncManager)
-                toast(getString(R.string.removed_from_phone))
+                if (RecordingActions.removeFromPhone(item, syncManager)) toast(getString(R.string.removed_from_phone))
             }
             .setNegativeButton(R.string.cancel, null)
             .show()

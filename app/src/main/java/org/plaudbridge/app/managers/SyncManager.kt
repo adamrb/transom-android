@@ -14,7 +14,6 @@ import com.tinnotech.penblesdk.entity.BleFile
 import org.plaudbridge.app.models.*
 import org.plaudbridge.app.storage.RecordingStore
 import java.io.File
-import java.util.UUID
 
 /**
  * File sync manager, built on the GA facade sdk.PlaudDeviceAgent.
@@ -297,10 +296,10 @@ class SyncManager private constructor() : SyncManagerProtocol {
                     abandonOrphanWiFiSession("file list received after teardown")
                     return
                 }
-                wifiTotal = files.size
                 AppLog.i(TAG, "WiFi file list received: ${files.size} files")
-                registerWifiFiles(files)
-                if (files.isEmpty()) {
+                val toExport = registerWifiFiles(files)
+                wifiTotal = toExport.size
+                if (toExport.isEmpty()) {
                     // Nothing to transfer — let the device close the session itself (device-led).
                     scope.launch { awaitDeviceWiFiClose() }
                 } else {
@@ -314,7 +313,7 @@ class SyncManager private constructor() : SyncManagerProtocol {
                     // decrypt, no container), producing .opus files that can't be played, timed or
                     // transcribed. exportAudioViaWiFi runs the same AudioExporter pipeline as BLE.
                     wifiExportQueue.clear()
-                    wifiExportQueue.addAll(files.map { it.sessionId })
+                    wifiExportQueue.addAll(toExport)
                     exportNextWiFiFile()
                 }
             }
@@ -384,37 +383,22 @@ class SyncManager private constructor() : SyncManagerProtocol {
     }
 
     /**
-     * Merge the WiFi device file list into the store (keeping already-synced local files), so the
-     * incoming files show up and can be marked synced once downloaded. Mirrors handleFileList.
+     * Merge the WiFi device file list into the store (RecordingStore.reconcileDeviceList, the same
+     * rules as handleFileList), so the incoming files show up and can be marked synced once
+     * downloaded. Returns the session ids to export: everything the device listed except sessions
+     * the user deleted (tombstoned) or removed from the phone, which must not come back.
      */
-    private fun registerWifiFiles(files: List<IWifiTransferAgent.WifiFileInfo>) {
-        val localSynced = RecordingStore.allFiles.filter { it.syncedAt != null }
-        // Composite (SN, session) dedupe. Blank-SN legacy entries are deliberately NOT matched:
-        // letting them stand in for this device's sessions is exactly the wildcard that caused
-        // cross-device suppression, so a legacy blank record may cost one redundant re-download.
-        val syncedIds = localSynced
-            .filter { it.deviceSN == wifiDeviceSN }
-            .map { it.sessionId }
-            .toSet()
-        val deviceFiles = files
-            .filter { it.sessionId !in syncedIds }
-            .map { wf ->
-                RecordingFile(
-                    id = UUID.randomUUID().toString(),
-                    sessionId = wf.sessionId,
-                    deviceSN = wifiDeviceSN,
-                    name = "Untitled Recording",
-                    duration = if (wf.duration > 0) wf.duration / 1000L else 0L,
-                    createdAt = if (wf.timestamp > 0) wf.timestamp * 1000 else wf.sessionId * 1000,
-                    syncedAt = null,
-                    localPath = null,
-                    summaryText = null,
-                    transcriptJSON = null
-                )
-            }
-        val all = localSynced + deviceFiles
-        RecordingStore.replaceAllFiles(all)
-        scope.launch { _files.value = all }
+    private fun registerWifiFiles(files: List<IWifiTransferAgent.WifiFileInfo>): List<Long> {
+        val listed = files.map { wf ->
+            RecordingStore.ListedSession(
+                sessionId = wf.sessionId,
+                durationSec = if (wf.duration > 0) wf.duration / 1000L else 0L,
+                createdAt = if (wf.timestamp > 0) wf.timestamp * 1000 else wf.sessionId * 1000
+            )
+        }
+        val reconciled = RecordingStore.reconcileDeviceList(wifiDeviceSN, listed)
+        scope.launch { _files.value = reconciled.all }
+        return files.map { it.sessionId }.filter { it !in reconciled.suppressedSessionIds }
     }
 
     /**
@@ -631,8 +615,14 @@ class SyncManager private constructor() : SyncManagerProtocol {
 
     override fun deleteFile(file: RecordingFile) {
         // Local-only delete (mirrors iOS): the on-device copy is only removed by the sync flows
-        // after a successful download, never from the user-facing delete action.
+        // after a successful download, never from the user-facing delete action. The store
+        // tombstones the session so the copy still on the recorder is not synced back.
         RecordingStore.deleteFile(file)
+        _files.value = RecordingStore.allFiles
+    }
+
+    override fun removeFromPhone(file: RecordingFile) {
+        RecordingStore.removeFromPhone(file)
         _files.value = RecordingStore.allFiles
     }
 
@@ -670,37 +660,21 @@ class SyncManager private constructor() : SyncManagerProtocol {
     ) {
         // This run downloads from exactly one device (all sns entries are the request SN).
         activeSyncSN = sns.firstOrNull() ?: ""
-        val localSynced = RecordingStore.allFiles.filter { it.isSynced }
-        // Composite (SN, session) dedupe: a session id already synced from ANOTHER device must
-        // still be downloaded from this one. Blank-SN legacy entries are their own namespace and
-        // never suppress a real device's session (they may re-download; that is the safe side).
-        fun isAlreadySynced(sid: Long, sn: String) = localSynced.any {
-            it.sessionId == sid && it.deviceSN == sn
-        }
-        val newSessionIds = sessionIds.filterIndexed { i, sid ->
-            !isAlreadySynced(sid, if (i < sns.size) sns[i] else "")
-        }
-
-        val deviceFiles = sessionIds.mapIndexedNotNull { i, sid ->
-            if (isAlreadySynced(sid, if (i < sns.size) sns[i] else "")) return@mapIndexedNotNull null
-            RecordingFile(
-                id = UUID.randomUUID().toString(),
+        // Which sessions are new, kept, reused or suppressed is decided inside the store, under
+        // its lock, see RecordingStore.reconcileDeviceList. The BLE list carries no timestamps:
+        // the session id is the recording's start time in seconds.
+        val listed = sessionIds.mapIndexed { i, sid ->
+            RecordingStore.ListedSession(
                 sessionId = sid,
-                deviceSN = if (i < sns.size) sns[i] else "",
-                name = "Untitled Recording",
-                duration = if (i < durations.size) durations[i] / 1000L else 0L,
-                createdAt = sid * 1000,
-                syncedAt = null,
-                localPath = null,
-                summaryText = null,
-                transcriptJSON = null
+                durationSec = if (i < durations.size) durations[i] / 1000L else 0L,
+                createdAt = sid * 1000
             )
         }
+        val reconciled = RecordingStore.reconcileDeviceList(activeSyncSN, listed)
+        val allFiles = reconciled.all
+        val newSessionIds = reconciled.newSessionIds
 
-        val allFiles = localSynced + deviceFiles
-        RecordingStore.replaceAllFiles(allFiles)
-
-        AppLog.i(TAG, "handleFileList: ${sessionIds.size} on device (${newSessionIds.size} new), ${localSynced.size} local synced")
+        AppLog.i(TAG, "handleFileList: ${sessionIds.size} on device (${newSessionIds.size} new), ${allFiles.size} in index")
 
         scope.launch {
             _files.value = allFiles

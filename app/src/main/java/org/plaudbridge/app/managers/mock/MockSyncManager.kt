@@ -56,6 +56,15 @@ class MockSyncManager : SyncManagerProtocol {
         _files.value = current
     }
 
+    override fun removeFromPhone(file: RecordingFile) {
+        val current = _files.value.toMutableList()
+        val idx = current.indexOfFirst { it.id == file.id }
+        if (idx >= 0) {
+            current[idx] = current[idx].copy(localPath = null, syncedAt = null, removedFromPhone = true)
+            _files.value = current
+        }
+    }
+
     override fun renameFile(file: RecordingFile, name: String) {
         val current = _files.value.toMutableList()
         val idx = current.indexOfFirst { it.id == file.id }
