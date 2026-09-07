@@ -17,6 +17,7 @@ import kotlinx.coroutines.withContext
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.common.AppLog
+import org.plaudbridge.app.common.QrLoginPayload
 import org.plaudbridge.app.common.QrSetupPayload
 import org.plaudbridge.app.databinding.ActivityServerSetupBinding
 import org.plaudbridge.app.net.ApiClient
@@ -55,7 +56,12 @@ class ServerSetupActivity : AppCompatActivity() {
             is QrSetupPayload.Result.Success -> confirmScannedServer(parsed.payload)
             is QrSetupPayload.Result.Failure -> {
                 AppLog.w(TAG, "QR parse failed: ${parsed.error} — ${parsed.reason}")
-                showStatus(getString(R.string.qr_invalid_fmt, parsed.reason), isError = true)
+                // The dashboard's login screen shows a different QR (kind "login") that signs a
+                // browser in; it carries no token, so it cannot set the server up. Say so instead
+                // of the generic "missing auth token".
+                val message = if (QrLoginPayload.isLoginKind(contents)) getString(R.string.qr_setup_got_login_code)
+                else getString(R.string.qr_invalid_fmt, parsed.reason)
+                showStatus(message, isError = true)
             }
         }
     }

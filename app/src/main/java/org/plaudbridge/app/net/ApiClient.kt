@@ -36,6 +36,7 @@ import java.util.concurrent.TimeUnit
  *   GET  /api/v1/recordings/{id}/audio            audio/mpeg with Range support (streamed by ExoPlayer)
  *   GET  /api/v1/vocabulary                       {"entries": [...], "editor_text": "...", "hotwords": "..."}
  *   PUT  /api/v1/vocabulary                       {"entries": [...]} replaces the list -> {"entries": [...]}
+ *   POST /api/v1/login-requests/{id}/approve      {"label": ...} -> {"status":"approved", ...} (web sign-in QR)
  *
  * Security notes:
  * - Redirects are disabled: a redirecting proxy must never turn into a spoofed "success"
@@ -603,5 +604,59 @@ object ApiClient {
         }
     } catch (e: Exception) {
         VocabularyResult.Error(e.message ?: "network error")
+    }
+
+    // MARK: - Web dashboard sign-in (QR approval)
+
+    /** Typed result of the sign-in approval. Never throws once the server is configured. */
+    sealed class ApproveLoginResult {
+        object Ok : ApproveLoginResult()
+        /** 404: the login request expired (3 minutes) or never existed. */
+        object Expired : ApproveLoginResult()
+        /** 409: another approval already consumed this request. */
+        object AlreadyUsed : ApproveLoginResult()
+        data class AuthError(val code: Int) : ApproveLoginResult()
+        data class Error(val message: String) : ApproveLoginResult()
+    }
+
+    /** Longest label the server accepts; longer ones are cut rather than rejected with a 422. */
+    const val LOGIN_LABEL_MAX = 120
+
+    /**
+     * POST /api/v1/login-requests/{id}/approve with {"label": ...}: approve the browser that
+     * displayed the sign-in QR. The server then mints a session token for THAT browser; the
+     * phone's own token travels only in the Authorization header, and only to [baseUrl] (the
+     * configured server), never to the URL inside the QR. [requestId] must already have passed
+     * QrLoginPayload's pattern check; it is re-checked here because it becomes a path segment.
+     */
+    fun approveLogin(requestId: String, label: String?): ApproveLoginResult {
+        if (!org.plaudbridge.app.common.QrLoginPayload.ID_PATTERN.matches(requestId)) {
+            return ApproveLoginResult.Error("malformed login request id")
+        }
+        val body = JSONObject().apply {
+            val trimmed = label?.trim()?.take(LOGIN_LABEL_MAX)
+            if (!trimmed.isNullOrEmpty()) put("label", trimmed)
+        }.toString().toRequestBody(jsonType)
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/login-requests/$requestId/approve")
+            .header("Authorization", authHeader())
+            .post(body)
+            .build()
+        return try {
+            client.newCall(req).execute().use { resp ->
+                when {
+                    resp.isSuccessful -> ApproveLoginResult.Ok
+                    resp.code == 404 -> ApproveLoginResult.Expired
+                    resp.code == 409 -> ApproveLoginResult.AlreadyUsed
+                    resp.code == 401 || resp.code == 403 -> ApproveLoginResult.AuthError(resp.code)
+                    else -> {
+                        AppLog.w(TAG, "approve login failed: HTTP ${resp.code}")
+                        ApproveLoginResult.Error("HTTP ${resp.code}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            ApproveLoginResult.Error(e.message ?: "network error")
+        }
     }
 }

@@ -576,4 +576,94 @@ class ApiClientTest {
         server.enqueue(MockResponse().setResponseCode(403))
         assertEquals(ApiClient.VocabularyResult.AuthError(403), ApiClient.saveVocabulary(emptyList()))
     }
+
+    // MARK: - Web sign-in approval
+
+    private val loginId = "abcDEF123456_-abcDEF123456_-0123"
+
+    @Test
+    fun approveLoginPostsLabelToTheApprovePathWithAuth() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"status":"approved","label":"Web · Pixel","session_id":"s1"}"""))
+        assertEquals(ApiClient.ApproveLoginResult.Ok, ApiClient.approveLogin(loginId, "Web · Pixel"))
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals("/api/v1/login-requests/$loginId/approve", recorded.path)
+        assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+        assertTrue(recorded.getHeader("Content-Type")!!.startsWith("application/json"))
+        assertEquals("""{"label":"Web · Pixel"}""", recorded.body.readUtf8())
+    }
+
+    @Test
+    fun approveLoginOmitsABlankLabelAndCutsALongOne() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"status":"approved"}"""))
+        ApiClient.approveLogin(loginId, "   ")
+        assertEquals("{}", server.takeRequest().body.readUtf8())
+
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"status":"approved"}"""))
+        ApiClient.approveLogin(loginId, "x".repeat(200))
+        assertEquals("""{"label":"${"x".repeat(ApiClient.LOGIN_LABEL_MAX)}"}""", server.takeRequest().body.readUtf8())
+    }
+
+    @Test
+    fun approveLogin404IsExpired() {
+        server.enqueue(MockResponse().setResponseCode(404).setBody("""{"detail":"unknown or expired"}"""))
+        assertEquals(ApiClient.ApproveLoginResult.Expired, ApiClient.approveLogin(loginId, "Web"))
+    }
+
+    @Test
+    fun approveLogin409IsAlreadyUsed() {
+        server.enqueue(MockResponse().setResponseCode(409))
+        assertEquals(ApiClient.ApproveLoginResult.AlreadyUsed, ApiClient.approveLogin(loginId, "Web"))
+    }
+
+    @Test
+    fun approveLogin401And403AreAuthErrors() {
+        server.enqueue(MockResponse().setResponseCode(401))
+        assertEquals(ApiClient.ApproveLoginResult.AuthError(401), ApiClient.approveLogin(loginId, "Web"))
+        server.enqueue(MockResponse().setResponseCode(403))
+        assertEquals(ApiClient.ApproveLoginResult.AuthError(403), ApiClient.approveLogin(loginId, "Web"))
+    }
+
+    @Test
+    fun approveLogin500AndUnreachableAreErrors() {
+        server.enqueue(MockResponse().setResponseCode(500))
+        assertEquals(ApiClient.ApproveLoginResult.Error("HTTP 500"), ApiClient.approveLogin(loginId, "Web"))
+        RecordingStore.serverBaseUrl = "http://127.0.0.1:1" // nothing listens on port 1
+        val result = ApiClient.approveLogin(loginId, "Web")
+        assertTrue(result.toString(), result is ApiClient.ApproveLoginResult.Error)
+        assertTrue((result as ApiClient.ApproveLoginResult.Error).message.isNotBlank())
+    }
+
+    @Test
+    fun approveLoginRedirectIsNotFollowed() {
+        server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", server.url("/elsewhere").toString()))
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"status":"approved"}"""))
+        assertEquals(ApiClient.ApproveLoginResult.Error("HTTP 302"), ApiClient.approveLogin(loginId, "Web"))
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun approveLoginRefusesAMalformedIdWithoutAnyRequest() {
+        // Belt and braces: the payload parser already enforces the pattern, but the id becomes a
+        // path segment, so the client must never build a URL from an unchecked one.
+        assertTrue(ApiClient.approveLogin("../admin", "Web") is ApiClient.ApproveLoginResult.Error)
+        assertTrue(ApiClient.approveLogin("short", "Web") is ApiClient.ApproveLoginResult.Error)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun approveLoginGoesOnlyToTheConfiguredServerNeverToTheCodesUrl() {
+        // A second server stands in for the URL inside a QR code. approveLogin takes only the
+        // request id, so the configured server is the only place the request can go.
+        val elsewhere = MockWebServer().also { it.start() }
+        try {
+            server.enqueue(MockResponse().setResponseCode(200).setBody("""{"status":"approved"}"""))
+            assertEquals(ApiClient.ApproveLoginResult.Ok, ApiClient.approveLogin(loginId, "Web"))
+            assertEquals(1, server.requestCount)
+            assertEquals(0, elsewhere.requestCount)
+            assertEquals("/api/v1/login-requests/$loginId/approve", server.takeRequest().path)
+        } finally {
+            elsewhere.shutdown()
+        }
+    }
 }

@@ -105,6 +105,12 @@ class SettingsFragment : Fragment() {
             startActivity(Intent(requireContext(), org.plaudbridge.app.ui.library.WebDashboardActivity::class.java))
         }
 
+        // Approve the dashboard's login QR with the phone so a computer's browser gets its own
+        // session without the access token ever being typed or pasted there.
+        binding.qrLoginRow.setOnClickListener {
+            startActivity(Intent(requireContext(), QrLoginActivity::class.java))
+        }
+
         // Advanced section: collapsed unless the user opened it before.
         renderAdvancedSection(RecordingStore.advancedSettingsExpanded)
         binding.advancedHeader.setOnClickListener {

@@ -94,6 +94,12 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- Sign in on a computer (Settings): scans the dashboard's login QR. Not exported; the
+             zxing CaptureActivity it launches comes from the library's own manifest. -->
+        <activity
+            android:name=".ui.settings.QrLoginActivity"
+            android:exported="false" />
+
         <!-- Web dashboard (the server's own UI, from Settings; formerly the Library tab) -->
         <activity
             android:name=".ui.library.WebDashboardActivity"

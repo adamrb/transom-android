@@ -194,6 +194,26 @@
     <string name="web_dashboard_subtitle">Automations and the full server view</string>
     <string name="download_use_export">Use the app\'s Export instead</string>
 
+    <!-- Sign in on a computer: approve the web dashboard's login QR with the phone -->
+    <string name="sign_in_on_computer">Sign in on a computer</string>
+    <string name="sign_in_on_computer_subtitle">Scan the code shown on the web dashboard\'s login screen</string>
+    <string name="qr_login_help">Open the web dashboard on your computer. Its login screen shows a QR code. Scan it here and that browser is signed in to your server, without typing the access token.</string>
+    <string name="qr_login_server_fmt">Your server: %1$s</string>
+    <string name="qr_login_scan">Scan sign-in code</string>
+    <string name="qr_login_scan_prompt">Scan the sign-in code from the dashboard</string>
+    <string name="qr_login_not_configured">Set up your server first. Sign-in codes can only be approved for the server this app is connected to.</string>
+    <string name="qr_login_invalid_fmt">Code not recognized: %1$s</string>
+    <string name="qr_login_got_setup_code">This is a server setup code, not a sign-in code. To change servers, use Your server above.</string>
+    <string name="qr_login_wrong_server_fmt">This code is for a different server (%1$s). Only codes from your server (%2$s) can be approved.</string>
+    <string name="qr_login_confirm_title">Sign in on this computer?</string>
+    <string name="qr_login_confirm_fmt">It will get access to your recordings on %1$s.</string>
+    <string name="sign_in">Sign in</string>
+    <string name="qr_login_approving">Signing in…</string>
+    <string name="qr_login_success">Signed in. The computer will open the dashboard in a moment.</string>
+    <string name="qr_login_expired">That code expired. Reload the dashboard page and scan again.</string>
+    <string name="qr_login_used">That code was already used.</string>
+    <string name="qr_setup_got_login_code">This is a sign-in code for the web dashboard, not a setup code. Finish connecting your server, then use Settings, Sign in on a computer.</string>
+
     <!-- Custom vocabulary (names and terms the server's transcriber should get right) -->
     <string name="custom_vocabulary">Custom vocabulary</string>
     <string name="custom_vocabulary_subtitle">Names and terms the transcriber should get right</string>
