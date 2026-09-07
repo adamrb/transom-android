@@ -101,6 +101,10 @@
     <string name="rename">Rename</string>
     <string name="copy_summary">Copy Summary</string>
     <string name="copy_transcript">Copy Transcript</string>
+    <string name="export_markdown">Export Markdown</string>
+    <string name="action_copy_transcript">Copy transcript</string>
+    <string name="action_export_markdown">Export markdown</string>
+    <string name="transcript_copied">Transcript copied</string>
     <string name="delete_recording">Remove Downloaded Copy</string>
     <string name="confirm_delete">Are you sure you want to remove this recording\'s downloaded copy from this phone?</string>
     <string name="delete">Delete</string>

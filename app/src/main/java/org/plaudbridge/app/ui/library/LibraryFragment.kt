@@ -45,6 +45,10 @@ import java.io.ByteArrayInputStream
  * handled by re-checking the stored config on every (re)entry to the tab; when the HOST changes
  * (or after unpair/clearAll, via the persisted [RecordingStore.libraryWebViewHost]), all WebView
  * storage is wiped so the old server's token/cookies never leak to the new one.
+ *
+ * Native hooks: `window.PlaudBridgeApp` ([PlaudBridgeJsInterface]) lets the dashboard copy text
+ * to the clipboard and hand a markdown export to the share sheet, two things a WebView cannot do
+ * on its own. The dashboard feature-detects it and falls back to browser behavior when absent.
  */
 class LibraryFragment : Fragment() {
 
@@ -88,6 +92,17 @@ class LibraryFragment : Fragment() {
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         }
         binding.webView.webViewClient = LibraryWebViewClient()
+        // window.PlaudBridgeApp: copyText / shareMarkdown for the dashboard's export buttons.
+        // Safe to expose because the page is origin-locked and the interface only ever acts on
+        // data the page hands it (see PlaudBridgeJsInterface for the full reasoning).
+        binding.webView.addJavascriptInterface(
+            PlaudBridgeJsInterface(
+                appContext = requireContext().applicationContext,
+                pageIsTrusted = { _binding != null && originPolicy.allows(binding.webView.url) },
+                startActivity = { intent -> if (isAdded) startActivity(intent) }
+            ),
+            PlaudBridgeJsInterface.JS_NAME
+        )
 
         binding.swipeRefresh.setOnRefreshListener {
             if (binding.errorView.visibility == View.VISIBLE) {

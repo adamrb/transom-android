@@ -22,6 +22,9 @@ import kotlinx.coroutines.launch
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.databinding.ActivityFileDetailBinding
+import org.plaudbridge.app.export.ExportFileName
+import org.plaudbridge.app.export.TranscriptMarkdown
+import org.plaudbridge.app.export.TranscriptShare
 import org.plaudbridge.app.models.RecordingFile
 import java.io.File
 import java.text.SimpleDateFormat
@@ -50,6 +53,8 @@ class FileDetailActivity : AppCompatActivity() {
 
         binding.backButton.setOnClickListener { finish() }
         binding.moreButton.setOnClickListener { showMoreMenu(it) }
+        binding.copyTranscriptButton.setOnClickListener { copyTranscript() }
+        binding.exportMarkdownButton.setOnClickListener { currentFile?.let { f -> exportMarkdown(f) } }
         setupAudioPlayerControls()
 
         val fileId = intent.getStringExtra("file_id") ?: run { finish(); return }
@@ -127,6 +132,7 @@ class FileDetailActivity : AppCompatActivity() {
 
         // Transcript: parsed segments from the bridge server, or the centered empty state
         transcriptPlainText = file.transcriptJSON?.let { parseTranscript(it) }
+        binding.transcriptActions.visibility = if (transcriptPlainText != null) View.VISIBLE else View.GONE
         if (transcriptPlainText != null) {
             binding.transcriptText.text = transcriptPlainText
             binding.transcriptText.visibility = View.VISIBLE
@@ -480,6 +486,7 @@ class FileDetailActivity : AppCompatActivity() {
         // Hide options that do not apply (Export Audio stays visible like iOS; failure alerts)
         popup.menu.findItem(R.id.action_copy_summary)?.isVisible = file.summaryText != null
         popup.menu.findItem(R.id.action_copy_transcript)?.isVisible = transcriptPlainText != null
+        popup.menu.findItem(R.id.action_export_markdown)?.isVisible = transcriptPlainText != null
 
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
@@ -497,6 +504,10 @@ class FileDetailActivity : AppCompatActivity() {
                 }
                 R.id.action_copy_transcript -> {
                     copyTranscript()
+                    true
+                }
+                R.id.action_export_markdown -> {
+                    exportMarkdown(file)
                     true
                 }
                 R.id.action_delete -> {
@@ -563,10 +574,52 @@ class FileDetailActivity : AppCompatActivity() {
         clipboard.setPrimaryClip(ClipData.newPlainText("Summary", file.summaryText))
     }
 
+    /** Copies the transcript as displayed (speaker/time paragraphs) and confirms with a toast. */
     private fun copyTranscript() {
         val text = transcriptPlainText ?: return
-        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("Transcript", text))
+        TranscriptShare.copyToClipboard(this, text)
+    }
+
+    // MARK: - Markdown export
+
+    /**
+     * Export the transcript as markdown via the share sheet. The body is the server's flat
+     * `text` field (already "Speaker N: ..." when diarized) so the file matches the server's
+     * own export byte for byte; the on-screen paragraph rendering is only the fallback for
+     * legacy transcript shapes that carry no `text`.
+     */
+    private fun exportMarkdown(file: RecordingFile) {
+        val json = file.transcriptJSON ?: return
+        val (text, summary) = transcriptExportFields(json)
+        val body = text ?: transcriptPlainText ?: return
+        val markdown = TranscriptMarkdown.build(
+            title = file.displayName,
+            recordedAtMillis = file.createdAt,
+            durationSeconds = file.duration,
+            transcript = body,
+            summary = summary ?: file.summaryText
+        )
+        try {
+            TranscriptShare.share(this, ExportFileName.sanitize(file.displayName), file.displayName, markdown)
+        } catch (e: Exception) {
+            org.plaudbridge.app.common.AppLog.w("FileDetail", "markdown export failed", e)
+            AlertDialog.Builder(this)
+                .setTitle("Export Failed")
+                .setMessage(e.message ?: "Could not export this transcript.")
+                .setPositiveButton(android.R.string.ok, null)
+                .show()
+        }
+    }
+
+    /** (`text`, `summary`) from the server transcript object; both null for non-object shapes. */
+    private fun transcriptExportFields(json: String): Pair<String?, String?> = try {
+        val obj = org.json.JSONObject(json)
+        Pair(
+            obj.optString("text").takeIf { it.isNotBlank() },
+            obj.optString("summary").takeIf { it.isNotBlank() }
+        )
+    } catch (e: Exception) {
+        Pair(null, null)
     }
 
     private fun showDeleteConfirmation(file: RecordingFile) {

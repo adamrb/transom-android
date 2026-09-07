@@ -1,0 +1,117 @@
+package org.plaudbridge.app.export
+
+import java.math.BigDecimal
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
+
+/**
+ * Markdown export of a transcript, shared layout with the server's own export.
+ *
+ * The server writes the identical document for its "Export" button, so a file produced here and
+ * one downloaded from the dashboard are interchangeable (same front matter keys, same headings,
+ * same blank-line rhythm, single trailing newline). Keep any change here in lockstep with the
+ * server. Pure Kotlin (no android.*) so the layout is unit-testable byte for byte.
+ *
+ * ```
+ * ---
+ * title: "<title, JSON-string-quoted>"
+ * recorded: "<ISO-8601 UTC, second precision>"
+ * duration_s: "<seconds, integer or decimal>"
+ * source: plaud-bridge
+ * ---
+ * # <title>
+ *
+ * ## Summary          (block omitted entirely when there is no summary)
+ *
+ * <summary>
+ *
+ * ## Transcript
+ *
+ * <transcript text>
+ * ```
+ */
+object TranscriptMarkdown {
+
+    /**
+     * @param title the recording's display name (manual rename > AI title > stored name)
+     * @param recordedAtMillis recording start, epoch millis
+     * @param durationSeconds recording length; whole values print without a fraction
+     * @param transcript the transcript body ("Speaker 1: ..." lines when diarized)
+     * @param summary AI summary, or null/blank to omit the Summary block
+     */
+    fun build(
+        title: String,
+        recordedAtMillis: Long,
+        durationSeconds: Double,
+        transcript: String,
+        summary: String? = null
+    ): String = buildString {
+        append("---\n")
+        append("title: ").append(quote(title)).append('\n')
+        append("recorded: \"").append(isoUtc(recordedAtMillis)).append("\"\n")
+        append("duration_s: \"").append(formatDuration(durationSeconds)).append("\"\n")
+        append("source: plaud-bridge\n")
+        append("---\n")
+        append("# ").append(title).append('\n')
+        append('\n')
+        val trimmedSummary = summary?.trim()
+        if (!trimmedSummary.isNullOrEmpty()) {
+            append("## Summary\n")
+            append('\n')
+            append(trimmedSummary).append('\n')
+            append('\n')
+        }
+        append("## Transcript\n")
+        append('\n')
+        // Trim so the document ends with exactly one newline regardless of the stored text.
+        append(transcript.trim()).append('\n')
+    }
+
+    /** Convenience for the app's Long duration field. */
+    fun build(
+        title: String,
+        recordedAtMillis: Long,
+        durationSeconds: Long,
+        transcript: String,
+        summary: String? = null
+    ): String = build(title, recordedAtMillis, durationSeconds.toDouble(), transcript, summary)
+
+    /**
+     * JSON string literal (RFC 8259): backslash, double quote and control characters escaped,
+     * everything else verbatim. YAML accepts JSON double-quoted scalars, which is why the front
+     * matter can be parsed by either a YAML or a JSON-ish reader on the server.
+     */
+    fun quote(s: String): String = buildString(s.length + 2) {
+        append('"')
+        for (ch in s) {
+            when (ch) {
+                '"' -> append("\\\"")
+                '\\' -> append("\\\\")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                '\b' -> append("\\b")
+                '\u000C' -> append("\\f")
+                else -> if (ch < ' ') append(String.format("\\u%04x", ch.code)) else append(ch)
+            }
+        }
+        append('"')
+    }
+
+    /** "123" for whole seconds, "12.5" otherwise (no trailing zeros, never scientific notation). */
+    fun formatDuration(seconds: Double): String {
+        if (seconds.isNaN() || seconds.isInfinite()) return "0"
+        val whole = seconds.toLong()
+        if (whole.toDouble() == seconds) return whole.toString()
+        return BigDecimal(seconds.toString()).stripTrailingZeros().toPlainString()
+    }
+
+    /** 2026-09-07T05:27:31Z: second precision, UTC, matching the server's timestamps. */
+    fun isoUtc(epochMillis: Long): String {
+        val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+        fmt.timeZone = TimeZone.getTimeZone("UTC")
+        return fmt.format(Date(epochMillis))
+    }
+}

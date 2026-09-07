@@ -118,6 +118,45 @@
                 android:layout_height="1dp"
                 android:background="@color/separator" />
 
+            <!-- Transcript actions (only when a transcript exists): pill buttons styled like the
+                 Device panel's Disconnect/Unpair pills -->
+            <LinearLayout
+                android:id="@+id/transcriptActions"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/copyTranscriptButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_pill_outline_gray"
+                    android:fontFamily="sans-serif"
+                    android:gravity="center"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:text="@string/action_copy_transcript"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/exportMarkdownButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_pill_outline_gray"
+                    android:fontFamily="sans-serif"
+                    android:gravity="center"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:text="@string/action_export_markdown"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
             <!-- Summary block (only when a summary exists) -->
             <TextView
                 android:id="@+id/summaryHeader"

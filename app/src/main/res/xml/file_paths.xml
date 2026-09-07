@@ -2,5 +2,8 @@
 <paths>
     <!-- Encrypted .plaud log packages are written to cacheDir by the SDK exporter -->
     <cache-path name="cache" path="." />
+    <!-- Markdown transcript exports (TranscriptShare); listed explicitly so the shared URI names
+         the directory rather than the whole cache root -->
+    <cache-path name="exports" path="exports/" />
     <files-path name="files" path="." />
 </paths>
