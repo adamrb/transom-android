@@ -487,4 +487,93 @@ class ApiClientTest {
     fun recordingAudioUrlIsUnderTheApi() {
         assertEquals(RecordingStore.serverBaseUrl + "/api/v1/recordings/rec-1/audio", ApiClient.recordingAudioUrl("rec-1"))
     }
+
+    // MARK: - Custom vocabulary
+
+    private val vocabularyJson = """{"entries":[
+        {"term":"Plaud Bridge","aliases":["Plogged Bridge","Plod Bridge"],"source":"manual"},
+        {"term":"Morgan","aliases":[],"source":"obsidian"}],
+        "editor_text":"Morgan\nPlaud Bridge = Plogged Bridge, Plod Bridge","hotwords":"Plaud Bridge, Morgan"}"""
+
+    @Test
+    fun fetchVocabularyGetsEntriesAndEditorText() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(vocabularyJson))
+        val result = ApiClient.fetchVocabulary()
+        assertTrue(result.toString(), result is ApiClient.VocabularyResult.Ok)
+        val ok = result as ApiClient.VocabularyResult.Ok
+        assertEquals(
+            listOf(
+                org.plaudbridge.app.models.VocabEntry("Plaud Bridge", listOf("Plogged Bridge", "Plod Bridge"), "manual"),
+                org.plaudbridge.app.models.VocabEntry("Morgan", emptyList(), "obsidian")
+            ),
+            ok.entries
+        )
+        assertEquals("Morgan\nPlaud Bridge = Plogged Bridge, Plod Bridge", ok.editorText)
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals("/api/v1/vocabulary", recorded.path)
+        assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+    }
+
+    @Test
+    fun fetchVocabulary404IsUnsupported() {
+        server.enqueue(MockResponse().setResponseCode(404).setBody("""{"detail":"Not Found"}"""))
+        assertEquals(ApiClient.VocabularyResult.Unsupported, ApiClient.fetchVocabulary())
+    }
+
+    @Test
+    fun fetchVocabulary401IsAuthError() {
+        server.enqueue(MockResponse().setResponseCode(401))
+        assertEquals(ApiClient.VocabularyResult.AuthError(401), ApiClient.fetchVocabulary())
+    }
+
+    @Test
+    fun fetchVocabularyGarbageIsError() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("<html>login</html>"))
+        assertTrue(ApiClient.fetchVocabulary() is ApiClient.VocabularyResult.Error)
+    }
+
+    @Test
+    fun saveVocabularyPutsEntriesAndRendersEditorTextLocally() {
+        // The PUT response has no editor_text; the client renders the kept entries itself.
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"entries":[{"term":"Plaud Bridge","aliases":["Plogged Bridge"],"source":"manual"},
+                {"term":"Morgan","aliases":[],"source":"obsidian"}]}"""
+            )
+        )
+        val result = ApiClient.saveVocabulary(
+            listOf(
+                org.plaudbridge.app.models.VocabEntry("Plaud Bridge", listOf("Plogged Bridge"), "manual"),
+                org.plaudbridge.app.models.VocabEntry("Morgan", emptyList(), "obsidian")
+            )
+        )
+        assertTrue(result.toString(), result is ApiClient.VocabularyResult.Ok)
+        val ok = result as ApiClient.VocabularyResult.Ok
+        assertEquals(2, ok.entries.size)
+        assertEquals("Morgan\nPlaud Bridge = Plogged Bridge", ok.editorText)
+        val recorded = server.takeRequest()
+        assertEquals("PUT", recorded.method)
+        assertEquals("/api/v1/vocabulary", recorded.path)
+        assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+        assertEquals(
+            """{"entries":[{"term":"Plaud Bridge","aliases":["Plogged Bridge"],"source":"manual"},""" +
+                """{"term":"Morgan","aliases":[],"source":"obsidian"}]}""",
+            recorded.body.readUtf8()
+        )
+    }
+
+    @Test
+    fun saveVocabulary422IsError() {
+        server.enqueue(MockResponse().setResponseCode(422).setBody("""{"detail":[{"msg":"too long"}]}"""))
+        val result = ApiClient.saveVocabulary(listOf(org.plaudbridge.app.models.VocabEntry("x".repeat(80))))
+        assertTrue(result is ApiClient.VocabularyResult.Error)
+        assertTrue((result as ApiClient.VocabularyResult.Error).message.contains("422"))
+    }
+
+    @Test
+    fun saveVocabulary403IsAuthError() {
+        server.enqueue(MockResponse().setResponseCode(403))
+        assertEquals(ApiClient.VocabularyResult.AuthError(403), ApiClient.saveVocabulary(emptyList()))
+    }
 }

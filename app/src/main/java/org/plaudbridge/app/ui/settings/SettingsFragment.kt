@@ -92,6 +92,12 @@ class SettingsFragment : Fragment() {
         renderServerCard()
         binding.editServerButton.setOnClickListener { showEditServerDialog() }
 
+        // Names and terms the server's transcriber keeps mishearing; edited natively because
+        // a phone keyboard in the dashboard's textarea inside a WebView is a poor experience.
+        binding.vocabularyRow.setOnClickListener {
+            startActivity(Intent(requireContext(), VocabularyActivity::class.java))
+        }
+
         // The server's own web UI, for the Automations editor and anything else the native
         // screens do not cover. Lives here rather than in a tab so the Library can stay native.
         binding.webDashboardRow.setOnClickListener {

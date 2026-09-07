@@ -202,6 +202,25 @@
     <string name="web_dashboard_subtitle">Automations, routes and the full server view</string>
     <string name="download_use_export">Use the app\'s Export instead</string>
 
+    <!-- Custom vocabulary (names and terms the server's transcriber should get right) -->
+    <string name="custom_vocabulary">Custom vocabulary</string>
+    <string name="custom_vocabulary_subtitle">Names and terms the transcriber should get right</string>
+    <string name="vocabulary_help">One term per line. Add the mis-hearings after an equals sign to have them corrected: Plaud Bridge = Plogged Bridge</string>
+    <string name="vocabulary_hint">Plaud Bridge = Plogged Bridge, Plod Bridge</string>
+    <string name="save">Save</string>
+    <string name="vocabulary_loading">Loading…</string>
+    <string name="vocabulary_saving">Saving…</string>
+    <string name="vocabulary_empty">No custom vocabulary yet.</string>
+    <plurals name="vocabulary_terms">
+        <item quantity="one">%d term</item>
+        <item quantity="other">%d terms</item>
+    </plurals>
+    <string name="vocabulary_status_fmt">%1$s · %2$d with corrections</string>
+    <string name="vocabulary_saved">Vocabulary saved. Applies to new transcriptions.</string>
+    <string name="vocabulary_unsupported">This server does not support vocabulary yet. Update the server.</string>
+    <string name="vocabulary_load_failed_fmt">Could not load vocabulary: %1$s</string>
+    <string name="vocabulary_save_failed_fmt">Could not save vocabulary: %1$s</string>
+
     <!-- App update (APK hosted on the bridge server) -->
     <string name="check_updates">Check</string>
     <string name="update_checking">Checking your server…</string>

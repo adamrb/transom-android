@@ -11,6 +11,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.plaudbridge.app.common.AppLog
 import org.plaudbridge.app.models.ServerRecording
+import org.plaudbridge.app.models.VocabEntry
+import org.plaudbridge.app.models.VocabularyEditorText
 import org.plaudbridge.app.storage.RecordingStore
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -32,6 +34,8 @@ import java.util.concurrent.TimeUnit
  *   POST /api/v1/recordings/{id}/retranscribe     {"id", "status": "pending"}
  *   DELETE /api/v1/recordings/{id}                204
  *   GET  /api/v1/recordings/{id}/audio            audio/mpeg with Range support (streamed by ExoPlayer)
+ *   GET  /api/v1/vocabulary                       {"entries": [...], "editor_text": "...", "hotwords": "..."}
+ *   PUT  /api/v1/vocabulary                       {"entries": [...]} replaces the list -> {"entries": [...]}
  *
  * Security notes:
  * - Redirects are disabled: a redirecting proxy must never turn into a spoofed "success"
@@ -532,5 +536,72 @@ object ApiClient {
         }
     } catch (e: Exception) {
         ActionResult.Error(e.message ?: "network error")
+    }
+
+    // MARK: - Custom vocabulary
+
+    /** Typed result of the vocabulary reads and writes. Never throws once the server is configured. */
+    sealed class VocabularyResult {
+        /** [editorText] is the server's rendering of [entries] in the editor format. */
+        data class Ok(val entries: List<VocabEntry>, val editorText: String) : VocabularyResult()
+        /** 404: the server predates the vocabulary feature (the dashboard shows the same hint). */
+        object Unsupported : VocabularyResult()
+        data class AuthError(val code: Int) : VocabularyResult()
+        data class Error(val message: String) : VocabularyResult()
+    }
+
+    /** GET /api/v1/vocabulary. */
+    fun fetchVocabulary(): VocabularyResult {
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/vocabulary")
+            .header("Authorization", authHeader())
+            .get()
+            .build()
+        return executeForVocabulary(req, "fetch vocabulary")
+    }
+
+    /**
+     * PUT /api/v1/vocabulary: REPLACE the whole list with [entries]. The server normalizes
+     * (trims, dedupes case-insensitively, drops self-aliases) and answers with what it kept, so
+     * callers should render the response rather than what they sent. 422 (a term over 64
+     * characters, more than 20 aliases, more than 500 entries) surfaces as [VocabularyResult.Error].
+     */
+    fun saveVocabulary(entries: List<VocabEntry>): VocabularyResult {
+        val body = JSONObject().put("entries", VocabEntry.listToJson(entries)).toString().toRequestBody(jsonType)
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/vocabulary")
+            .header("Authorization", authHeader())
+            .put(body)
+            .build()
+        return executeForVocabulary(req, "save vocabulary")
+    }
+
+    private fun executeForVocabulary(req: Request, what: String): VocabularyResult = try {
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string() ?: ""
+            when {
+                resp.code == 404 -> VocabularyResult.Unsupported
+                resp.code == 401 || resp.code == 403 -> VocabularyResult.AuthError(resp.code)
+                resp.code == 422 -> VocabularyResult.Error("rejected by the server (422)")
+                !resp.isSuccessful -> {
+                    AppLog.w(TAG, "$what failed: HTTP ${resp.code} (${text.length} bytes)")
+                    VocabularyResult.Error("HTTP ${resp.code}")
+                }
+                else -> try {
+                    val json = JSONObject(text)
+                    val entries = VocabEntry.listFromJson(json.optJSONArray("entries"))
+                    // The PUT response carries no editor_text; render it locally the way the
+                    // server would so both results look the same to the editor.
+                    val editorText =
+                        if (json.has("editor_text") && !json.isNull("editor_text")) json.getString("editor_text")
+                        else VocabularyEditorText.format(entries)
+                    VocabularyResult.Ok(entries, editorText)
+                } catch (e: Exception) {
+                    VocabularyResult.Error("$what response is not valid JSON")
+                }
+            }
+        }
+    } catch (e: Exception) {
+        VocabularyResult.Error(e.message ?: "network error")
     }
 }

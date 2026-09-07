@@ -38,10 +38,50 @@ class TranscriptMarkdownTest {
             |
             |## Transcript
             |
-            |Speaker 1: Let's start.
-            |Speaker 2: Sure.
+            |**Speaker 1:** Let's start.
+            |
+            |**Speaker 2:** Sure.
             |""".trimMargin()
         assertEquals(expected, md)
+    }
+
+    @Test
+    fun transcriptBodyMatchesServerTranscriptBodyMarkdown() {
+        // Reference output of app/export.py transcript_body_markdown for this input.
+        assertEquals(
+            "**Speaker 1:** hi there\n\n**Speaker 2:** hello",
+            TranscriptMarkdown.transcriptBody("Speaker 1: hi there\nSpeaker 2: hello")
+        )
+        // Blank lines and surrounding whitespace are dropped, not doubled.
+        assertEquals(
+            "**Speaker 1:** a\n\n**Speaker 2:** b",
+            TranscriptMarkdown.transcriptBody("\n Speaker 1: a \n\n\nSpeaker 2: b\n")
+        )
+        // Lines without a speaker label (plain prose, lowercase start, no space after colon)
+        // pass through unchanged.
+        assertEquals("just prose here", TranscriptMarkdown.transcriptBody("just prose here"))
+        assertEquals("note: keep this", TranscriptMarkdown.transcriptBody("note: keep this"))
+        assertEquals("Time:12:30 lunch", TranscriptMarkdown.transcriptBody("Time:12:30 lunch"))
+        // Named speakers, including non-ASCII letters (Python's \w is Unicode-aware).
+        assertEquals("**José:** sí", TranscriptMarkdown.transcriptBody("José: sí"))
+        assertEquals("**Dr. O'Neil-Smith:** ok", TranscriptMarkdown.transcriptBody("Dr. O'Neil-Smith: ok"))
+        // The label is capped at 41 characters; longer runs are not a speaker label.
+        val long = "A".repeat(45) + ": text"
+        assertEquals(long, TranscriptMarkdown.transcriptBody(long))
+        // Lazy label: the FIRST colon followed by whitespace ends the label.
+        assertEquals("**Speaker 1:** said: no", TranscriptMarkdown.transcriptBody("Speaker 1: said: no"))
+        assertEquals("", TranscriptMarkdown.transcriptBody("  \n \n"))
+    }
+
+    @Test
+    fun plainParagraphsSeparateTurnsWithOneBlankLine() {
+        assertEquals(
+            "Speaker 1: hi there\n\nSpeaker 2: hello",
+            TranscriptMarkdown.plainParagraphs("Speaker 1: hi there\nSpeaker 2: hello\n")
+        )
+        // Already-doubled newlines do not become quadruple ones.
+        assertEquals("a\n\nb", TranscriptMarkdown.plainParagraphs("a\n\nb"))
+        assertEquals("", TranscriptMarkdown.plainParagraphs(""))
     }
 
     @Test
@@ -79,7 +119,7 @@ class TranscriptMarkdownTest {
             |
             |## Transcript
             |
-            |Speaker 1: Let's start.
+            |**Speaker 1:** Let's start.
             |""".trimMargin()
         assertEquals(expected, md)
     }
@@ -105,7 +145,7 @@ class TranscriptMarkdownTest {
             |
             |## Transcript
             |
-            |Speaker 1: Hi.
+            |**Speaker 1:** Hi.
             |""".trimMargin()
         assertEquals(expected, md)
     }
@@ -146,7 +186,7 @@ class TranscriptMarkdownTest {
             |
             |## Transcript
             |
-            |Speaker 1: Hi.
+            |**Speaker 1:** Hi.
             |""".trimMargin()
         assertEquals(expected, md)
         assertFalse(md.contains("## Summary"))

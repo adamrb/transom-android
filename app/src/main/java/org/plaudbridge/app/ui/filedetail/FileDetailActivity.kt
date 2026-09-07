@@ -153,8 +153,11 @@ class FileDetailActivity : AppCompatActivity() {
         bindFile(file)
     }
 
-    /** Plain-text transcript for the "Copy Transcript" menu action (set when parsing succeeds). */
+    /** On-screen transcript ("Speaker N · HH:MM:SS" blocks); null when nothing parseable. */
     private var transcriptPlainText: String? = null
+
+    /** What Copy transcript puts on the clipboard: speaker paragraphs, no timestamps. */
+    private var transcriptCopyText: String? = null
 
     private fun bindFile(file: RecordingFile) {
         val model = DetailModel(
@@ -225,6 +228,7 @@ class FileDetailActivity : AppCompatActivity() {
 
         // Transcript: parsed segments from the bridge server, or (caller-defined) empty state
         transcriptPlainText = model.transcriptJSON?.let { parseTranscript(it) }
+        transcriptCopyText = model.transcriptJSON?.let { copyTextFor(it) } ?: transcriptPlainText
         binding.transcriptActions.visibility = if (transcriptPlainText != null) View.VISIBLE else View.GONE
         if (transcriptPlainText != null) {
             binding.transcriptText.text = transcriptPlainText
@@ -550,7 +554,28 @@ class FileDetailActivity : AppCompatActivity() {
      * parseable so the caller can fall back to the empty state.
      */
     private fun parseTranscript(json: String): String? {
-        val segments = try {
+        val segments = parseSegments(json) ?: return null
+        if (segments.isEmpty()) {
+            // Segments empty (or absent) but the server may still have produced flat text.
+            return try {
+                org.json.JSONObject(json).optString("text").takeIf { it.isNotBlank() }
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        return segments.joinToString("\n\n") { (speakerLabel, startMs, text) ->
+            "$speakerLabel · ${formatClock(startMs)}\n$text"
+        }
+    }
+
+    /**
+     * (speaker label, start millis, text) per non-blank segment. Null when the JSON is not a
+     * transcript at all; an empty list when it is an object without a usable segment array, so
+     * callers can still try its flat `text`.
+     */
+    private fun parseSegments(json: String): List<Triple<String, Long, String>>? {
+        return try {
             val arr = when {
                 json.trimStart().startsWith("[") -> org.json.JSONArray(json)
                 else -> {
@@ -559,9 +584,7 @@ class FileDetailActivity : AppCompatActivity() {
                         ?: obj.optJSONArray("transaction")
                         ?: obj.optJSONArray("list")
                         ?: obj.optJSONArray("data")
-                        // Server shape is {"text": "...", "segments": [...]}; if there are no
-                        // usable segments, fall back to the plain text body.
-                        ?: return obj.optString("text").takeIf { it.isNotBlank() }
+                        ?: return emptyList()
                 }
             }
             (0 until arr.length()).mapNotNull { i ->
@@ -586,18 +609,6 @@ class FileDetailActivity : AppCompatActivity() {
             }
         } catch (e: Exception) {
             null
-        } ?: return null
-        if (segments.isEmpty()) {
-            // Segments empty but the server may still have produced flat text.
-            return try {
-                org.json.JSONObject(json).optString("text").takeIf { it.isNotBlank() }
-            } catch (e: Exception) {
-                null
-            }
-        }
-
-        return segments.joinToString("\n\n") { (speakerLabel, startMs, text) ->
-            "$speakerLabel · ${formatClock(startMs)}\n$text"
         }
     }
 
@@ -933,19 +944,41 @@ class FileDetailActivity : AppCompatActivity() {
         clipboard.setPrimaryClip(ClipData.newPlainText("Summary", model.summary))
     }
 
-    /** Copies the transcript as displayed (speaker/time paragraphs) and confirms with a toast. */
+    /**
+     * Copies the transcript as speaker paragraphs (no timestamps) and confirms with a toast. The
+     * on-screen segment blocks stay as they are: they exist for following along with playback,
+     * while a pasted transcript wants to read like a document.
+     */
     private fun copyTranscript() {
-        val text = transcriptPlainText ?: return
+        val text = transcriptCopyText ?: transcriptPlainText ?: return
         TranscriptShare.copyToClipboard(this, text)
+    }
+
+    /**
+     * Clipboard text for a transcript document: the server's `text` field (one "Speaker N: ..."
+     * line per turn, consecutive same-speaker segments already merged) as blank-line-separated
+     * paragraphs. Legacy shapes without `text` fall back to the segments merged per speaker turn,
+     * still without timestamps. Null when neither is available.
+     */
+    private fun copyTextFor(json: String): String? {
+        transcriptExportFields(json).first?.let { return TranscriptMarkdown.plainParagraphs(it) }
+        val segments = parseSegments(json)?.takeIf { it.isNotEmpty() } ?: return null
+        val turns = mutableListOf<Pair<String, StringBuilder>>()
+        for ((speaker, _, text) in segments) {
+            val last = turns.lastOrNull()
+            if (last != null && last.first == speaker) last.second.append(' ').append(text.trim())
+            else turns += speaker to StringBuilder(text.trim())
+        }
+        return turns.joinToString("\n\n") { (speaker, text) -> "$speaker: $text" }
     }
 
     // MARK: - Markdown export
 
     /**
      * Export the transcript as markdown via the share sheet. The body is the server's flat
-     * `text` field (already "Speaker N: ..." when diarized) so the file matches the server's
-     * own export byte for byte; the on-screen paragraph rendering is only the fallback for
-     * legacy transcript shapes that carry no `text`.
+     * `text` field (already "Speaker N: ..." when diarized), which [TranscriptMarkdown] renders
+     * as bold-speaker paragraphs so the file matches the server's own export byte for byte; the
+     * on-screen paragraph rendering is only the fallback for legacy shapes that carry no `text`.
      */
     private fun exportMarkdown(model: DetailModel) {
         val json = model.transcriptJSON ?: return

@@ -285,6 +285,52 @@
                 android:textSize="14sp" />
         </LinearLayout>
 
+        <!-- Card 3a: Custom vocabulary (names/terms for the server's transcriber) -->
+        <LinearLayout
+            android:id="@+id/vocabularyRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_card"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="16dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif"
+                    android:text="@string/custom_vocabulary"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:fontFamily="sans-serif"
+                    android:text="@string/custom_vocabulary_subtitle"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:layout_marginStart="8dp"
+                android:contentDescription="Open"
+                android:src="@drawable/ic_chevron_right"
+                android:tint="@color/gray_medium" />
+        </LinearLayout>
+
         <!-- Card 3b: Web dashboard (the server's own UI, for automations and the full view) -->
         <LinearLayout
             android:id="@+id/webDashboardRow"

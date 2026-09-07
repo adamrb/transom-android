@@ -33,8 +33,14 @@ import java.util.TimeZone
  *
  * ## Transcript
  *
- * <transcript text>
+ * **Speaker 1:** <turn>
+ *
+ * **Speaker 2:** <turn>
  * ```
+ *
+ * The Transcript section is [transcriptBody]: the server's flat `text` (one "Speaker N: ..."
+ * line per turn) rendered as bold-label paragraphs, the same way `transcript_body_markdown`
+ * does it server-side, so the two exports stay identical.
  */
 object TranscriptMarkdown {
 
@@ -83,9 +89,35 @@ object TranscriptMarkdown {
         }
         append("## Transcript\n")
         append('\n')
-        // Trim so the document ends with exactly one newline regardless of the stored text.
-        append(transcript.trim()).append('\n')
+        // transcriptBody drops blank lines, so the document ends with exactly one newline
+        // regardless of the stored text.
+        append(transcriptBody(transcript)).append('\n')
     }
+
+    /**
+     * Server `transcript_body_markdown`: `Speaker 1: hi` becomes `**Speaker 1:** hi`, one blank
+     * line between turns; lines without a speaker label pass through unchanged (already prose).
+     * The label class is spelled out ([\p{L}\p{N}_]) instead of `\w` because Python's `\w` is
+     * Unicode-aware while Java's is ASCII-only by default, and a name like "José" must render
+     * the same in both exports.
+     */
+    fun transcriptBody(text: String): String =
+        paragraphs(text).joinToString("\n\n") { line ->
+            SPEAKER_LINE.matchEntire(line)?.let { m -> "**${m.groupValues[1]}:** ${m.groupValues[2]}" } ?: line
+        }
+
+    /**
+     * The transcript as plain speaker paragraphs for the clipboard: the server's turns with a
+     * blank line between them and no timestamps or markdown. Whisper segments are already merged
+     * per speaker in `text`, which is why this reads better than the on-screen segment blocks.
+     */
+    fun plainParagraphs(text: String): String = paragraphs(text).joinToString("\n\n")
+
+    /** Non-blank, trimmed lines of the server's `text` field; each is one speaker turn. */
+    fun paragraphs(text: String): List<String> =
+        text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+
+    private val SPEAKER_LINE = Regex("^([A-Z][\\p{L}\\p{N}_ .'-]{0,40}?):\\s+(.*)$")
 
     /** Convenience for the app's Long duration field. */
     fun build(

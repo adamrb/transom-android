@@ -115,8 +115,9 @@ class FileDetailActivityTest {
             |
             |## Transcript
             |
-            |Speaker 1: Hello there.
-            |Speaker 2: Hi.
+            |**Speaker 1:** Hello there.
+            |
+            |**Speaker 2:** Hi.
             |""".trimMargin()
         assertTrue(exported, exported.endsWith(expectedTail))
     }
@@ -145,10 +146,24 @@ class FileDetailActivityTest {
         val clip = clipboard.primaryClip
         assertNotNull(clip)
         assertEquals("Transcript", clip!!.description.label)
-        val copied = clip.getItemAt(0).text.toString()
-        assertTrue(copied, copied.contains("Speaker 00"))
-        assertTrue(copied, copied.contains("Hello there."))
+        // The server's speaker turns as paragraphs: no timestamps, no per-segment blocks.
+        assertEquals("Speaker 1: Hello there.\n\nSpeaker 2: Hi.", clip.getItemAt(0).text.toString())
         assertEquals("Transcript copied", ShadowToast.getTextOfLatestToast())
+        // The on-screen rendering keeps its segment blocks with timestamps.
+        val shown = activity.findViewById<android.widget.TextView>(R.id.transcriptText).text.toString()
+        assertEquals("Speaker 00 \u00b7 00:00:00\nHello there.\n\nSpeaker 01 \u00b7 00:00:02\nHi.", shown)
+    }
+
+    @Test
+    fun copyFallsBackToSegmentsMergedPerSpeakerWhenTextIsMissing() {
+        val legacy = """{"segments":[{"speaker_id":"SPEAKER_00","start":0.0,"text":"Hello"},
+            {"speaker_id":"SPEAKER_00","start":1.0,"text":"there."},
+            {"speaker_id":"SPEAKER_01","start":2.5,"text":"Hi."}]}"""
+        val file = storeFile(legacy)
+        val activity = launch(file.id)
+        activity.findViewById<View>(R.id.copyTranscriptButton).performClick()
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        assertEquals("Speaker 00: Hello there.\n\nSpeaker 01: Hi.", clipboard.primaryClip!!.getItemAt(0).text.toString())
     }
 
     @Test
@@ -174,8 +189,9 @@ class FileDetailActivityTest {
             |
             |## Transcript
             |
-            |Speaker 1: Hello there.
-            |Speaker 2: Hi.
+            |**Speaker 1:** Hello there.
+            |
+            |**Speaker 2:** Hi.
             |""".trimMargin()
         assertEquals(expected, exported.readText())
 
@@ -265,6 +281,15 @@ class FileDetailActivityTest {
         assertTrue("export file missing: ${exported.path}", exported.exists())
         val text = exported.readText()
         assertTrue(text, text.startsWith("---\ntitle: \"Server side \\\"Q3\\\" call\"\nrecorded: \"2026-09-07T05:27:31Z\"\nduration_s: \"61\"\n"))
+    }
+
+    @Test
+    fun serverModeCopyUsesSpeakerParagraphs() {
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
+        val activity = launchServer(fake)
+        activity.findViewById<View>(R.id.copyTranscriptButton).performClick()
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        assertEquals("Speaker 1: Hello there.\n\nSpeaker 2: Hi.", clipboard.primaryClip!!.getItemAt(0).text.toString())
     }
 
     @Test

@@ -88,6 +88,12 @@
             android:name=".ui.filedetail.FileDetailActivity"
             android:exported="false" />
 
+        <!-- Custom vocabulary editor (Settings). adjustResize keeps Save above the keyboard. -->
+        <activity
+            android:name=".ui.settings.VocabularyActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- Web dashboard (the server's own UI, from Settings; formerly the Library tab) -->
         <activity
             android:name=".ui.library.WebDashboardActivity"
