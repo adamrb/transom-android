@@ -60,7 +60,7 @@ class MockSyncManager : SyncManagerProtocol {
         val current = _files.value.toMutableList()
         val idx = current.indexOfFirst { it.id == file.id }
         if (idx >= 0) {
-            current[idx] = current[idx].copy(name = name)
+            current[idx] = current[idx].copy(name = name, nameEditedByUser = true)
             _files.value = current
         }
     }

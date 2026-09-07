@@ -84,6 +84,13 @@ object UploadManager {
     internal var onFilesChanged: () -> Unit = { SyncManager.shared.refreshFilesFromStore() }
 
     /**
+     * Runs after a pass that uploaded at least one recording (test seam). The default starts the
+     * title fetch: the server produces a transcript plus AI title within about a minute of an
+     * upload, and TitleSyncManager polls for it and enqueues its own durable WorkManager retry.
+     */
+    internal var onUploadsCompleted: () -> Unit = { TitleSyncManager.kick() }
+
+    /**
      * Enqueues the durable WorkManager retry (test seam; tests substitute a counter). The default
      * needs an Application context: UploadManager is an object, so it reaches for
      * PlaudBridgeApp.instance and quietly does nothing if the Application has not been created
@@ -193,6 +200,7 @@ object UploadManager {
             // A kick may have landed between the last getAndSet and releasing the flag.
             if (dirty.get()) launchPass()
         }
+        if (uploaded > 0) notifyUploadsCompleted()
         return PassResult(uploaded = uploaded, failed = failed, remaining = pendingWithLocalFile().size)
     }
 
@@ -211,7 +219,7 @@ object UploadManager {
         var uploaded = 0
         var failures = 0
         pending.forEachIndexed { index, rec ->
-            _state.value = UploadState.Uploading(index + 1, pending.size, rec.name)
+            _state.value = UploadState.Uploading(index + 1, pending.size, rec.displayName)
             try {
                 val file = File(rec.localPath!!)
                 // Server-config generation guard: if the user switches server URL/token while
@@ -262,6 +270,15 @@ object UploadManager {
             onFilesChanged()
         } catch (t: Throwable) {
             AppLog.w(TAG, "files-changed notification failed", t)
+        }
+    }
+
+    /** Best-effort like [notifyFilesChanged]: the uploads are already persisted. */
+    private fun notifyUploadsCompleted() {
+        try {
+            onUploadsCompleted()
+        } catch (t: Throwable) {
+            AppLog.w(TAG, "uploads-completed notification failed", t)
         }
     }
 

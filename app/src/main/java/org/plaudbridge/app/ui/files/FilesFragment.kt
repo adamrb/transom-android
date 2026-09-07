@@ -150,6 +150,13 @@ class FilesFragment : Fragment() {
             if (isWiFi) View.GONE else View.VISIBLE
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Pick up AI titles for uploaded recordings that have none yet. Cheap: with nothing
+        // awaiting a transcript this touches neither the network nor WorkManager.
+        org.plaudbridge.app.managers.TitleSyncManager.kick()
+    }
+
     override fun onDestroyView() {
         super.onDestroyView()
         _binding = null
@@ -240,7 +247,7 @@ class FilesAdapter(
 
     inner class FileViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         fun bind(file: RecordingFile) {
-            itemView.findViewById<TextView>(R.id.fileNameLabel).text = file.name
+            itemView.findViewById<TextView>(R.id.fileNameLabel).text = file.displayName
             itemView.findViewById<TextView>(R.id.fileMetaLabel).text = formatMeta(file)
             itemView.setOnClickListener { onFileTapped(file) }
         }

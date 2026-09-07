@@ -61,6 +61,7 @@ class UploadWorkerTest {
         UploadManager.onFilesChanged = {}
         scheduleCalls.set(0)
         UploadManager.scheduler = { scheduleCalls.incrementAndGet() }
+        UploadManager.onUploadsCompleted = {} // TitleSyncManager is not under test here
     }
 
     @After

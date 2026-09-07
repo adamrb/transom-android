@@ -49,6 +49,7 @@ class UploadManagerTest {
     private lateinit var server: MockWebServer
     private lateinit var fakeLink: FakeDeviceLink
     private val scheduleCalls = AtomicInteger()
+    private val uploadsCompletedCalls = AtomicInteger()
 
     @Before
     fun setUp() {
@@ -67,6 +68,8 @@ class UploadManagerTest {
         UploadManager.onFilesChanged = {} // SyncManager touches the real SDK — not under test
         scheduleCalls.set(0)
         UploadManager.scheduler = { scheduleCalls.incrementAndGet() } // no real WorkManager here
+        uploadsCompletedCalls.set(0)
+        UploadManager.onUploadsCompleted = { uploadsCompletedCalls.incrementAndGet() } // TitleSyncManager not under test
     }
 
     @After
@@ -352,6 +355,8 @@ class UploadManagerTest {
         assertEquals(0, result.remaining)
         assertTrue(RecordingStore.allFiles.all { it.uploaded })
         assertEquals(0, scheduleCalls.get()) // runPass itself never schedules; kick does
+        // One title fetch is started per pass that uploaded something, not per file.
+        assertEquals(1, uploadsCompletedCalls.get())
     }
 
     @Test
@@ -366,6 +371,7 @@ class UploadManagerTest {
         assertEquals(1, result.remaining)
         assertFalse(RecordingStore.allFiles.single().uploaded)
         assertTrue(UploadManager.state.value is UploadState.Failed)
+        assertEquals("no upload, no title fetch", 0, uploadsCompletedCalls.get())
     }
 
     @Test

@@ -77,7 +77,7 @@ class FileDetailActivity : AppCompatActivity() {
     private var transcriptPlainText: String? = null
 
     private fun bindFile(file: RecordingFile) {
-        binding.fileNameLabel.text = file.name
+        binding.fileNameLabel.text = file.displayName
 
         // Meta line "MMM d, yyyy \u00B7 HH:mm \u00B7 Xm Ys" (mirrors iOS)
         val dateFormat = SimpleDateFormat("MMM d, yyyy \u00B7 HH:mm", Locale.getDefault())
@@ -213,8 +213,9 @@ class FileDetailActivity : AppCompatActivity() {
             binding.generateButton.isEnabled = true
             when (outcome) {
                 is org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready -> {
-                    org.plaudbridge.app.storage.RecordingStore.updateTranscript(file.id, outcome.rawJson)
-                    loadFile(file.id) // re-render with the parsed transcript
+                    // Stores the transcript AND its AI title, then refreshes the list screens.
+                    org.plaudbridge.app.managers.TitleSyncManager.storeTranscript(file.id, outcome.rawJson)
+                    loadFile(file.id) // re-render: transcript body plus the title label
                 }
                 is org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending -> {
                     binding.emptySubtitle.text = getString(R.string.transcription_pending)
@@ -538,7 +539,7 @@ class FileDetailActivity : AppCompatActivity() {
 
     private fun showRenameDialog(file: RecordingFile) {
         val editText = EditText(this).apply {
-            setText(file.name)
+            setText(file.displayName)
             selectAll()
             setPadding(48, 32, 48, 32)
         }
@@ -574,7 +575,7 @@ class FileDetailActivity : AppCompatActivity() {
             // Accurate scope: this removes ONLY the phone's downloaded copy — any copy still on
             // the recorder and anything already uploaded to your server are untouched.
             .setMessage(
-                "This removes the downloaded copy of \"${file.name}\" from this phone. " +
+                "This removes the downloaded copy of \"${file.displayName}\" from this phone. " +
                     "Copies on the recorder or on your server are not deleted."
             )
             .setPositiveButton(R.string.delete) { _, _ ->

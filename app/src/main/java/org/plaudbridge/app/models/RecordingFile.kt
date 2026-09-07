@@ -48,8 +48,37 @@ data class RecordingFile(
 
     /** Delete-after-upload could not run (device disconnected); retry on the matching device. */
     @SerializedName("deletePendingOnDevice")
-    var deletePendingOnDevice: Boolean = false
+    var deletePendingOnDevice: Boolean = false,
+
+    /**
+     * AI-generated title from the bridge server (the "title" field of the transcript JSON). The
+     * recorder has no file names, so [name] is "Untitled Recording" for every synced file; this is
+     * what the lists show instead once the server has summarized the recording. Null until then.
+     */
+    @SerializedName("serverTitle")
+    var serverTitle: String? = null,
+
+    /**
+     * The user renamed this recording by hand. Once set, [displayName] sticks to [name] and a
+     * server title arriving later never overrides the manual choice. Non-nullable is safe with
+     * Gson: records written before this field existed are allocated without a constructor, so a
+     * missing (or null) JSON value leaves the primitive at its JVM default, false.
+     */
+    @SerializedName("nameEditedByUser")
+    var nameEditedByUser: Boolean = false
 ) {
     val isSynced: Boolean
         get() = localPath != null
+
+    /**
+     * Single source of truth for the name shown anywhere in the UI: a manual rename wins, then
+     * the server's AI title, then the stored [name]. Computed (no backing field), so Gson never
+     * persists it and it always reflects the current fields.
+     */
+    val displayName: String
+        get() {
+            if (nameEditedByUser) return name
+            val title = serverTitle?.trim()
+            return if (!title.isNullOrEmpty()) title else name
+        }
 }

@@ -61,6 +61,8 @@ class HomeFragment : Fragment() {
         // Re-read the paired-device list on every return to Home (mirrors iOS viewWillAppear),
         // so unpair/add-device done on other screens is reflected immediately.
         renderOtherDevices(currentDevice?.serialNumber)
+        // Recent files: fetch AI titles still missing for uploaded recordings (no-op when none).
+        org.plaudbridge.app.managers.TitleSyncManager.kick()
     }
 
     private fun setupClickListeners() {
@@ -421,7 +423,7 @@ class HomeFragment : Fragment() {
     private fun createFileRow(file: RecordingFile): View {
         val row = LayoutInflater.from(requireContext())
             .inflate(R.layout.item_file_row, binding.recentFilesList, false)
-        row.findViewById<TextView>(R.id.fileNameLabel).text = file.name
+        row.findViewById<TextView>(R.id.fileNameLabel).text = file.displayName
         row.findViewById<TextView>(R.id.fileMetaLabel).text = formatMeta(file)
         row.setOnClickListener {
             val intent = Intent(requireContext(), FileDetailActivity::class.java)

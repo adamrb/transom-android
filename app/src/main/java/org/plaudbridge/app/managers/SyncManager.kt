@@ -451,7 +451,7 @@ class SyncManager private constructor() : SyncManagerProtocol {
         }
 
         val outputDir = RecordingStore.exportDir
-        wifiCurrentFileName = RecordingStore.allFiles.firstOrNull { it.sessionId == sessionId }?.name
+        wifiCurrentFileName = RecordingStore.allFiles.firstOrNull { it.sessionId == sessionId }?.displayName
         // Capture the owning SN at issue time; the completion callback must not read the
         // mutable global (a later session could have overwritten it by then).
         val exportSN = wifiDeviceSN
@@ -735,7 +735,7 @@ class SyncManager private constructor() : SyncManagerProtocol {
             val currentFile = RecordingStore.allFiles.firstOrNull { it.sessionId == sessionId.toLong() }
             val prog = SyncProgress(
                 totalFiles = totalToSync, syncedFiles = syncedCount,
-                currentFileName = currentFile?.name, fileProgress = progress / 100f,
+                currentFileName = currentFile?.displayName, fileProgress = progress / 100f,
                 bytesPerSecond = speed.toLong()
             )
             scope.launch { _state.value = SyncState.Syncing(prog) }
@@ -831,7 +831,7 @@ class SyncManager private constructor() : SyncManagerProtocol {
         val currentFile = RecordingStore.allFiles.firstOrNull { it.sessionId == nextSessionId }
         scope.launch {
             _state.value = SyncState.Syncing(
-                SyncProgress(totalFiles = totalToSync, syncedFiles = syncedCount, currentFileName = currentFile?.name)
+                SyncProgress(totalFiles = totalToSync, syncedFiles = syncedCount, currentFileName = currentFile?.displayName)
             )
         }
 

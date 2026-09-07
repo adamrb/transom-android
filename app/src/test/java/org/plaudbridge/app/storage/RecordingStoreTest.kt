@@ -265,4 +265,125 @@ class RecordingStoreTest {
         // Local sync state survives — only server-scoped state is dropped.
         assertEquals("/tmp/a.mp3", stored.localPath)
     }
+
+    // MARK: - Server titles and manual renames
+
+    @Test
+    fun legacyIndexWithoutTitleFieldsLoadsWithDefaults() {
+        // recordings.json written by a build that predates serverTitle/nameEditedByUser.
+        File(context.filesDir, "recordings.json").writeText(
+            """[{"id":"legacy-1","sessionId":7,"deviceSN":"SN-A","name":"Untitled Recording",
+                "duration":12,"createdAt":7000,"uploaded":true,"serverId":"srv-7"}]"""
+        )
+
+        val stored = RecordingStore.allFiles.single()
+        assertEquals("legacy-1", stored.id)
+        assertNull(stored.serverTitle)
+        assertFalse(stored.nameEditedByUser)
+        assertEquals("Untitled Recording", stored.displayName)
+        // It is exactly the kind of record the title fetch should pick up.
+        assertEquals(listOf("legacy-1"), RecordingStore.awaitingTranscript.map { it.id })
+    }
+
+    @Test
+    fun renameFilePinsTheNameAgainstServerTitles() {
+        RecordingStore.addFiles(listOf(rec("SN-A", 1)))
+        val rec = RecordingStore.allFiles.single()
+
+        RecordingStore.renameFile(rec, "Call with Sam")
+        RecordingStore.updateServerTitle(rec.id, "Budget planning call")
+
+        val stored = RecordingStore.allFiles.single()
+        assertEquals("Call with Sam", stored.name)
+        assertTrue(stored.nameEditedByUser)
+        assertEquals("Budget planning call", stored.serverTitle)
+        assertEquals("Call with Sam", stored.displayName)
+    }
+
+    @Test
+    fun updateServerTitleChangesOnlyTheTitle() {
+        RecordingStore.addFiles(listOf(rec("SN-A", 1)))
+        val rec = RecordingStore.allFiles.single()
+
+        RecordingStore.updateServerTitle(rec.id, "AI title")
+
+        val stored = RecordingStore.allFiles.single()
+        assertEquals("AI title", stored.serverTitle)
+        assertEquals("AI title", stored.displayName)
+        assertEquals(rec.name, stored.name)
+        assertFalse(stored.nameEditedByUser)
+        assertNull(stored.transcriptJSON)
+    }
+
+    @Test
+    fun updateTranscriptCapturesTheTitle() {
+        RecordingStore.addFiles(listOf(rec("SN-A", 1)))
+        val rec = RecordingStore.allFiles.single()
+
+        RecordingStore.updateTranscript(
+            rec.id,
+            """{"text":"hello","segments":[],"summary":"short","title":"  Budget planning call "}"""
+        )
+
+        val stored = RecordingStore.allFiles.single()
+        assertEquals("Budget planning call", stored.serverTitle)
+        assertEquals("Budget planning call", stored.displayName)
+        assertTrue(stored.transcriptJSON!!.contains("\"text\":\"hello\""))
+    }
+
+    @Test
+    fun updateTranscriptToleratesDocumentsWithoutAUsableTitle() {
+        RecordingStore.addFiles(listOf(rec("SN-A", 1)))
+        val rec = RecordingStore.allFiles.single()
+        RecordingStore.updateServerTitle(rec.id, "Earlier title")
+
+        // Absent, JSON null, non-string, blank, and a bare segment array: transcript stored,
+        // the previously known title is left alone (never cleared by a title-less document).
+        for (doc in listOf(
+            """{"text":"a","segments":[]}""",
+            """{"text":"b","title":null}""",
+            """{"text":"c","title":42}""",
+            """{"text":"d","title":"   "}""",
+            """[{"text":"e","start":0}]"""
+        )) {
+            RecordingStore.updateTranscript(rec.id, doc)
+            val stored = RecordingStore.allFiles.single()
+            assertEquals(doc, stored.transcriptJSON)
+            assertEquals("Earlier title", stored.serverTitle)
+        }
+    }
+
+    @Test
+    fun parseTranscriptTitleNeverThrows() {
+        assertNull(RecordingStore.parseTranscriptTitle("<html>login</html>"))
+        assertNull(RecordingStore.parseTranscriptTitle(""))
+        assertEquals("T", RecordingStore.parseTranscriptTitle("""{"title":"T"}"""))
+    }
+
+    @Test
+    fun clearServerStateDropsServerTitleButKeepsManualRename() {
+        RecordingStore.addFiles(listOf(rec("SN-A", 1), rec("SN-A", 2)))
+        val titled = RecordingStore.allFiles.first { it.sessionId == 1L }
+        val renamed = RecordingStore.allFiles.first { it.sessionId == 2L }
+        RecordingStore.updateServerTitle(titled.id, "Old server title")
+        RecordingStore.renameFile(renamed, "Mine")
+
+        RecordingStore.clearServerState()
+
+        assertNull(RecordingStore.allFiles.first { it.sessionId == 1L }.serverTitle)
+        val kept = RecordingStore.allFiles.first { it.sessionId == 2L }
+        assertEquals("Mine", kept.name)
+        assertTrue(kept.nameEditedByUser)
+    }
+
+    @Test
+    fun awaitingTranscriptListsUploadedFilesWithoutACachedTranscript() {
+        RecordingStore.addFiles(listOf(rec("SN-A", 1), rec("SN-A", 2), rec("SN-A", 3)))
+        RecordingStore.markAsUploaded("SN-A", 2, "srv-2")
+        RecordingStore.markAsUploaded("SN-A", 3, "srv-3")
+        val done = RecordingStore.allFiles.first { it.sessionId == 3L }
+        RecordingStore.updateTranscript(done.id, """{"text":"t","title":"Done"}""")
+
+        assertEquals(listOf(2L), RecordingStore.awaitingTranscript.map { it.sessionId })
+    }
 }

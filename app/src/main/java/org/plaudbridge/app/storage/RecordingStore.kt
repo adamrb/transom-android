@@ -252,10 +252,17 @@ object RecordingStore {
         }
     }
 
+    /**
+     * Manual rename. Also pins the name: a server title that arrives (or already exists) must not
+     * replace what the user typed, see [RecordingFile.displayName].
+     */
     fun renameFile(file: RecordingFile, newName: String) {
         synchronized(lock) {
             val files = loadFiles().toMutableList()
-            files.find { it.id == file.id }?.name = newName
+            files.find { it.id == file.id }?.apply {
+                this.name = newName
+                this.nameEditedByUser = true
+            }
             saveFiles(files)
         }
     }
@@ -275,13 +282,45 @@ object RecordingStore {
         }
     }
 
-    /** Persist a transcript (JSON: {"text": ..., "segments": [...]}) fetched from the server. */
+    /**
+     * Persist a transcript (JSON: {"text": ..., "segments": [...], "summary": ..., "title": ...})
+     * fetched from the server. The AI title travels inside the same document, so it is captured
+     * here too: every path that stores a transcript (detail screen, TitleSyncManager) then picks
+     * up the title for free. A document without a usable title leaves [RecordingFile.serverTitle]
+     * untouched rather than clearing a title learned earlier.
+     */
     fun updateTranscript(id: String, transcriptJSON: String) {
+        val title = parseTranscriptTitle(transcriptJSON)
         synchronized(lock) {
             val files = loadFiles().toMutableList()
-            files.find { it.id == id }?.transcriptJSON = transcriptJSON
+            files.find { it.id == id }?.apply {
+                this.transcriptJSON = transcriptJSON
+                if (title != null) this.serverTitle = title
+            }
             saveFiles(files)
         }
+    }
+
+    /** Set only the server-side AI title (e.g. when it is learned without a transcript body). */
+    fun updateServerTitle(id: String, title: String?) {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.find { it.id == id }?.serverTitle = title
+            saveFiles(files)
+        }
+    }
+
+    /**
+     * "title" out of a transcript document, or null when absent, JSON null, not a string, blank,
+     * or when the document is not a JSON object at all (a bare segment array is a legal transcript
+     * shape here, see FileDetailActivity.parseTranscript). Never throws: a malformed title must not
+     * stop the transcript itself from being stored.
+     */
+    internal fun parseTranscriptTitle(transcriptJSON: String): String? = try {
+        val obj = org.json.JSONObject(transcriptJSON)
+        (obj.opt("title") as? String)?.trim()?.takeIf { it.isNotEmpty() }
+    } catch (e: Exception) {
+        null
     }
 
     /**
@@ -334,8 +373,10 @@ object RecordingStore {
         allFiles.filter { it.deletePendingOnDevice && it.uploaded && it.deviceSN == deviceSN }
 
     /**
-     * Drop all server-side state (uploaded/serverId/transcripts) — used when the user points the
-     * app at a DIFFERENT server: the old ids mean nothing there, and re-uploads are deduplicated.
+     * Drop all server-side state (uploaded/serverId/transcripts/AI titles) — used when the user
+     * points the app at a DIFFERENT server: the old ids mean nothing there, and re-uploads are
+     * deduplicated. The title goes too: it was produced by the old server and the new one will
+     * generate its own once the recording is re-uploaded. Manual renames are local and survive.
      */
     fun clearServerState() {
         synchronized(lock) {
@@ -346,6 +387,7 @@ object RecordingStore {
                 it.uploadedAt = null
                 it.deletePendingOnDevice = false
                 it.transcriptJSON = null
+                it.serverTitle = null
             }
             saveFiles(files)
         }
@@ -387,6 +429,14 @@ object RecordingStore {
     /** Files synced locally but not yet confirmed uploaded to the bridge server. */
     val pendingUploads: List<RecordingFile>
         get() = allFiles.filter { it.isSynced && !it.uploaded }
+
+    /**
+     * Uploaded recordings whose transcript (and with it the AI title) has not been fetched yet.
+     * This is the work list for TitleSyncManager; it empties as transcripts are stored, so polling
+     * it is free once everything is titled.
+     */
+    val awaitingTranscript: List<RecordingFile>
+        get() = allFiles.filter { !it.serverId.isNullOrBlank() && it.transcriptJSON == null }
 
     /** Durable storage for exported recordings (filesDir — cacheDir can be evicted by the OS). */
     val exportDir: File
