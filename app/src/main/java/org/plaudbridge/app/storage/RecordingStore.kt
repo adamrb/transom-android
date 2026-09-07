@@ -438,6 +438,22 @@ object RecordingStore {
     val awaitingTranscript: List<RecordingFile>
         get() = allFiles.filter { !it.serverId.isNullOrBlank() && it.transcriptJSON == null }
 
+    /**
+     * Uploaded recordings whose transcript was cached BEFORE the server produced titles (the JSON
+     * has no "title" key at all) and that the user has not renamed by hand. TitleSyncManager
+     * refetches these once per process so phones that synced early still pick up AI titles.
+     * A transcript that carries a "title" key (even null) is current and is left alone.
+     */
+    val cachedWithoutTitle: List<RecordingFile>
+        get() = allFiles.filter {
+            !it.serverId.isNullOrBlank() && it.transcriptJSON != null &&
+                it.serverTitle.isNullOrBlank() && !it.nameEditedByUser &&
+                !transcriptHasTitleKey(it.transcriptJSON!!)
+        }
+
+    private fun transcriptHasTitleKey(json: String): Boolean =
+        try { org.json.JSONObject(json).has("title") } catch (_: Exception) { true } // unparseable: do not loop on it
+
     /** Durable storage for exported recordings (filesDir — cacheDir can be evicted by the OS). */
     val exportDir: File
         get() {

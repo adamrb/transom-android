@@ -8,6 +8,7 @@ import kotlinx.coroutines.launch
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.common.AppLog
 import org.plaudbridge.app.net.ApiClient
+import org.plaudbridge.app.models.RecordingFile
 import org.plaudbridge.app.storage.RecordingStore
 import org.plaudbridge.app.work.TitleSyncScheduler
 import java.util.concurrent.atomic.AtomicBoolean
@@ -102,6 +103,23 @@ object TitleSyncManager {
     private val dirty = AtomicBoolean(false)
 
     /**
+     * Pre-title transcripts already refetched in this process. One attempt is enough: if the
+     * server still has no title for them, retrying every resume would be pointless traffic.
+     */
+    private val legacyAttempted = HashSet<String>()
+
+    private fun legacyCandidates(): List<RecordingFile> = synchronized(legacyAttempted) {
+        RecordingStore.cachedWithoutTitle.filter { it.id !in legacyAttempted }
+    }
+
+    private fun markLegacyAttempted(files: List<RecordingFile>) = synchronized(legacyAttempted) {
+        files.forEach { legacyAttempted.add(it.id) }
+    }
+
+    /** Test hook: forget which pre-title transcripts were already refetched. */
+    internal fun resetLegacyAttemptsForTest() = synchronized(legacyAttempted) { legacyAttempted.clear() }
+
+    /**
      * Fetch outstanding titles now AND make sure the durable WorkManager retry is scheduled. Safe
      * to call often (screen resumes, every upload): with nothing awaiting a transcript it does not
      * touch the network or WorkManager at all.
@@ -109,7 +127,7 @@ object TitleSyncManager {
     fun kick() {
         if (!RecordingStore.isServerConfigured) return
         scope.launch {
-            if (RecordingStore.awaitingTranscript.isEmpty()) return@launch
+            if (RecordingStore.awaitingTranscript.isEmpty() && legacyCandidates().isEmpty()) return@launch
             scheduler()
             var polls = 0
             while (true) {
@@ -157,9 +175,16 @@ object TitleSyncManager {
         return PassResult(stored = stored, pending = pending, failed = failed, skipped = skipped)
     }
 
-    /** Fetch once for every recording awaiting a transcript. */
+    /**
+     * Fetch once for every recording awaiting a transcript, plus (once per process) recordings
+     * whose cached transcript predates server titles. For the latter a non-Ready answer is
+     * simply skipped: they already have a transcript, so nothing is "pending" for the worker.
+     */
     private fun processAwaiting(): PassResult {
-        val work = RecordingStore.awaitingTranscript
+        val legacy = legacyCandidates()
+        markLegacyAttempted(legacy)
+        val legacyIds = legacy.map { it.id }.toHashSet()
+        val work = RecordingStore.awaitingTranscript + legacy
         if (work.isEmpty()) return PassResult(0, 0, 0, 0)
         AppLog.i(TAG, "Checking ${work.size} recording(s) for a transcript/title")
         var stored = 0
@@ -186,7 +211,7 @@ object TitleSyncManager {
                     // A 200 from a captive portal or misrouted proxy is HTML, not a transcript.
                     // Storing it would end the retries for this file with garbage cached.
                     if (!looksLikeTranscript(result.rawJson)) {
-                        failed++
+                        if (rec.id in legacyIds) skipped++ else failed++
                         AppLog.w(TAG, "Transcript body is not JSON, will retry (serverId=$serverId)")
                     } else {
                         storeTranscript(rec.id, result.rawJson)
@@ -194,7 +219,7 @@ object TitleSyncManager {
                         AppLog.i(TAG, "Stored transcript/title for serverId=$serverId")
                     }
                 }
-                ApiClient.TranscriptResult.Pending -> pending++
+                ApiClient.TranscriptResult.Pending -> if (rec.id in legacyIds) skipped++ else pending++
                 ApiClient.TranscriptResult.NotFound -> {
                     skipped++
                     AppLog.w(TAG, "Server has no recording $serverId; not retrying")
@@ -206,7 +231,7 @@ object TitleSyncManager {
                     break
                 }
                 is ApiClient.TranscriptResult.Error -> {
-                    failed++
+                    if (rec.id in legacyIds) skipped++ else failed++
                     AppLog.w(TAG, "Transcript fetch failed for serverId=$serverId: ${result.message}")
                 }
             }

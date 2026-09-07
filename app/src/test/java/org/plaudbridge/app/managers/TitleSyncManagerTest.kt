@@ -74,6 +74,7 @@ class TitleSyncManagerTest {
         scheduleCalls.set(0)
         TitleSyncManager.scheduler = { scheduleCalls.incrementAndGet() }
         TitleSyncManager.inAppPollDelayMs = 50L
+        TitleSyncManager.resetLegacyAttemptsForTest()
     }
 
     @After
@@ -103,6 +104,50 @@ class TitleSyncManagerTest {
             Thread.sleep(25)
         }
         fail("Timed out waiting for: $what")
+    }
+
+    // MARK: - pre-title cached transcripts
+
+    @Test
+    fun cachedTranscriptWithoutTitleKeyIsRefetchedOnceAndTitled() = runBlocking {
+        // Transcript cached before the server produced titles: no "title" key at all.
+        val rec = addRecording(1, "srv-1", transcript = """{"text":"old","segments":[]}""")
+        assertNull(rec.serverTitle)
+        source.script("srv-1", ready("Fresh AI title"))
+
+        val first = TitleSyncManager.runPass()
+        assertEquals(1, first.stored)
+        assertEquals("Fresh AI title", RecordingStore.allFiles.first().serverTitle)
+        assertEquals("Fresh AI title", RecordingStore.allFiles.first().displayName)
+
+        // Now current: has a title key, so it is no longer a candidate; and even a titleless
+        // current transcript is only ever attempted once per process.
+        val second = TitleSyncManager.runPass()
+        assertEquals(0, second.stored)
+        assertEquals(listOf("srv-1"), source.callsSnapshot())
+    }
+
+    @Test
+    fun legacyRefetchThatIsNotReadyIsSkippedNotPendingAndNotRepeated() = runBlocking {
+        addRecording(2, "srv-2", transcript = """{"text":"old","segments":[]}""")
+        source.script("srv-2", ApiClient.TranscriptResult.Pending)
+
+        val pass = TitleSyncManager.runPass()
+        assertEquals(0, pass.pending)
+        assertEquals(1, pass.skipped)
+        TitleSyncManager.runPass()
+        assertEquals(1, source.callsSnapshot().size)
+    }
+
+    @Test
+    fun renamedOrAlreadyCurrentCachedTranscriptsAreNotRefetched() = runBlocking {
+        val renamed = addRecording(3, "srv-3", transcript = """{"text":"old","segments":[]}""")
+        RecordingStore.renameFile(renamed, "My own name")
+        addRecording(4, "srv-4", transcript = """{"text":"cur","segments":[],"title":null}""")
+
+        val pass = TitleSyncManager.runPass()
+        assertEquals(0, pass.stored + pass.pending + pass.failed + pass.skipped)
+        assertTrue(source.callsSnapshot().isEmpty())
     }
 
     // MARK: - runPass classification
