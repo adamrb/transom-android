@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pill for a delivery state that is neither good nor bad news (handed off, no report yet). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/tab_selected_bg" />
+    <corners android:radius="12dp" />
+</shape>

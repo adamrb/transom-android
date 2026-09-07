@@ -10,6 +10,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.plaudbridge.app.common.AppLog
+import org.plaudbridge.app.models.RoutingRun
 import org.plaudbridge.app.models.ServerRecording
 import org.plaudbridge.app.models.VocabEntry
 import org.plaudbridge.app.models.VocabularyEditorText
@@ -34,6 +35,9 @@ import java.util.concurrent.TimeUnit
  *   POST /api/v1/recordings/{id}/retranscribe     {"id", "status": "pending"}
  *   DELETE /api/v1/recordings/{id}                204
  *   GET  /api/v1/recordings/{id}/audio            audio/mpeg with Range support (streamed by ExoPlayer)
+ *   GET  /api/v1/recordings/{id}/routing          {"runs": [...], "deliveries": [...]} newest run first
+ *   POST /api/v1/recordings/{id}/route            re-run the AI router -> the new run object
+ *   POST /api/v1/deliveries/{id}/retry            retry a failed delivery (200 / 409 not retryable)
  *   GET  /api/v1/vocabulary                       {"entries": [...], "editor_text": "...", "hotwords": "..."}
  *   PUT  /api/v1/vocabulary                       {"entries": [...]} replaces the list -> {"entries": [...]}
  *   POST /api/v1/login-requests/{id}/approve      {"label": ...} -> {"status":"approved", ...} (web sign-in QR)
@@ -523,8 +527,8 @@ object ApiClient {
         return executeAction(req, "retranscribe")
     }
 
-    private fun executeAction(req: Request, what: String): ActionResult = try {
-        client.newCall(req).execute().use { resp ->
+    private fun executeAction(req: Request, what: String, http: OkHttpClient = client): ActionResult = try {
+        http.newCall(req).execute().use { resp ->
             when {
                 resp.isSuccessful -> ActionResult.Ok
                 resp.code == 404 -> ActionResult.NotFound
@@ -537,6 +541,107 @@ object ApiClient {
         }
     } catch (e: Exception) {
         ActionResult.Error(e.message ?: "network error")
+    }
+
+    // MARK: - Automations (AI router runs and their deliveries)
+
+    /** Typed result of GET /api/v1/recordings/{id}/routing. Never throws once the server is configured. */
+    sealed class RoutingResult {
+        /** [runs] newest first; empty when routing is disabled or has not run yet. */
+        data class Ok(val runs: List<RoutingRun>) : RoutingResult()
+        /** 404: the recording is gone, or the server predates the routing endpoint. */
+        object NotFound : RoutingResult()
+        data class AuthError(val code: Int) : RoutingResult()
+        data class Error(val message: String) : RoutingResult()
+    }
+
+    /** GET /api/v1/recordings/{id}/routing: every router run for the recording with its deliveries. */
+    fun fetchRouting(recordingId: String): RoutingResult {
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/recordings/$recordingId/routing")
+            .header("Authorization", authHeader())
+            .get()
+            .build()
+        return try {
+            client.newCall(req).execute().use { resp ->
+                val text = resp.body?.string() ?: ""
+                when {
+                    resp.code == 404 -> RoutingResult.NotFound
+                    resp.code == 401 || resp.code == 403 -> RoutingResult.AuthError(resp.code)
+                    !resp.isSuccessful -> {
+                        AppLog.w(TAG, "fetch routing failed: HTTP ${resp.code} (${text.length} bytes)")
+                        RoutingResult.Error("HTTP ${resp.code}")
+                    }
+                    else -> try {
+                        RoutingResult.Ok(RoutingRun.listFromJson(text))
+                    } catch (e: Exception) {
+                        RoutingResult.Error("routing response is not valid JSON")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            RoutingResult.Error(e.message ?: "network error")
+        }
+    }
+
+    /**
+     * The route endpoint runs the router model synchronously (two model attempts of up to 120 s
+     * each, then up to five 30 s webhooks, about 390 s worst case); the client must outwait that
+     * or it reports a failure for a run the server is still carrying out.
+     */
+    private const val REROUTE_READ_TIMEOUT_S = 600L
+
+    /**
+     * POST /api/v1/recordings/{id}/route: run the AI router over the recording again. The server
+     * answers with the new run object, which the caller does not need: deliveries report back
+     * asynchronously, so the screen re-reads [fetchRouting] a few seconds later instead. The
+     * call is synchronous on the server (model call plus webhooks), so it gets its own read
+     * timeout rather than the shared 120 s one, which a slow model could exceed while the run
+     * still completes.
+     */
+    fun rerunRouting(recordingId: String): ActionResult {
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/recordings/$recordingId/route")
+            .header("Authorization", authHeader())
+            .post(ByteArray(0).toRequestBody(null))
+            .build()
+        val patient = client.newBuilder().readTimeout(REROUTE_READ_TIMEOUT_S, TimeUnit.SECONDS).build()
+        return executeAction(req, "rerun routing", patient)
+    }
+
+    /** Typed result of POST /api/v1/deliveries/{id}/retry. */
+    sealed class RetryResult {
+        object Ok : RetryResult()
+        /** 409: the delivery is not in a failed state any more (already retried, or it succeeded). */
+        object Conflict : RetryResult()
+        object NotFound : RetryResult()
+        data class AuthError(val code: Int) : RetryResult()
+        data class Error(val message: String) : RetryResult()
+    }
+
+    /** POST /api/v1/deliveries/{id}/retry: run a failed delivery again. */
+    fun retryDelivery(deliveryId: String): RetryResult {
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/deliveries/$deliveryId/retry")
+            .header("Authorization", authHeader())
+            .post(ByteArray(0).toRequestBody(null))
+            .build()
+        return try {
+            client.newCall(req).execute().use { resp ->
+                when {
+                    resp.isSuccessful -> RetryResult.Ok
+                    resp.code == 409 -> RetryResult.Conflict
+                    resp.code == 404 -> RetryResult.NotFound
+                    resp.code == 401 || resp.code == 403 -> RetryResult.AuthError(resp.code)
+                    else -> {
+                        AppLog.w(TAG, "retry delivery failed: HTTP ${resp.code}")
+                        RetryResult.Error("HTTP ${resp.code}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            RetryResult.Error(e.message ?: "network error")
+        }
     }
 
     // MARK: - Custom vocabulary

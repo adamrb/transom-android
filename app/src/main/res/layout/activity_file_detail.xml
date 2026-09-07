@@ -201,6 +201,54 @@
                 android:orientation="vertical"
                 android:visibility="gone" />
 
+            <!-- Automations (server recordings only): what the AI router did with this recording.
+                 Header plus one block per router run (routes, reasons, delivery outcomes), filled in
+                 code; a one-line empty state when routing ran and matched nothing, and a text
+                 button that reveals runs older than the latest. -->
+            <TextView
+                android:id="@+id/automationsHeader"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:fontFamily="sans-serif-medium"
+                android:text="@string/automations"
+                android:textColor="@color/text_primary"
+                android:textSize="15sp"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/automationsList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="vertical"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/automationsEmpty"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:fontFamily="sans-serif"
+                android:text="@string/automations_none"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/automationsShowEarlier"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:background="?attr/selectableItemBackground"
+                android:fontFamily="sans-serif-medium"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:text="@string/automations_show_earlier"
+                android:textColor="@color/gray7"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
             <!-- Parsed transcript segments ("Speaker N · HH:MM:SS" + text) -->
             <TextView
                 android:id="@+id/transcriptText"

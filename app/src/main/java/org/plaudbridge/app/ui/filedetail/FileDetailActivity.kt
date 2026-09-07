@@ -23,7 +23,9 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.plaudbridge.app.PlaudBridgeApp
@@ -34,7 +36,9 @@ import org.plaudbridge.app.export.TranscriptHighlight
 import org.plaudbridge.app.export.TranscriptMarkdown
 import org.plaudbridge.app.export.TranscriptShare
 import org.plaudbridge.app.managers.TitleSyncManager
+import org.plaudbridge.app.models.Delivery
 import org.plaudbridge.app.models.RecordingFile
+import org.plaudbridge.app.models.RoutingRun
 import org.plaudbridge.app.models.ServerRecording
 import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.storage.RecordingStore
@@ -48,7 +52,7 @@ import java.util.*
 
 /**
  * Recording detail page
- * Header (name/date/duration/status) + Summary + Highlights + Transcript + More Menu
+ * Header (name/date/duration/status) + Summary + Highlights + Automations + Transcript + More Menu
  *
  * One screen for one recording, wherever it lives. The intent carries whichever ids are known:
  *  - `file_id`: the phone's [RecordingFile] (offline audio, cached transcript, upload state);
@@ -78,8 +82,34 @@ class FileDetailActivity : AppCompatActivity() {
     /** Transcript document fetched from the server in this view; wins over the phone's cache. */
     private var serverTranscriptJSON: String? = null
 
+    /**
+     * This screen saw the transcription still running (status pending/transcribing, a 409, or a
+     * re-transcribe it requested) and has not seen it finish since. Two uses: only then does a
+     * Ready transcript count as having ARRIVED, the moment the server's router starts on it (a
+     * recording opened already transcribed was routed long ago and must not wait on a poll before
+     * it may say "No automations ran"); and while set, the transcript on screen is a cached one
+     * the server no longer holds as routable, so it does not count for [serverTranscriptReady].
+     */
+    private var transcriptWasPending = false
+
+    /**
+     * The server has a finished transcript for this recording as far as this screen knows: text
+     * is on screen and nothing since said the transcription is (again) in progress. Gates both the
+     * "No automations ran" verdict and the Run automations action (the server answers 409 without
+     * a transcript, even while an old one is still shown here during a re-transcribe).
+     */
+    private val serverTranscriptReady: Boolean
+        get() = transcriptPlainText != null && !transcriptWasPending
+
     /** What the content blocks currently show, whichever source it came from. */
     private var currentModel: DetailModel? = null
+
+    /**
+     * The server's router runs for this recording, newest first; null until the first successful
+     * fetch (the section stays hidden rather than flashing an empty state while loading, and a
+     * failed fetch is silent because the transcript is the page's job, the automations a bonus).
+     */
+    private var routingRuns: List<RoutingRun>? = null
 
     // Audio player (media3 ExoPlayer)
     private var preparedKey: String? = null
@@ -107,11 +137,17 @@ class FileDetailActivity : AppCompatActivity() {
     interface ServerDetailSource : ServerRecordingActions {
         suspend fun recording(id: String): ApiClient.RecordingResult
         suspend fun transcript(id: String): ApiClient.TranscriptResult
+        suspend fun routing(id: String): ApiClient.RoutingResult
+        suspend fun rerunRouting(id: String): ApiClient.ActionResult
+        suspend fun retryDelivery(deliveryId: String): ApiClient.RetryResult
     }
 
     private object ApiServerDetailSource : ServerDetailSource, ServerRecordingActions by ApiServerRecordingActions {
         override suspend fun recording(id: String) = withContext(Dispatchers.IO) { ApiClient.fetchRecording(id) }
         override suspend fun transcript(id: String) = withContext(Dispatchers.IO) { ApiClient.fetchTranscript(id) }
+        override suspend fun routing(id: String) = withContext(Dispatchers.IO) { ApiClient.fetchRouting(id) }
+        override suspend fun rerunRouting(id: String) = withContext(Dispatchers.IO) { ApiClient.rerunRouting(id) }
+        override suspend fun retryDelivery(deliveryId: String) = withContext(Dispatchers.IO) { ApiClient.retryDelivery(deliveryId) }
     }
 
     companion object {
@@ -124,6 +160,52 @@ class FileDetailActivity : AppCompatActivity() {
         /** Swapped by tests; production always uses the ApiClient-backed default. */
         @VisibleForTesting
         var serverSource: ServerDetailSource = ApiServerDetailSource
+
+        /**
+         * Delays before re-reading the routing endpoint while a delivery is still in progress:
+         * agents report back seconds to tens of seconds after the hand-off, so three reads spread
+         * over about forty seconds catch most outcomes without keeping the radio busy.
+         */
+        @VisibleForTesting
+        val ROUTING_POLL_DELAYS_MS = longArrayOf(8_000L, 15_000L, 17_000L)
+
+        /** After "Run automations": the router answers within seconds, the agents a while later. */
+        @VisibleForTesting
+        val RERUN_REFRESH_DELAYS_MS = longArrayOf(3_000L, 15_000L)
+
+        /** A route's reason is a paragraph; show its opening lines and unfold on tap. */
+        private const val REASON_COLLAPSED_LINES = 3
+
+        /** Recording ids with a Run automations call on the wire, see [runAutomations]. */
+        private val rerunsInFlight = mutableSetOf<String>()
+
+        /**
+         * The screen currently showing each server recording, so a rerun that finishes after a
+         * rotation reports to the live replacement instead of a destroyed instance.
+         */
+        private val liveScreens = mutableMapOf<String, FileDetailActivity>()
+
+        /** An answer that leaves open whether the server ran the router anyway (timeout, 5xx, lost response). */
+        private fun isAmbiguousRerunFailure(result: ApiClient.ActionResult): Boolean =
+            result is ApiClient.ActionResult.Error && result.message != "HTTP 409"
+
+        /** Tests share one process: clear the process-wide rerun state between them. */
+        @VisibleForTesting
+        internal fun resetProcessStateForTests() {
+            rerunsInFlight.clear()
+            liveScreens.clear()
+        }
+
+        /** Outlives any one screen so a rerun's in-flight state survives a rotation. */
+        private val rerunScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+        /**
+         * How long after upload a recording counts as "still settling", see [isRecentUpload].
+         * Generous because the contract carries no transcription-completion time and a long
+         * recording or a backlog can keep the transcriber busy for a while; the cost of being
+         * wrong is only a hidden section (not a wrong verdict) until the screen is next refreshed.
+         */
+        private const val RECENT_UPLOAD_WINDOW_MS = 30 * 60_000L
 
         /** Open a merged row: both ids travel when both are known. */
         fun intentFor(context: Context, item: RecordingItem): Intent =
@@ -142,6 +224,10 @@ class FileDetailActivity : AppCompatActivity() {
         binding.moreButton.setOnClickListener { showMoreMenu(it) }
         binding.copyTranscriptButton.setOnClickListener { copyTranscript() }
         binding.exportMarkdownButton.setOnClickListener { currentModel?.let { m -> exportMarkdown(m) } }
+        binding.automationsShowEarlier.setOnClickListener {
+            showEarlierRuns = true
+            bindAutomations()
+        }
         setupAudioPlayerControls()
 
         intent.getStringExtra(EXTRA_FILE_ID)?.let { currentFile = findFile(it) }
@@ -163,21 +249,37 @@ class FileDetailActivity : AppCompatActivity() {
 
         val serverId = serverRecordingId
         when {
+            // Also loads the Automations section once the recording (and so its age) is known.
             serverId != null && RecordingStore.isServerConfigured -> loadServerRecording(serverId)
             // Uploaded before the phone learned the server id (legacy index): resolve it by
-            // (device, session) and fetch the transcript the old way.
-            file != null && file.uploaded && transcriptPlainText == null ->
-                fetchTranscriptFromServer(file, userInitiated = false)
+            // (device, session) and fetch the transcript the old way. Also when a transcript is
+            // already cached: the id is what unlocks the server-side content (automations, the
+            // server menu actions), and once stored the next open takes the server path above.
+            file != null && file.uploaded -> fetchTranscriptFromServer(file, userInitiated = false)
         }
     }
+
+    /** onCreate already loaded everything; only a RETURN to the screen needs a refresh. */
+    private var resumedBefore = false
 
     override fun onResume() {
         super.onResume()
         // Pick up what changed while we were away (a rename, a transcript stored by the
         // background title sync); the server side re-renders in place after its own writes.
-        val file = currentFile ?: return
-        currentFile = findFile(file.id) ?: file
-        if (currentModel != null) render()
+        val file = currentFile
+        if (file != null) {
+            currentFile = findFile(file.id) ?: file
+            if (currentModel != null) render()
+        }
+        // Agents finish their work while the user is elsewhere; coming back should show it.
+        if (resumedBefore && serverRecordingId != null && RecordingStore.isServerConfigured) refreshRouting()
+        resumedBefore = true
+        registerAsLiveScreen()
+    }
+
+    /** This instance is the one showing [serverRecordingId] now, see [liveScreens]. */
+    private fun registerAsLiveScreen() {
+        serverRecordingId?.let { liveScreens[it] = this }
     }
 
     /**
@@ -242,6 +344,7 @@ class FileDetailActivity : AppCompatActivity() {
         bindStatusBadge(item.status)
         if (transcriptPlainText == null) bindEmptyState(item)
         bindAudio(file, rec)
+        bindAutomations()
     }
 
     /**
@@ -279,10 +382,12 @@ class FileDetailActivity : AppCompatActivity() {
 
     /** Meta line "MMM d, yyyy · HH:mm · Xm Ys" (mirrors iOS). */
     private fun bindMetaLine(recordedAtMillis: Long, durationSeconds: Long) {
-        val dateFormat = SimpleDateFormat("MMM d, yyyy · HH:mm", Locale.getDefault())
-        binding.fileDateLabel.text =
-            "${dateFormat.format(Date(recordedAtMillis))} · ${formatMetaDuration(durationSeconds)}"
+        binding.fileDateLabel.text = "${formatMetaDate(recordedAtMillis)} · ${formatMetaDuration(durationSeconds)}"
     }
+
+    /** The meta line's date format, shared with the Automations timestamps so the page reads as one. */
+    private fun formatMetaDate(millis: Long): String =
+        SimpleDateFormat("MMM d, yyyy · HH:mm", Locale.getDefault()).format(Date(millis))
 
     /**
      * The badge only speaks while the server is still working on the recording or gave up on
@@ -360,7 +465,14 @@ class FileDetailActivity : AppCompatActivity() {
             when (val result = serverSource.recording(id)) {
                 is ApiClient.RecordingResult.Ok -> {
                     serverRecording = result.recording
+                    serverKnowsRecording = true
+                    if (result.recording.status == ServerRecording.STATUS_PENDING ||
+                        result.recording.status == ServerRecording.STATUS_TRANSCRIBING) transcriptWasPending = true
                     render()
+                    // First read of the automations. A recording uploaded minutes ago may sit in
+                    // the gap between "transcript done" and "router run inserted": wait for the
+                    // run rather than declare that nothing ran.
+                    refreshRouting(awaitRun = routingRuns == null && isRecentUpload(result.recording))
                     if (transcriptPlainText == null) binding.emptySubtitle.text = getString(R.string.checking_transcript)
                     loadServerTranscript(result.recording)
                 }
@@ -375,10 +487,18 @@ class FileDetailActivity : AppCompatActivity() {
         lifecycleScope.launch {
             when (val outcome = serverSource.transcript(rec.id)) {
                 is ApiClient.TranscriptResult.Ready -> {
+                    val arrived = transcriptArrived()
                     storeServerTranscript(outcome.rawJson)
                     render()
+                    // A transcript that just landed means the server's router is about to run
+                    // (detached, after transcription); re-read the automations until its run
+                    // shows up and keep polling for the agents.
+                    if (arrived) refreshRouting(awaitRun = true)
                 }
-                is ApiClient.TranscriptResult.Pending -> render()
+                is ApiClient.TranscriptResult.Pending -> {
+                    transcriptWasPending = true
+                    render()
+                }
                 is ApiClient.TranscriptResult.NotFound ->
                     if (rec.status == ServerRecording.STATUS_DONE) failServer(getString(R.string.recording_not_on_server))
                     else render()
@@ -395,10 +515,24 @@ class FileDetailActivity : AppCompatActivity() {
      */
     private fun storeServerTranscript(rawJson: String) {
         serverTranscriptJSON = rawJson
+        serverKnowsRecording = true
         val file = currentFile ?: return
         if (file.transcriptJSON == rawJson) return
         TitleSyncManager.storeTranscript(file.id, rawJson)
         currentFile = findFile(file.id) ?: file
+    }
+
+    /**
+     * Did this transcript just land? Yes when the screen saw the transcription pending and the
+     * server now answers 200: the transcript endpoint returns 409 for anything but a finished
+     * transcription, so the answer itself is the proof, whatever is on screen (after Re-transcribe
+     * the old transcript stays visible, and the new one may even read the same). Consumes the
+     * pending flag so a later re-read of the same transcript does not count again.
+     */
+    private fun transcriptArrived(): Boolean {
+        if (!transcriptWasPending) return false
+        transcriptWasPending = false
+        return true
     }
 
     /**
@@ -495,6 +629,507 @@ class FileDetailActivity : AppCompatActivity() {
         binding.progressSlider.progress = if (duration > 0) (target * 1000 / duration).toInt() else 0
     }
 
+    // MARK: - Automations
+
+    /** Older runs are collapsed behind "Show earlier runs" until tapped; reset per page view. */
+    private var showEarlierRuns = false
+
+    private val routingHandler = Handler(Looper.getMainLooper())
+
+    /** One fetch at a time; a request that arrives mid-flight is honoured once the current one lands. */
+    private var routingLoading = false
+    private var routingReloadRequested = false
+
+    /** Which of [ROUTING_POLL_DELAYS_MS] the next in-progress poll uses; reset by every refresh. */
+    private var routingPollIndex = 0
+
+    /** The one pending in-progress poll, so a refresh can cancel it without touching other timers. */
+    private var routingPollRunnable: Runnable? = null
+
+    /**
+     * A run is expected but may not exist yet (the router starts after the transcript lands and
+     * runs detached). While set, an empty answer keeps the polling going and the "No automations
+     * ran" line stays out of sight, so the user does not read a verdict that is about to change.
+     * Cleared only when the run shows up: a spent polling budget stops the reads but is not proof
+     * that nothing ran (a slow model, a backlog), so the verdict stays open until the next refresh
+     * (a return to the screen, Run automations, Retry) asks again.
+     */
+    private var routingAwaitingRun = false
+
+    /**
+     * The latest run already on screen when the wait began. After Re-transcribe the history is
+     * not empty, so "a run exists" is not the signal; "a run NEWER than this one exists" is.
+     */
+    private var routingAwaitBaselineRunId: String? = null
+
+    /**
+     * The wait began while a read was already on the wire: that read predates the arrival, so its
+     * latest run is the baseline (not the stale null of a screen that had no history yet), and it
+     * must not be mistaken for the awaited run.
+     */
+    private var routingAwaitBaselinePending = false
+
+    /**
+     * The routing endpoint answered 404 for a recording the server does have: an older server
+     * without automations. The section stays hidden and the menu stops offering Run automations,
+     * which would fail the same way.
+     */
+    private var routingUnsupported = false
+
+    /**
+     * The server has confirmed this recording exists (it returned the recording object, its
+     * transcript, or its id from the lookup). Only then is a routing 404 about the endpoint
+     * rather than the recording.
+     */
+    private var serverKnowsRecording = false
+
+    /**
+     * (Re)load the routing section and start a fresh polling budget. Every trigger (open,
+     * resume, transcript arrival, Run automations, Retry) goes through here so the polling
+     * cannot stack: the pending poll is cancelled and rescheduled from the new fetch.
+     * [awaitRun] marks the transcript-arrival case, see [routingAwaitingRun].
+     */
+    private fun refreshRouting(awaitRun: Boolean = false, onSettled: (() -> Unit)? = null) {
+        routingPollRunnable?.let { routingHandler.removeCallbacks(it) }
+        routingPollRunnable = null
+        routingPollIndex = 0
+        if (awaitRun) {
+            routingAwaitingRun = true
+            routingAwaitBaselineRunId = routingRuns?.firstOrNull()?.id
+            routingAwaitBaselinePending = routingLoading
+        }
+        onSettled?.let { routingSettledCallbacks += it }
+        loadRouting()
+    }
+
+    /** Run once the next routing read (and any reload queued behind it) has landed or been skipped. */
+    private val routingSettledCallbacks = mutableListOf<() -> Unit>()
+
+    private fun drainRoutingSettledCallbacks() {
+        val callbacks = routingSettledCallbacks.toList()
+        routingSettledCallbacks.clear()
+        callbacks.forEach { it() }
+    }
+
+    /** Uploaded within the last few minutes: transcription and routing may still be settling. */
+    private fun isRecentUpload(rec: ServerRecording): Boolean {
+        val uploadedAt = rec.uploadedAt ?: return false
+        return System.currentTimeMillis() - uploadedAt < RECENT_UPLOAD_WINDOW_MS
+    }
+
+    private fun loadRouting() {
+        val serverId = serverRecordingId
+        if (serverId == null || !RecordingStore.isServerConfigured) {
+            drainRoutingSettledCallbacks()
+            return
+        }
+        if (routingLoading) {
+            routingReloadRequested = true
+            return
+        }
+        routingLoading = true
+        lifecycleScope.launch {
+            val result = serverSource.routing(serverId)
+            routingLoading = false
+            when (result) {
+                is ApiClient.RoutingResult.Ok -> {
+                    routingUnsupported = false
+                    routingRuns = result.runs
+                    val latestId = result.runs.firstOrNull()?.id
+                    if (routingAwaitBaselinePending) {
+                        routingAwaitBaselineRunId = latestId
+                        routingAwaitBaselinePending = false
+                    } else if (latestId != null && latestId != routingAwaitBaselineRunId) {
+                        routingAwaitingRun = false
+                    }
+                    scheduleRoutingPollIfNeeded(result.runs)
+                    bindAutomations()
+                }
+                // Failures are silent: an old server without the endpoint, or a blip, must not
+                // put an error where the transcript is the point of the page. What was shown
+                // before stays, and a poll that failed still counts against the budget so one
+                // dropped request does not leave a Working line frozen.
+                is ApiClient.RoutingResult.NotFound -> {
+                    if (serverKnowsRecording) routingUnsupported = true
+                }
+                is ApiClient.RoutingResult.AuthError,
+                is ApiClient.RoutingResult.Error -> {
+                    scheduleRoutingPollIfNeeded(routingRuns ?: emptyList())
+                    bindAutomations() // the budget may just have run out, which changes what shows
+                }
+            }
+            if (routingReloadRequested) {
+                routingReloadRequested = false
+                loadRouting()
+            } else {
+                drainRoutingSettledCallbacks()
+            }
+        }
+    }
+
+    /**
+     * While an agent is still working (on any run: a retried delivery lives on an older one) or
+     * the router's run has yet to appear, read again a few times, then stop.
+     */
+    private fun scheduleRoutingPollIfNeeded(runs: List<RoutingRun>) {
+        val working = runs.any { it.hasInProgressDelivery }
+        if (!working && !routingAwaitingRun) return
+        // Budget spent: stop reading; the awaiting state (if any) stays, see [routingAwaitingRun].
+        // A poll already waiting will read soon enough; a read that overlapped it (a queued
+        // reload) must not push it out and spend a slot of the budget.
+        if (routingPollRunnable != null) return
+        val delay = ROUTING_POLL_DELAYS_MS.getOrNull(routingPollIndex) ?: return
+        routingPollIndex++
+        val poll = Runnable {
+            routingPollRunnable = null
+            loadRouting()
+        }
+        routingPollRunnable = poll
+        routingHandler.postDelayed(poll, delay)
+    }
+
+    /**
+     * The section shows when the server has told us something: runs to list, or the certainty
+     * that routing ran and matched nothing (an empty list on a transcribed recording). Before the
+     * first answer, without a server copy, or while the recording is still being transcribed
+     * (routing has not had its turn yet) the section stays out of the way.
+     */
+    private fun bindAutomations() {
+        val runs = routingRuns
+        binding.automationsList.removeAllViews()
+        val transcribed = serverTranscriptReady || serverRecording?.isDone == true
+        val showEmpty = runs != null && runs.isEmpty() && transcribed && !routingAwaitingRun
+        val showRuns = runs != null && runs.isNotEmpty()
+        binding.automationsHeader.visibility = if (showEmpty || showRuns) View.VISIBLE else View.GONE
+        binding.automationsEmpty.visibility = if (showEmpty) View.VISIBLE else View.GONE
+        binding.automationsList.visibility = if (showRuns) View.VISIBLE else View.GONE
+        if (runs == null || !showRuns) {
+            binding.automationsShowEarlier.visibility = View.GONE
+            return
+        }
+        val shown = if (showEarlierRuns) runs else runs.take(1)
+        shown.forEachIndexed { index, run -> binding.automationsList.addView(buildRunBlock(run, isLatest = index == 0)) }
+        binding.automationsShowEarlier.visibility = if (runs.size > 1 && !showEarlierRuns) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * One router run: the matched routes with their reasons and delivery outcomes, or the reason
+     * nothing happened (router error, or no route matched). Plain views built here rather than a
+     * RecyclerView for the same reason as the highlights: a handful of rows inside a ScrollView.
+     */
+    private fun buildRunBlock(run: RoutingRun, isLatest: Boolean): View {
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
+        val block = android.widget.LinearLayout(this).apply {
+            id = R.id.automation_run_block
+            orientation = android.widget.LinearLayout.VERTICAL
+            tag = run
+        }
+        if (!isLatest) {
+            block.addView(mutedText(getString(R.string.automations_earlier_run_fmt, run.createdAt?.let { formatMetaDate(it) } ?: ""))
+                .apply { id = R.id.automation_run_header; setPadding(0, dp(12), 0, 0) })
+        }
+        run.error?.let { error ->
+            block.addView(android.widget.TextView(this).apply {
+                id = R.id.automation_run_error
+                text = error
+                setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.red))
+                textSize = 13f
+                typeface = android.graphics.Typeface.SANS_SERIF
+                setPadding(0, dp(8), 0, dp(4))
+            })
+        }
+        if (run.routes.isEmpty() && run.deliveries.isEmpty() && run.error == null) {
+            val stamp = run.createdAt?.let { " · " + formatMetaDate(it) } ?: ""
+            block.addView(mutedText(getString(R.string.automations_no_match) + stamp).apply {
+                id = R.id.automation_no_match
+                setPadding(0, dp(8), 0, dp(4))
+            })
+        }
+        val covered = mutableSetOf<String>()
+        for (route in run.routes) {
+            covered += route.name
+            block.addView(buildRouteRow(route.name, route.reason))
+            run.deliveriesFor(route.name).forEach { block.addView(buildDeliveryRow(it)) }
+        }
+        // A delivery whose route the decision does not list (should not happen; shown so nothing
+        // the server did is invisible).
+        run.deliveries.filter { it.routeName !in covered }.groupBy { it.routeName }.forEach { (name, list) ->
+            block.addView(buildRouteRow(name.ifBlank { "?" }, null))
+            list.forEach { block.addView(buildDeliveryRow(it)) }
+        }
+        return block
+    }
+
+    /** Route name in the primary style, the router's reason muted below it; tap the reason to unfold it. */
+    private fun buildRouteRow(name: String, reason: String?): View {
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
+        return android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(0, dp(10), 0, 0)
+            addView(android.widget.TextView(this@FileDetailActivity).apply {
+                id = R.id.automation_route_name
+                text = name
+                setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.text_primary))
+                textSize = 14f
+                typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+            })
+            if (reason != null) {
+                addView(mutedText(reason).apply {
+                    id = R.id.automation_route_reason
+                    maxLines = REASON_COLLAPSED_LINES
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(0, dp(2), 0, 0)
+                    setOnClickListener {
+                        maxLines = if (maxLines == REASON_COLLAPSED_LINES) Int.MAX_VALUE else REASON_COLLAPSED_LINES
+                    }
+                })
+            }
+        }
+    }
+
+    /**
+     * "[state pill] outcome · time" plus a Retry pill when it failed. The agent's own report
+     * (result_status) speaks first; only without one does the hand-off status stand in.
+     */
+    private fun buildDeliveryRow(d: Delivery): View {
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
+        val (pillText, pillColor, pillBg, detail) = deliveryPresentation(d)
+        val row = android.widget.LinearLayout(this).apply {
+            id = R.id.automation_delivery_row
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.TOP
+            setPadding(0, dp(6), 0, dp(2))
+            tag = d
+        }
+        row.addView(android.widget.TextView(this).apply {
+            id = R.id.automation_delivery_pill
+            text = pillText
+            setTextColor(ContextCompat.getColor(this@FileDetailActivity, pillColor))
+            setBackgroundResource(pillBg)
+            textSize = 11f
+            typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+            setPadding(dp(8), dp(2), dp(8), dp(2))
+            includeFontPadding = false
+        }, android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(2); marginEnd = dp(8) })
+        val textColumn = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            addView(android.widget.TextView(this@FileDetailActivity).apply {
+                id = R.id.automation_delivery_text
+                text = detail
+                setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.dark_gray))
+                textSize = 13f
+                typeface = android.graphics.Typeface.SANS_SERIF
+            })
+            d.effectiveAt?.let { at ->
+                addView(mutedText(formatMetaDate(at)).apply {
+                    id = R.id.automation_delivery_time
+                    textSize = 12f
+                    setPadding(0, dp(2), 0, 0)
+                })
+            }
+        }
+        row.addView(textColumn, android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        if (d.canRetry) {
+            row.addView(android.widget.TextView(this).apply {
+                id = R.id.automation_retry
+                text = getString(R.string.retry)
+                setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.text_primary))
+                setBackgroundResource(R.drawable.bg_pill_outline_gray)
+                textSize = 12f
+                typeface = android.graphics.Typeface.SANS_SERIF
+                gravity = android.view.Gravity.CENTER
+                setPadding(dp(12), 0, dp(12), 0)
+                setOnClickListener { retryDelivery(d) }
+            }, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, dp(28)
+            ).apply { marginStart = dp(8) })
+        }
+        return row
+    }
+
+    /** (pill label, pill text color, pill background, detail text) for one delivery. */
+    private data class DeliveryPresentation(val pill: String, val color: Int, val background: Int, val detail: String)
+
+    private fun deliveryPresentation(d: Delivery): DeliveryPresentation = when (d.resultStatus) {
+        Delivery.RESULT_QUEUED -> DeliveryPresentation(
+            getString(R.string.automation_state_working), R.color.orange, R.drawable.bg_status_pending,
+            getString(R.string.automation_working_text)
+        )
+        Delivery.RESULT_DONE -> DeliveryPresentation(
+            getString(R.string.automation_state_done), R.color.green, R.drawable.bg_status_synced,
+            d.resultSummary ?: getString(R.string.automation_state_done)
+        )
+        Delivery.RESULT_FAILED -> DeliveryPresentation(
+            getString(R.string.automation_state_failed), R.color.red, R.drawable.bg_status_pending,
+            d.resultSummary ?: d.lastError ?: getString(R.string.automation_failed_text)
+        )
+        // The job was accepted but never reported back within the server's deadline: neither
+        // good nor bad news, so the neutral pill; Retry is offered because the server allows it.
+        Delivery.RESULT_UNKNOWN -> DeliveryPresentation(
+            getString(R.string.automation_state_no_report), R.color.gray7, R.drawable.bg_status_neutral,
+            getString(R.string.automation_no_report_text)
+        )
+        else -> when (d.status) {
+            Delivery.STATUS_FAILED -> DeliveryPresentation(
+                getString(R.string.automation_state_failed), R.color.red, R.drawable.bg_status_pending,
+                d.lastError ?: getString(R.string.automation_failed_text)
+            )
+            Delivery.STATUS_PENDING -> DeliveryPresentation(
+                getString(R.string.automation_state_pending), R.color.orange, R.drawable.bg_status_pending,
+                getString(R.string.automation_pending_text)
+            )
+            // "ok" without a report: a webhook was handed to something that has not (or will
+            // not) report back; a markdown or decision-only action ran to completion right there.
+            else -> if (d.actionType == Delivery.ACTION_WEBHOOK) DeliveryPresentation(
+                getString(R.string.automation_state_handed_off), R.color.gray7, R.drawable.bg_status_neutral,
+                getString(R.string.automation_handed_off_text)
+            ) else DeliveryPresentation(
+                getString(R.string.automation_state_done), R.color.green, R.drawable.bg_status_synced,
+                getString(R.string.automation_state_done)
+            )
+        }
+    }
+
+    private fun mutedText(text: CharSequence): android.widget.TextView = android.widget.TextView(this).apply {
+        this.text = text
+        setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.text_secondary))
+        textSize = 13f
+        typeface = android.graphics.Typeface.SANS_SERIF
+    }
+
+    /** Ask the server to run the failed delivery again, then watch the section for the outcome. */
+    private fun retryDelivery(d: Delivery) {
+        lifecycleScope.launch {
+            when (val result = serverSource.retryDelivery(d.id)) {
+                is ApiClient.RetryResult.Ok -> {
+                    Toast.makeText(this@FileDetailActivity, R.string.automation_retry_queued, Toast.LENGTH_SHORT).show()
+                    refreshRouting()
+                }
+                // The delivery moved on without us (retried elsewhere, or it succeeded after
+                // all): the refreshed section is the answer, no dialog needed.
+                is ApiClient.RetryResult.Conflict -> refreshRouting()
+                is ApiClient.RetryResult.NotFound -> showAlert(getString(R.string.automations), getString(R.string.recording_not_on_server))
+                is ApiClient.RetryResult.AuthError -> showAlert(getString(R.string.automations), getString(R.string.transcript_auth_error))
+                is ApiClient.RetryResult.Error -> {
+                    showAlert(getString(R.string.automations), getString(R.string.server_request_failed_fmt, result.message))
+                    // A lost response may hide a retry the server did run: show its state.
+                    refreshRouting()
+                }
+            }
+        }
+    }
+
+    /**
+     * Menu: run the AI router again. The router itself answers within seconds; the agents it
+     * hands off to report later, so the section is re-read on a short schedule and each read
+     * keeps polling while a delivery is still working.
+     *
+     * The call is synchronous on the server and not idempotent (each call is a new run with real
+     * side effects: notes written, sessions started), so it runs in a process-wide scope with a
+     * process-wide in-flight set: a second tap, on this screen or on the one that replaces it
+     * after a rotation, must not send another while the first is still on the wire. The outcome
+     * is handed to whichever screen shows the recording when it lands (this one, or its
+     * replacement after a rotation), so the replacement gets the feedback and the refreshes too.
+     *
+     * The guard is released at once for a definitive answer (success, 404, auth, 409). An
+     * ambiguous error (timeout, lost response, 5xx) may hide a run the server did create, so the
+     * guard stays until the live screen has re-read the section and can show it; with no screen
+     * left to reconcile, it is released, and the next open reads the history fresh anyway.
+     */
+    private fun runAutomations(serverId: String) {
+        val history = routingRuns ?: return // not loaded yet; the menu item is disabled then
+        if (!rerunsInFlight.add(serverId)) return
+        val baselineRunId = history.firstOrNull()?.id
+        rerunScope.launch {
+            val result = try {
+                serverSource.rerunRouting(serverId)
+            } catch (e: Throwable) {
+                rerunsInFlight.remove(serverId)
+                throw e
+            }
+            // Only companion state and ids from here: this coroutine may outlive the screen that
+            // started it by minutes and must not keep that screen (and its views) alive.
+            val screen = liveScreens[serverId]
+            if (screen == null || !isAmbiguousRerunFailure(result)) rerunsInFlight.remove(serverId)
+            screen?.onRerunFinished(result, baselineRunId) { rerunsInFlight.remove(serverId) }
+        }
+    }
+
+    /**
+     * Feedback and follow-up for a finished Run automations call. On an ambiguous error the
+     * request may well have reached the server and be creating a run with real side effects, so
+     * the section is re-read on the same schedule as a success and [onReconciled] (which releases
+     * the in-flight guard) runs only once a run newer than [baselineRunId] has shown up, or the
+     * scheduled reads are exhausted: the user sees what happened before a second tap is possible.
+     */
+    private fun onRerunFinished(result: ApiClient.ActionResult, baselineRunId: String?, onReconciled: () -> Unit) {
+        if (isDestroyed || isFinishing) {
+            onReconciled()
+            return
+        }
+        when (result) {
+            is ApiClient.ActionResult.Ok -> {
+                Toast.makeText(this, R.string.automations_queued, Toast.LENGTH_SHORT).show()
+                for (delay in RERUN_REFRESH_DELAYS_MS) routingHandler.postDelayed({ refreshRouting() }, delay)
+            }
+            is ApiClient.ActionResult.Error -> {
+                // 409: no transcript to route yet (the menu hides the action then, but the
+                // transcript can vanish under a re-transcribe between the two).
+                showAlert(
+                    getString(R.string.automations),
+                    if (result.message == "HTTP 409") getString(R.string.automations_need_transcript) else actionErrorMessage(result)
+                )
+                if (isAmbiguousRerunFailure(result)) reconcileRerun(baselineRunId, onReconciled)
+            }
+            else -> showAlert(getString(R.string.automations), actionErrorMessage(result))
+        }
+    }
+
+    /** One ambiguous rerun being reconciled, see [reconcileRerun]. [release] is idempotent. */
+    private inner class RerunReconciliation(private val baselineRunId: String?, private val onDone: () -> Unit) {
+        private var released = false
+        var readsLeft = RERUN_REFRESH_DELAYS_MS.size + 1
+
+        fun release() {
+            if (released) return
+            released = true
+            rerunReconciliations.remove(this)
+            onDone()
+        }
+
+        /** After each read: a newer run than the one before the tap settles it; so does the last read. */
+        fun onRead() {
+            readsLeft--
+            val latest = routingRuns?.firstOrNull()?.id
+            if ((latest != null && latest != baselineRunId) || readsLeft <= 0) release()
+        }
+    }
+
+    private val rerunReconciliations = mutableListOf<RerunReconciliation>()
+
+    private fun reconcileRerun(baselineRunId: String?, onReconciled: () -> Unit) {
+        val reconciliation = RerunReconciliation(baselineRunId, onReconciled)
+        rerunReconciliations += reconciliation
+        refreshRouting(onSettled = { reconciliation.onRead() })
+        for (delay in RERUN_REFRESH_DELAYS_MS) {
+            routingHandler.postDelayed({ refreshRouting(onSettled = { reconciliation.onRead() }) }, delay)
+        }
+    }
+
+    private fun showAlert(title: String, message: String) {
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
+
     // MARK: - Transcript for a phone copy without a server id
 
     /** Guard so the automatic check on open runs only once per page view. */
@@ -516,6 +1151,10 @@ class FileDetailActivity : AppCompatActivity() {
         binding.emptySubtitle.text = getString(R.string.checking_transcript)
 
         lifecycleScope.launch {
+            var foundByLookup = false
+            // The server may be switched while the lookup is on the wire; an id from the OLD
+            // server must not be written into the index (the same guard TitleSyncManager uses).
+            val configGen = RecordingStore.serverConfigGeneration
             val outcome = withContext(Dispatchers.IO) {
                 try {
                     val cachedId = file.serverId
@@ -527,7 +1166,11 @@ class FileDetailActivity : AppCompatActivity() {
                         // could resolve to a DIFFERENT device's recording).
                         when (val lookup = ApiClient.lookupRecordingId(file.deviceSN, file.sessionId)) {
                             is ApiClient.LookupResult.Found -> {
+                                if (RecordingStore.serverConfigGeneration != configGen) {
+                                    return@withContext ApiClient.TranscriptResult.Error("server changed")
+                                }
                                 RecordingStore.updateServerId(file.id, lookup.id)
+                                foundByLookup = true
                                 ApiClient.fetchTranscript(lookup.id)
                             }
                             is ApiClient.LookupResult.NotFound -> ApiClient.TranscriptResult.NotFound
@@ -540,17 +1183,28 @@ class FileDetailActivity : AppCompatActivity() {
                 }
             }
 
+            if (RecordingStore.serverConfigGeneration != configGen) {
+                // Answered by a server the app no longer talks to: show nothing from it.
+                binding.generateButton.isEnabled = true
+                return@launch
+            }
             // The lookup may have stored a server id; from here on the server path owns it.
             currentFile = findFile(file.id) ?: file
             if (serverRecordingId == null) serverRecordingId = currentFile?.serverId?.takeIf { it.isNotBlank() }
+            if (foundByLookup) serverKnowsRecording = true
+            registerAsLiveScreen()
             binding.generateButton.isEnabled = true
             when (outcome) {
                 is ApiClient.TranscriptResult.Ready -> {
+                    val arrived = transcriptArrived()
                     storeServerTranscript(outcome.rawJson)
                     render()
+                    if (arrived && serverRecordingId != null) refreshRouting(awaitRun = true)
                 }
                 is ApiClient.TranscriptResult.Pending -> {
+                    transcriptWasPending = true
                     binding.emptySubtitle.text = getString(R.string.transcription_pending)
+                    bindAutomations() // a cached transcript on screen no longer counts as routable
                 }
                 is ApiClient.TranscriptResult.NotFound -> {
                     binding.emptySubtitle.text = getString(R.string.transcript_not_on_server)
@@ -565,16 +1219,14 @@ class FileDetailActivity : AppCompatActivity() {
                     if (userInitiated) showTranscriptAlert(getString(R.string.transcript_server_error))
                 }
             }
+            // With the id known this can be the very first read of the automations, whatever the
+            // transcript answer was (a cached transcript is on screen when it is Pending or Error).
+            // Skipped when the Ready branch above already started one.
+            if (serverRecordingId != null && routingRuns == null && !routingLoading) refreshRouting()
         }
     }
 
-    private fun showTranscriptAlert(message: String) {
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.transcript))
-            .setMessage(message)
-            .setPositiveButton(android.R.string.ok, null)
-            .show()
-    }
+    private fun showTranscriptAlert(message: String) = showAlert(getString(R.string.transcript), message)
 
     /**
      * Parse the cached transcript JSON into "Speaker N · HH:MM:SS" paragraphs (mirrors iOS).
@@ -840,6 +1492,13 @@ class FileDetailActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         releasePlayer()
+        routingHandler.removeCallbacksAndMessages(null)
+        // Reads in flight die with the scope; whoever waited on them must not wait forever
+        // (a rerun guard held for reconciliation would otherwise pin Run automations off).
+        drainRoutingSettledCallbacks()
+        rerunReconciliations.toList().forEach { it.release() }
+        // Only our own entry: after a rotation the replacement may already be registered.
+        serverRecordingId?.let { if (liveScreens[it] === this) liveScreens.remove(it) }
     }
 
     // MARK: - More Menu
@@ -868,6 +1527,14 @@ class FileDetailActivity : AppCompatActivity() {
         menu.findItem(R.id.action_copy_transcript)?.isVisible = transcriptPlainText != null
         menu.findItem(R.id.action_export_markdown)?.isVisible = transcriptPlainText != null
         menu.findItem(R.id.action_retranscribe)?.isVisible = hasServer
+        // The router needs a transcript to read (see serverTranscriptReady) and a server that has
+        // the automations endpoints at all.
+        // Disabled until the history has loaded: reconciling an ambiguous rerun compares against
+        // the latest run before the tap, which needs that history to be known.
+        menu.findItem(R.id.action_run_automations)?.apply {
+            isVisible = hasServer && serverTranscriptReady && !routingUnsupported
+            isEnabled = serverRecordingId !in rerunsInFlight && routingRuns != null
+        }
         menu.findItem(R.id.action_remove_from_phone)?.isVisible = currentItem()?.canRemoveFromPhone == true
         menu.findItem(R.id.action_delete)?.isVisible = true
     }
@@ -884,6 +1551,7 @@ class FileDetailActivity : AppCompatActivity() {
             R.id.action_copy_transcript -> copyTranscript()
             R.id.action_export_markdown -> exportMarkdown(model)
             R.id.action_retranscribe -> serverRecordingId?.let { retranscribeOnServer(it) }
+            R.id.action_run_automations -> serverRecordingId?.let { runAutomations(it) }
             R.id.action_remove_from_phone -> confirmRemoveFromPhone(item)
             R.id.action_delete -> confirmDelete(item)
             else -> return false
@@ -897,6 +1565,7 @@ class FileDetailActivity : AppCompatActivity() {
             when (val result = RecordingActions.retranscribe(serverId, serverSource)) {
                 is ApiClient.ActionResult.Ok -> {
                     Toast.makeText(this@FileDetailActivity, R.string.retranscribe_queued, Toast.LENGTH_SHORT).show()
+                    transcriptWasPending = true
                     loadServerRecording(serverId)
                 }
                 else -> {

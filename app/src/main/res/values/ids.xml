@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ids for the views FileDetailActivity builds in code for the Automations section. They exist so
+     tests (and accessibility tooling) can find the parts of a row without depending on child order. -->
+<resources>
+    <item name="automation_run_block" type="id" />
+    <item name="automation_run_header" type="id" />
+    <item name="automation_run_error" type="id" />
+    <item name="automation_no_match" type="id" />
+    <item name="automation_route_name" type="id" />
+    <item name="automation_route_reason" type="id" />
+    <item name="automation_delivery_row" type="id" />
+    <item name="automation_delivery_pill" type="id" />
+    <item name="automation_delivery_text" type="id" />
+    <item name="automation_delivery_time" type="id" />
+    <item name="automation_retry" type="id" />
+</resources>

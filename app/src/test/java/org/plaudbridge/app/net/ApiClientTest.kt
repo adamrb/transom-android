@@ -488,6 +488,108 @@ class ApiClientTest {
         assertEquals(RecordingStore.serverBaseUrl + "/api/v1/recordings/rec-1/audio", ApiClient.recordingAudioUrl("rec-1"))
     }
 
+    // MARK: - Automations (routing runs, re-run, delivery retry)
+
+    private val routingJson = """{"runs":[{"id":"run-1","recording_id":"rec-1","created_at":"2026-09-07T06:39:00Z",
+        "model":"claude-acp","error":null,
+        "decision":{"routes":[{"name":"meetings","reason":"The speaker explicitly directs how this recording should be filed."}]},
+        "deliveries":[{"id":"d-1","router_run_id":"run-1","route_name":"meetings","action_type":"markdown","status":"ok",
+            "attempts":1,"last_error":null,"created_at":"2026-09-07T06:39:05Z","result_status":"done",
+            "result_summary":"Saved to 0_Quick Add/Garage Inventory Note Request.md","result_at":"2026-09-07T06:40:10Z",
+            "payload":{"ignored":true}}]}],"deliveries":[]}"""
+
+    @Test
+    fun fetchRoutingGetsTheSubresourceWithAuthAndParsesRuns() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(routingJson))
+        val result = ApiClient.fetchRouting("rec-1")
+        assertTrue(result.toString(), result is ApiClient.RoutingResult.Ok)
+        val runs = (result as ApiClient.RoutingResult.Ok).runs
+        assertEquals(1, runs.size)
+        assertEquals("meetings", runs[0].routes.single().name)
+        val d = runs[0].deliveries.single()
+        assertEquals("d-1", d.id)
+        assertEquals("done", d.resultStatus)
+        assertEquals("Saved to 0_Quick Add/Garage Inventory Note Request.md", d.resultSummary)
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals("/api/v1/recordings/rec-1/routing", recorded.path)
+        assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+    }
+
+    @Test
+    fun fetchRoutingEmptyRunsIsOkWithNothing() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"runs":[],"deliveries":[]}"""))
+        assertEquals(ApiClient.RoutingResult.Ok(emptyList()), ApiClient.fetchRouting("rec-1"))
+    }
+
+    @Test
+    fun fetchRouting404IsNotFound() {
+        server.enqueue(MockResponse().setResponseCode(404).setBody("""{"detail":"Not Found"}"""))
+        assertEquals(ApiClient.RoutingResult.NotFound, ApiClient.fetchRouting("gone"))
+    }
+
+    @Test
+    fun fetchRouting401And403AreAuthErrors() {
+        server.enqueue(MockResponse().setResponseCode(401))
+        assertEquals(ApiClient.RoutingResult.AuthError(401), ApiClient.fetchRouting("rec-1"))
+        server.enqueue(MockResponse().setResponseCode(403))
+        assertEquals(ApiClient.RoutingResult.AuthError(403), ApiClient.fetchRouting("rec-1"))
+    }
+
+    @Test
+    fun fetchRouting500HtmlAndUnreachableAreErrors() {
+        server.enqueue(MockResponse().setResponseCode(500))
+        assertEquals(ApiClient.RoutingResult.Error("HTTP 500"), ApiClient.fetchRouting("rec-1"))
+        server.enqueue(MockResponse().setResponseCode(200).setBody("<html>login</html>"))
+        assertTrue(ApiClient.fetchRouting("rec-1") is ApiClient.RoutingResult.Error)
+        RecordingStore.serverBaseUrl = "http://127.0.0.1:1" // nothing listens on port 1
+        assertTrue(ApiClient.fetchRouting("rec-1") is ApiClient.RoutingResult.Error)
+    }
+
+    @Test
+    fun rerunRoutingPostsToTheRouteSubresource() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"id":"run-2","decision":{"routes":[]},"deliveries":[]}"""))
+        assertEquals(ApiClient.ActionResult.Ok, ApiClient.rerunRouting("rec-1"))
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals("/api/v1/recordings/rec-1/route", recorded.path)
+        assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+    }
+
+    @Test
+    fun rerunRoutingMapsFailures() {
+        server.enqueue(MockResponse().setResponseCode(404))
+        assertEquals(ApiClient.ActionResult.NotFound, ApiClient.rerunRouting("rec-1"))
+        server.enqueue(MockResponse().setResponseCode(401))
+        assertEquals(ApiClient.ActionResult.AuthError(401), ApiClient.rerunRouting("rec-1"))
+        server.enqueue(MockResponse().setResponseCode(500))
+        assertEquals(ApiClient.ActionResult.Error("HTTP 500"), ApiClient.rerunRouting("rec-1"))
+    }
+
+    @Test
+    fun retryDeliveryPostsToTheDeliveriesPath() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"id":"d-1","status":"pending"}"""))
+        assertEquals(ApiClient.RetryResult.Ok, ApiClient.retryDelivery("d-1"))
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals("/api/v1/deliveries/d-1/retry", recorded.path)
+        assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+    }
+
+    @Test
+    fun retryDeliveryMapsConflictAndFailures() {
+        server.enqueue(MockResponse().setResponseCode(409))
+        assertEquals(ApiClient.RetryResult.Conflict, ApiClient.retryDelivery("d-1"))
+        server.enqueue(MockResponse().setResponseCode(404))
+        assertEquals(ApiClient.RetryResult.NotFound, ApiClient.retryDelivery("d-1"))
+        server.enqueue(MockResponse().setResponseCode(403))
+        assertEquals(ApiClient.RetryResult.AuthError(403), ApiClient.retryDelivery("d-1"))
+        server.enqueue(MockResponse().setResponseCode(500))
+        assertEquals(ApiClient.RetryResult.Error("HTTP 500"), ApiClient.retryDelivery("d-1"))
+        RecordingStore.serverBaseUrl = "http://127.0.0.1:1"
+        assertTrue(ApiClient.retryDelivery("d-1") is ApiClient.RetryResult.Error)
+    }
+
     // MARK: - Custom vocabulary
 
     private val vocabularyJson = """{"entries":[

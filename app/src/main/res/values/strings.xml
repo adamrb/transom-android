@@ -112,6 +112,28 @@
     <string name="transcript_copied">Transcript copied</string>
     <string name="delete">Delete</string>
 
+    <!-- Automations: what the server's AI router did with the recording (routes matched, deliveries) -->
+    <string name="automations">Automations</string>
+    <string name="automations_none">No automations ran for this recording</string>
+    <string name="automations_no_match">No automation matched</string>
+    <string name="automations_show_earlier">Show earlier runs</string>
+    <string name="automations_earlier_run_fmt">Earlier run · %1$s</string>
+    <string name="run_automations">Run automations</string>
+    <string name="automations_queued">Automations queued</string>
+    <string name="automations_need_transcript">The recording has no transcript to route yet.</string>
+    <string name="automation_retry_queued">Retry queued</string>
+    <string name="automation_state_working">Working</string>
+    <string name="automation_state_done">Done</string>
+    <string name="automation_state_failed">Failed</string>
+    <string name="automation_state_handed_off">Handed off</string>
+    <string name="automation_state_pending">Pending</string>
+    <string name="automation_state_no_report">No report</string>
+    <string name="automation_no_report_text">No result reported</string>
+    <string name="automation_working_text">Working…</string>
+    <string name="automation_handed_off_text">Handed off</string>
+    <string name="automation_pending_text">Waiting to be delivered</string>
+    <string name="automation_failed_text">Failed</string>
+
     <!-- Settings -->
     <string name="settings">Settings</string>
     <string name="automatic_sync">Sync new recordings automatically</string>
