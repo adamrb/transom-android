@@ -306,6 +306,67 @@ class UploadManagerTest {
         assertTrue(fakeLink.deletedSnapshot().isEmpty())
     }
 
+    // MARK: - Button-press marks in the upload metadata
+
+    private fun metadataOf(request: RecordedRequest): org.json.JSONObject {
+        val line = request.body.readUtf8().lines().first { it.trimStart().startsWith("{") && it.contains("session_id") }
+        return org.json.JSONObject(line)
+    }
+
+    @Test
+    fun knownMarksTravelInMetadataAndAreFlaggedSynced() = runBlocking {
+        addSyncedRecording("SN-A", 100)
+        val rec = RecordingStore.allFiles.single()
+        RecordingStore.updateMarks(rec.id, listOf(6.0, 125.5))
+        server.enqueue(okUploadResponse("srv-100"))
+
+        val result = UploadManager.runPass()
+
+        assertEquals(1, result.uploaded)
+        assertEquals("[6,125.5]", metadataOf(server.takeRequest()).getJSONArray("marks").toString())
+        val after = RecordingStore.allFiles.single()
+        assertTrue(after.uploaded)
+        assertTrue("server has the marks; no PATCH needed", after.marksSynced)
+        assertTrue(RecordingStore.awaitingMarksSync.isEmpty())
+    }
+
+    @Test
+    fun unknownMarksAreOmittedAndLeftForThePatchPath() = runBlocking {
+        addSyncedRecording("SN-A", 101)
+        server.enqueue(okUploadResponse("srv-101"))
+
+        UploadManager.runPass()
+
+        assertFalse(metadataOf(server.takeRequest()).has("marks"))
+        val after = RecordingStore.allFiles.single()
+        assertTrue(after.uploaded)
+        assertFalse(after.marksSynced)
+        // Marks read later become PATCH work against the new serverId.
+        RecordingStore.updateMarks(after.id, listOf(3.0))
+        assertEquals(listOf(after.id), RecordingStore.awaitingMarksSync.map { it.id })
+    }
+
+    @Test
+    fun marksChangedDuringUploadAreNotFlaggedSynced() = runBlocking {
+        addSyncedRecording("SN-A", 102)
+        val rec = RecordingStore.allFiles.single()
+        RecordingStore.updateMarks(rec.id, listOf(6.0))
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                // A (re)read lands while the request is in flight with a different answer.
+                RecordingStore.updateMarks(rec.id, listOf(6.0, 9.0))
+                return okUploadResponse("srv-102")
+            }
+        }
+
+        UploadManager.runPass()
+
+        val after = RecordingStore.allFiles.single()
+        assertTrue(after.uploaded)
+        assertEquals(listOf(6.0, 9.0), after.marks)
+        assertFalse("the server only has [6.0]; the new list must still be PATCHed", after.marksSynced)
+    }
+
     // MARK: - Durable retry (WorkManager seam + runPass classification)
 
     @Test

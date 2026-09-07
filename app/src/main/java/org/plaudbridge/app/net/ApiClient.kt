@@ -6,6 +6,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import org.plaudbridge.app.common.AppLog
 import org.plaudbridge.app.storage.RecordingStore
@@ -22,6 +23,7 @@ import java.util.concurrent.TimeUnit
  *   POST /api/v1/recordings                      multipart "file" + "metadata"
  *   GET  /api/v1/recordings/lookup?device_sn=..&session_id=..
  *   GET  /api/v1/recordings/{id}/transcript      200 ready / 409 pending
+ *   PATCH /api/v1/recordings/{id}/marks          {"marks": list of seconds} -> {id, marks, highlights}
  *
  * Security notes:
  * - Redirects are disabled: a redirecting proxy must never turn into a spoofed "success"
@@ -118,7 +120,8 @@ object ApiClient {
         sessionId: Long,
         deviceSn: String,
         startedAtIso: String?,
-        durationSec: Double?
+        durationSec: Double?,
+        marks: List<Double>? = null
     ): UploadResult {
         val metadata = JSONObject().apply {
             put("session_id", sessionId)
@@ -126,6 +129,9 @@ object ApiClient {
             put("started_at", startedAtIso ?: JSONObject.NULL)
             put("duration_s", durationSec ?: JSONObject.NULL)
             put("source", "plaud-bridge-android")
+            // Only when known: an absent key means "not read yet", and the marks then follow via
+            // patchMarks. An empty list is a real answer (no button presses) and is sent as such.
+            if (marks != null) put("marks", marksJson(marks))
         }
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
@@ -163,6 +169,49 @@ object ApiClient {
                 throw ApiException(resp.code, "upload response violates the status/duplicate contract")
             }
             return UploadResult(id = id, duplicate = duplicate)
+        }
+    }
+
+    // MARK: - Marks
+
+    private fun marksJson(marks: List<Double>): JSONArray = JSONArray().apply { marks.forEach { put(it) } }
+
+    /** Typed result of PATCH /recordings/{id}/marks. */
+    sealed class PatchMarksResult {
+        object Ok : PatchMarksResult()
+        /** 404: the server does not know this recording id (stale/foreign id). */
+        object NotFound : PatchMarksResult()
+        data class AuthError(val code: Int) : PatchMarksResult()
+        data class Error(val message: String) : PatchMarksResult()
+    }
+
+    /**
+     * PATCH /api/v1/recordings/{id}/marks: replace the recording's marks (offsets in seconds).
+     * Used when the marks were read off the device after the audio had already been uploaded.
+     * Never throws; every failure is a typed result so the caller can decide what to retry.
+     */
+    fun patchMarks(recordingId: String, marks: List<Double>): PatchMarksResult {
+        val body = JSONObject().put("marks", marksJson(marks)).toString().toRequestBody(jsonType)
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/recordings/$recordingId/marks")
+            .header("Authorization", authHeader())
+            .patch(body)
+            .build()
+        return try {
+            client.newCall(req).execute().use { resp ->
+                val text = resp.body?.string() ?: ""
+                when {
+                    resp.isSuccessful -> PatchMarksResult.Ok
+                    resp.code == 404 -> PatchMarksResult.NotFound
+                    resp.code == 401 || resp.code == 403 -> PatchMarksResult.AuthError(resp.code)
+                    else -> {
+                        AppLog.w(TAG, "patch marks failed: HTTP ${resp.code} (${text.length} bytes)")
+                        PatchMarksResult.Error("HTTP ${resp.code}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            PatchMarksResult.Error(e.message ?: "network error")
         }
     }
 

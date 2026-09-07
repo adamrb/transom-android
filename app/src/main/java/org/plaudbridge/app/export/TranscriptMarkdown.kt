@@ -27,6 +27,10 @@ import java.util.TimeZone
  *
  * <summary>
  *
+ * ## Highlights       (block omitted entirely when there are no highlights)
+ *
+ * - **m:ss** <text>
+ *
  * ## Transcript
  *
  * <transcript text>
@@ -34,19 +38,24 @@ import java.util.TimeZone
  */
 object TranscriptMarkdown {
 
+    /** Server wording for a highlight without transcript text; must match app/highlights.py. */
+    const val NO_SPEECH = "(no speech near this mark)"
+
     /**
      * @param title the recording's display name (manual rename > AI title > stored name)
      * @param recordedAtMillis recording start, epoch millis
      * @param durationSeconds recording length; whole values print without a fraction
      * @param transcript the transcript body ("Speaker 1: ..." lines when diarized)
      * @param summary AI summary, or null/blank to omit the Summary block
+     * @param highlights button-press highlights, or null/empty to omit the Highlights block
      */
     fun build(
         title: String,
         recordedAtMillis: Long,
         durationSeconds: Double,
         transcript: String,
-        summary: String? = null
+        summary: String? = null,
+        highlights: List<TranscriptHighlight>? = null
     ): String = buildString {
         append("---\n")
         append("title: ").append(quote(title)).append('\n')
@@ -63,6 +72,15 @@ object TranscriptMarkdown {
             append(trimmedSummary).append('\n')
             append('\n')
         }
+        if (!highlights.isNullOrEmpty()) {
+            append("## Highlights\n")
+            append('\n')
+            for (h in highlights) {
+                append("- **").append(formatTimestamp(h.at)).append("** ")
+                append(h.text.trim().ifEmpty { NO_SPEECH }).append('\n')
+            }
+            append('\n')
+        }
         append("## Transcript\n")
         append('\n')
         // Trim so the document ends with exactly one newline regardless of the stored text.
@@ -75,8 +93,21 @@ object TranscriptMarkdown {
         recordedAtMillis: Long,
         durationSeconds: Long,
         transcript: String,
-        summary: String? = null
-    ): String = build(title, recordedAtMillis, durationSeconds.toDouble(), transcript, summary)
+        summary: String? = null,
+        highlights: List<TranscriptHighlight>? = null
+    ): String = build(title, recordedAtMillis, durationSeconds.toDouble(), transcript, summary, highlights)
+
+    /**
+     * "m:ss" (minutes unpadded) below one hour, "h:mm:ss" from one hour on. Seconds are rounded
+     * half to even (Math.rint) because that is what Python's round does in the server's fmt_ts,
+     * and the two exports must print identical timestamps.
+     */
+    fun formatTimestamp(seconds: Double): String {
+        if (seconds.isNaN()) return "0:00"
+        val s = Math.rint(seconds).toLong().coerceAtLeast(0L)
+        return if (s >= 3600) String.format(Locale.US, "%d:%02d:%02d", s / 3600, s % 3600 / 60, s % 60)
+        else String.format(Locale.US, "%d:%02d", s / 60, s % 60)
+    }
 
     /**
      * JSON string literal (RFC 8259): backslash, double quote and control characters escaped,

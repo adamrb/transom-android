@@ -180,6 +180,27 @@
                 android:textSize="14sp"
                 android:visibility="gone" />
 
+            <!-- Highlights (only when the transcript carries button-press highlights): header plus
+                 one tappable row per highlight, filled in code -->
+            <TextView
+                android:id="@+id/highlightsHeader"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:fontFamily="sans-serif-medium"
+                android:text="@string/highlights"
+                android:textColor="@color/text_primary"
+                android:textSize="15sp"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/highlightsList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="vertical"
+                android:visibility="gone" />
+
             <!-- Parsed transcript segments ("Speaker N · HH:MM:SS" + text) -->
             <TextView
                 android:id="@+id/transcriptText"

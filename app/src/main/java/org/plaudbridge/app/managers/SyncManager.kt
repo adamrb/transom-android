@@ -486,6 +486,10 @@ class SyncManager private constructor() : SyncManagerProtocol {
                             exportSN, sessionId, outputFile.absolutePath,
                             audioDurationSec(outputFile.absolutePath)
                         )
+                        // Marks live only on the device; ask for them now so they ride along in
+                        // the upload metadata. With BLE down during the WiFi session this is a
+                        // no-op and the post-connect MarksSyncManager.kick() picks them up.
+                        MarksSyncManager.fetchForSession(exportSN, sessionId)
                         wifiSyncedSessionIds.add(sessionId)
                         wifiCompletedCount++
                         scope.launch { _files.value = RecordingStore.allFiles }
@@ -804,6 +808,9 @@ class SyncManager private constructor() : SyncManagerProtocol {
         org.plaudbridge.app.common.OpusRepair.repairIfNeeded(outputPath)
         syncedCount++
         RecordingStore.markAsSynced(deviceSN, sessionId.toLong(), outputPath, audioDurationSec(outputPath))
+        // Read the button-press marks over BLE right away so they are in the store (and in the
+        // upload metadata) by the time UploadManager gets to this file.
+        MarksSyncManager.fetchForSession(deviceSN, sessionId.toLong())
         scope.launch { _files.value = RecordingStore.allFiles }
         // NOTE: unlike Plaud's template app, the file is NOT deleted from the device here.
         // UploadManager pushes it to the bridge server and — only when the user enabled

@@ -542,6 +542,11 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
             }
             // Retry any uploads that failed / queued while offline or mid-WiFi-transfer.
             UploadManager.kick()
+            // Button-press marks for recordings that were downloaded while BLE was down (WiFi
+            // fast transfer) or before marks existed. A little after the sync kick so the
+            // file-list refresh has landed; cheap when every recording already has its marks.
+            delay(2_000)
+            if (_connectionState.value is DeviceConnectionState.Connected) MarksSyncManager.kick()
         }
     }
 

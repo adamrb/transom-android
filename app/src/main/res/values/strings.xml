@@ -96,6 +96,8 @@
     <string name="transcript_needs_sync">Sync this recording first — it is still only on the device.</string>
     <string name="summary">Summary</string>
     <string name="transcript">Transcript</string>
+    <string name="highlights">Highlights</string>
+    <string name="highlight_no_speech">(no speech near this mark)</string>
     <string name="generate_ai_insights">Generate AI insights</string>
     <string name="export_audio">Export Audio</string>
     <string name="rename">Rename</string>

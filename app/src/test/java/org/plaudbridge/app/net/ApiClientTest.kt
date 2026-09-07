@@ -159,6 +159,71 @@ class ApiClientTest {
         assertThrows(ApiClient.ApiException::class.java) { upload() }
     }
 
+    // MARK: - Upload metadata marks
+
+    private fun metadataOf(body: String): org.json.JSONObject {
+        // The multipart "metadata" part is a JSON object on its own line after its headers.
+        val line = body.lines().first { it.trimStart().startsWith("{") && it.contains("session_id") }
+        return org.json.JSONObject(line)
+    }
+
+    @Test
+    fun uploadMetadataOmitsMarksWhenUnknown() {
+        server.enqueue(MockResponse().setResponseCode(201).setBody("""{"id":"abc","duplicate":false}"""))
+        upload()
+        val meta = metadataOf(server.takeRequest().body.readUtf8())
+        assertEquals(42L, meta.getLong("session_id"))
+        assertTrue("absent key means not read yet", !meta.has("marks"))
+    }
+
+    @Test
+    fun uploadMetadataCarriesMarksWhenKnown() {
+        server.enqueue(MockResponse().setResponseCode(201).setBody("""{"id":"abc","duplicate":false}"""))
+        ApiClient.uploadRecording(audioFile, 42L, "SN1", null, 60.0, marks = listOf(6.0, 125.5))
+        val meta = metadataOf(server.takeRequest().body.readUtf8())
+        assertEquals("[6,125.5]", meta.getJSONArray("marks").toString())
+    }
+
+    @Test
+    fun uploadMetadataSendsEmptyMarksAsEmptyArray() {
+        server.enqueue(MockResponse().setResponseCode(201).setBody("""{"id":"abc","duplicate":false}"""))
+        ApiClient.uploadRecording(audioFile, 42L, "SN1", null, null, marks = emptyList())
+        val meta = metadataOf(server.takeRequest().body.readUtf8())
+        assertEquals(0, meta.getJSONArray("marks").length())
+    }
+
+    // MARK: - PATCH marks
+
+    @Test
+    fun patchMarks200IsOkWithJsonBodyAndAuth() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"id":"rid","marks":[6],"highlights":[]}"""))
+        val result = ApiClient.patchMarks("rid", listOf(6.0, 125.5))
+        assertEquals(ApiClient.PatchMarksResult.Ok, result)
+        val recorded = server.takeRequest()
+        assertEquals("PATCH", recorded.method)
+        assertEquals("/api/v1/recordings/rid/marks", recorded.path)
+        assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+        assertEquals("""{"marks":[6,125.5]}""", recorded.body.readUtf8())
+    }
+
+    @Test
+    fun patchMarks404IsNotFound() {
+        server.enqueue(MockResponse().setResponseCode(404))
+        assertEquals(ApiClient.PatchMarksResult.NotFound, ApiClient.patchMarks("rid", listOf(1.0)))
+    }
+
+    @Test
+    fun patchMarks403IsAuthError() {
+        server.enqueue(MockResponse().setResponseCode(403))
+        assertEquals(ApiClient.PatchMarksResult.AuthError(403), ApiClient.patchMarks("rid", listOf(1.0)))
+    }
+
+    @Test
+    fun patchMarks500IsError() {
+        server.enqueue(MockResponse().setResponseCode(500))
+        assertTrue(ApiClient.patchMarks("rid", listOf(1.0)) is ApiClient.PatchMarksResult.Error)
+    }
+
     // MARK: - Token fetch
 
     @Test

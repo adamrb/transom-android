@@ -88,6 +88,30 @@ class RecordingFileTest {
     }
 
     @Test
+    fun legacyJsonWithoutMarksFieldsReadsAsNotReadAndNotSynced() {
+        val f = parse(legacyJson).single()
+        // null (not read yet) is the state that makes MarksSyncManager ask the device; an empty
+        // list would wrongly mean "read, no button presses".
+        assertNull(f.marks)
+        assertFalse(f.marksSynced)
+    }
+
+    @Test
+    fun marksRoundTripThroughGson() {
+        val original = file().apply { marks = listOf(6.0, 125.5); marksSynced = true }
+        val json = gson.toJson(listOf(original))
+        assertTrue(json.contains("\"marks\":[6.0,125.5]"))
+        assertTrue(json.contains("\"marksSynced\":true"))
+        val back = parse(json).single()
+        assertEquals(listOf(6.0, 125.5), back.marks)
+        assertTrue(back.marksSynced)
+
+        // An empty list survives as empty (distinct from null).
+        val none = file().apply { marks = emptyList() }
+        assertEquals(emptyList<Double>(), parse(gson.toJson(listOf(none))).single().marks)
+    }
+
+    @Test
     fun newFieldsRoundTripThroughGson() {
         val original = file(name = "Renamed", serverTitle = "AI title", edited = true)
         val json = gson.toJson(listOf(original))

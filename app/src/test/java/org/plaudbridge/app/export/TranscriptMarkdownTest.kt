@@ -45,6 +45,94 @@ class TranscriptMarkdownTest {
     }
 
     @Test
+    fun highlightsSectionSitsBetweenSummaryAndTranscript() {
+        val md = TranscriptMarkdown.build(
+            title = "Budget planning call",
+            recordedAtMillis = recordedAt,
+            durationSeconds = 754L,
+            transcript = "Speaker 1: Let's start.",
+            summary = "Two people plan a budget.",
+            highlights = listOf(
+                TranscriptHighlight(at = 6.0, start = 4.2, end = 12.9, text = "Ship it Friday."),
+                TranscriptHighlight(at = 125.5, start = 125.5, end = 125.5, text = ""),
+                TranscriptHighlight(at = 3725.0, start = 3700.0, end = 3730.0, text = "  Hour mark.  ")
+            )
+        )
+        val expected = """
+            |---
+            |title: "Budget planning call"
+            |recorded: "2026-09-07T05:27:31Z"
+            |duration_s: "754"
+            |source: plaud-bridge
+            |---
+            |# Budget planning call
+            |
+            |## Summary
+            |
+            |Two people plan a budget.
+            |
+            |## Highlights
+            |
+            |- **0:06** Ship it Friday.
+            |- **2:06** (no speech near this mark)
+            |- **1:02:05** Hour mark.
+            |
+            |## Transcript
+            |
+            |Speaker 1: Let's start.
+            |""".trimMargin()
+        assertEquals(expected, md)
+    }
+
+    @Test
+    fun highlightsWithoutSummaryFollowTheTitleDirectly() {
+        val md = TranscriptMarkdown.build(
+            "Standup", recordedAt, 61L, "Speaker 1: Hi.",
+            highlights = listOf(TranscriptHighlight(59.6, 58.0, 61.0, "Bye."))
+        )
+        val expected = """
+            |---
+            |title: "Standup"
+            |recorded: "2026-09-07T05:27:31Z"
+            |duration_s: "61"
+            |source: plaud-bridge
+            |---
+            |# Standup
+            |
+            |## Highlights
+            |
+            |- **1:00** Bye.
+            |
+            |## Transcript
+            |
+            |Speaker 1: Hi.
+            |""".trimMargin()
+        assertEquals(expected, md)
+    }
+
+    @Test
+    fun emptyHighlightsOmitTheSection() {
+        val md = TranscriptMarkdown.build("Standup", recordedAt, 61L, "Hi.", highlights = emptyList())
+        assertFalse(md.contains("## Highlights"))
+        assertEquals(TranscriptMarkdown.build("Standup", recordedAt, 61L, "Hi."), md)
+    }
+
+    @Test
+    fun timestampMatchesServerFmtTs() {
+        assertEquals("0:00", TranscriptMarkdown.formatTimestamp(0.0))
+        assertEquals("0:06", TranscriptMarkdown.formatTimestamp(6.0))
+        // Half to even, like Python's round in the server's fmt_ts.
+        assertEquals("0:06", TranscriptMarkdown.formatTimestamp(6.5))
+        assertEquals("0:08", TranscriptMarkdown.formatTimestamp(7.5))
+        assertEquals("2:06", TranscriptMarkdown.formatTimestamp(125.5))
+        assertEquals("0:07", TranscriptMarkdown.formatTimestamp(6.51))
+        assertEquals("59:59", TranscriptMarkdown.formatTimestamp(3599.0))
+        assertEquals("1:00:00", TranscriptMarkdown.formatTimestamp(3600.0))
+        assertEquals("1:02:05", TranscriptMarkdown.formatTimestamp(3725.0))
+        assertEquals("0:00", TranscriptMarkdown.formatTimestamp(-3.0))
+    }
+
+    @Test
     fun summaryBlockOmittedEntirelyWhenAbsent() {
         val md = TranscriptMarkdown.build("Standup", recordedAt, 61L, "Speaker 1: Hi.")
         val expected = """

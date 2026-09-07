@@ -301,6 +301,51 @@ object RecordingStore {
         }
     }
 
+    /**
+     * Store the normalized button-press marks read off the device. Storing resets [RecordingFile.marksSynced]
+     * only when the value actually changed: a re-read that yields the same list must not cause a
+     * redundant PATCH, while a different list (a device that answered partially the first time)
+     * must reach the server again.
+     */
+    fun updateMarks(id: String, marks: List<Double>) {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.find { it.id == id }?.apply {
+                if (this.marks != marks) {
+                    this.marks = marks
+                    this.marksSynced = false
+                }
+            }
+            saveFiles(files)
+        }
+    }
+
+    /**
+     * Record that the server now holds the given marks. The marks are passed in (not re-read from
+     * the record) so a device read that landed while the request was in flight cannot be
+     * wrongly flagged as synced: the flag is only set when the stored list is still the one sent.
+     */
+    fun markMarksSynced(id: String, sentMarks: List<Double>) {
+        synchronized(lock) {
+            val files = loadFiles().toMutableList()
+            files.find { it.id == id }?.apply {
+                if (this.marks == sentMarks) this.marksSynced = true
+            }
+            saveFiles(files)
+        }
+    }
+
+    /** Recordings from [deviceSN] whose marks were never read (null); the BLE read work list. */
+    fun awaitingMarksRead(deviceSN: String): List<RecordingFile> =
+        allFiles.filter { it.deviceSN == deviceSN && it.marks == null }
+
+    /**
+     * Recordings the server knows (serverId) whose marks are read but not yet delivered; the
+     * PATCH work list. Empties as marks are synced, so polling it costs one store read.
+     */
+    val awaitingMarksSync: List<RecordingFile>
+        get() = allFiles.filter { !it.serverId.isNullOrBlank() && it.marks != null && !it.marksSynced }
+
     /** Set only the server-side AI title (e.g. when it is learned without a transcript body). */
     fun updateServerTitle(id: String, title: String?) {
         synchronized(lock) {
@@ -388,6 +433,9 @@ object RecordingStore {
                 it.deletePendingOnDevice = false
                 it.transcriptJSON = null
                 it.serverTitle = null
+                // The marks themselves are device facts and stay; the NEW server has not seen
+                // them, so they are re-sent with the re-upload.
+                it.marksSynced = false
             }
             saveFiles(files)
         }

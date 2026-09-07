@@ -88,7 +88,12 @@ object UploadManager {
      * title fetch: the server produces a transcript plus AI title within about a minute of an
      * upload, and TitleSyncManager polls for it and enqueues its own durable WorkManager retry.
      */
-    internal var onUploadsCompleted: () -> Unit = { TitleSyncManager.kick() }
+    internal var onUploadsCompleted: () -> Unit = {
+        TitleSyncManager.kick()
+        // Marks read after the upload left (or a device that answered late) now have a serverId
+        // to be PATCHed against.
+        MarksSyncManager.kick()
+    }
 
     /**
      * Enqueues the durable WorkManager retry (test seam; tests substitute a counter). The default
@@ -235,7 +240,8 @@ object UploadManager {
                     sessionId = rec.sessionId,
                     deviceSn = rec.deviceSN,
                     startedAtIso = isoUtc(rec.createdAt),
-                    durationSec = rec.duration.takeIf { it > 0 }?.toDouble()
+                    durationSec = rec.duration.takeIf { it > 0 }?.toDouble(),
+                    marks = rec.marks
                 )
                 if (RecordingStore.serverConfigGeneration != configGen) {
                     failures++
@@ -243,6 +249,10 @@ object UploadManager {
                 } else {
                     // Only a validated result reaches this point (non-blank id, exact contract).
                     RecordingStore.markAsUploaded(rec.deviceSN, rec.sessionId, result.id)
+                    // The marks travelled inside the metadata of this validated upload, so no
+                    // PATCH is needed for them (a duplicate:true answer means the server already
+                    // had the audio, but it still applied the metadata marks).
+                    rec.marks?.let { RecordingStore.markMarksSynced(rec.id, it) }
                     uploaded++
                     notifyFilesChanged()
                     AppLog.i(TAG, "Uploaded sessionId=${rec.sessionId} duplicate=${result.duplicate}")

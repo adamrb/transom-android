@@ -23,6 +23,7 @@ import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.databinding.ActivityFileDetailBinding
 import org.plaudbridge.app.export.ExportFileName
+import org.plaudbridge.app.export.TranscriptHighlight
 import org.plaudbridge.app.export.TranscriptMarkdown
 import org.plaudbridge.app.export.TranscriptShare
 import org.plaudbridge.app.models.RecordingFile
@@ -32,7 +33,7 @@ import java.util.*
 
 /**
  * File detail page
- * Header (name/date/duration/status) + Summary + Transcript + More Menu
+ * Header (name/date/duration/status) + Summary + Highlights + Transcript + More Menu
  */
 class FileDetailActivity : AppCompatActivity() {
 
@@ -130,6 +131,9 @@ class FileDetailActivity : AppCompatActivity() {
         binding.summaryText.visibility = if (hasSummary) View.VISIBLE else View.GONE
         if (hasSummary) binding.summaryText.text = file.summaryText
 
+        // Highlights: the server's transcript-around-each-button-press rows, above the transcript
+        bindHighlights(file.transcriptJSON?.let { TranscriptHighlight.parse(it) } ?: emptyList())
+
         // Transcript: parsed segments from the bridge server, or the centered empty state
         transcriptPlainText = file.transcriptJSON?.let { parseTranscript(it) }
         binding.transcriptActions.visibility = if (transcriptPlainText != null) View.VISIBLE else View.GONE
@@ -165,6 +169,60 @@ class FileDetailActivity : AppCompatActivity() {
 
         // Audio player: only available once the file has a local audio file
         bindAudioPlayer(file)
+    }
+
+    // MARK: - Highlights
+
+    /**
+     * One row per highlight: "★ m:ss" in the accent color, then the text (or the server's
+     * no-speech placeholder). Rows are plain TextViews built here rather than a RecyclerView
+     * because the list is short (one per button press) and lives inside the page's ScrollView.
+     * Tapping a row seeks the player to the highlight's start when a local audio file exists;
+     * without a player the row is display only.
+     */
+    private fun bindHighlights(highlights: List<TranscriptHighlight>) {
+        binding.highlightsList.removeAllViews()
+        val visible = highlights.isNotEmpty()
+        binding.highlightsHeader.visibility = if (visible) View.VISIBLE else View.GONE
+        binding.highlightsList.visibility = if (visible) View.VISIBLE else View.GONE
+        if (!visible) return
+        val accent = ContextCompat.getColor(this, R.color.highlight_accent)
+        val density = resources.displayMetrics.density
+        for (h in highlights) {
+            val stamp = "\u2605 ${TranscriptMarkdown.formatTimestamp(h.at)}"
+            val body = h.text.ifEmpty { getString(R.string.highlight_no_speech) }
+            val row = android.widget.TextView(this).apply {
+                text = android.text.SpannableStringBuilder("$stamp  $body").apply {
+                    setSpan(
+                        android.text.style.ForegroundColorSpan(accent), 0, stamp.length,
+                        android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                    setSpan(
+                        android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, stamp.length,
+                        android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                }
+                setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.dark_gray))
+                textSize = 14f
+                typeface = android.graphics.Typeface.SANS_SERIF
+                setLineSpacing(4 * density, 1f)
+                setPadding(0, (8 * density).toInt(), 0, (8 * density).toInt())
+                tag = h
+                contentDescription = "Highlight at ${TranscriptMarkdown.formatTimestamp(h.at)}"
+                setOnClickListener { seekToHighlight(h) }
+            }
+            binding.highlightsList.addView(row)
+        }
+    }
+
+    /** Jump playback to the highlight's first transcript segment; no player, no action. */
+    private fun seekToHighlight(h: TranscriptHighlight) {
+        val p = exoPlayer ?: return
+        val duration = p.duration.coerceAtLeast(0)
+        val target = (h.start * 1000).toLong().coerceIn(0, if (duration > 0) duration else Long.MAX_VALUE)
+        p.seekTo(target)
+        binding.currentTimeLabel.text = formatClock(target)
+        binding.progressSlider.progress = if (duration > 0) (target * 1000 / duration).toInt() else 0
     }
 
     // MARK: - Transcript (fetched from the self-hosted bridge server)
@@ -597,7 +655,8 @@ class FileDetailActivity : AppCompatActivity() {
             recordedAtMillis = file.createdAt,
             durationSeconds = file.duration,
             transcript = body,
-            summary = summary ?: file.summaryText
+            summary = summary ?: file.summaryText,
+            highlights = TranscriptHighlight.parse(json)
         )
         try {
             TranscriptShare.share(this, ExportFileName.sanitize(file.displayName), file.displayName, markdown)

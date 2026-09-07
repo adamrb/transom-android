@@ -65,7 +65,25 @@ data class RecordingFile(
      * missing (or null) JSON value leaves the primitive at its JVM default, false.
      */
     @SerializedName("nameEditedByUser")
-    var nameEditedByUser: Boolean = false
+    var nameEditedByUser: Boolean = false,
+
+    /**
+     * Button-press marks read off the recorder, as offsets in seconds from the recording start.
+     * Three states matter: null = never read (or the device did not answer), so a later pass must
+     * ask again; empty = read, the user never pressed the button; non-empty = the marks. Legacy
+     * index entries have no key and decode to null, which is exactly "not read yet".
+     */
+    @SerializedName("marks")
+    var marks: List<Double>? = null,
+
+    /**
+     * The bridge server has these marks (sent in the upload metadata, or via PATCH later). Kept
+     * separate from [uploaded] because a recording can be uploaded before its marks were read,
+     * in which case the marks follow in their own request. Primitive default false is safe with
+     * Gson, see [nameEditedByUser].
+     */
+    @SerializedName("marksSynced")
+    var marksSynced: Boolean = false
 ) {
     val isSynced: Boolean
         get() = localPath != null
