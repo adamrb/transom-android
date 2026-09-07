@@ -57,7 +57,7 @@
         android:paddingStart="24dp"
         android:paddingEnd="24dp"
         android:paddingTop="24dp"
-        android:paddingBottom="100dp"
+        android:paddingBottom="120dp"
         android:scrollbars="none" />
 
     <!-- Empty state: 80dp below the title (mirrors iOS), not vertically centered -->
