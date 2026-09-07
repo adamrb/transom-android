@@ -7,9 +7,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.common.AppLog
 import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.work.UploadScheduler
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -35,6 +37,12 @@ sealed class UploadState {
  * Uploads are retried on the next kick (sync completion, device connect, app foreground, manual
  * Sync now) — during a WiFi fast transfer the phone is on the device hotspot with no internet,
  * so uploads intentionally queue up and run after the transfer ends.
+ *
+ * Durability: kick() is the in-app fast path, but it only exists while the process does. Every
+ * kick (and every newly synced recording, see [ensureScheduled]) ALSO enqueues a WorkManager
+ * request (org.plaudbridge.app.work.UploadScheduler) whose worker calls [runPass] and asks for a
+ * backed-off retry while anything is left pending. Both paths share one pass implementation and
+ * one single-run guard, so a file is never uploaded twice concurrently.
  *
  * Delete-after-upload (default OFF): the device copy is deleted only when
  *  - the server upload was validated,
@@ -75,7 +83,40 @@ object UploadManager {
     /** Propagates the new upload badge to lists observing SyncManager.files (test seam). */
     internal var onFilesChanged: () -> Unit = { SyncManager.shared.refreshFilesFromStore() }
 
+    /**
+     * Enqueues the durable WorkManager retry (test seam; tests substitute a counter). The default
+     * needs an Application context: UploadManager is an object, so it reaches for
+     * PlaudBridgeApp.instance and quietly does nothing if the Application has not been created
+     * (unit tests driving kick() directly, or an exotic process without our Application class).
+     */
+    internal var scheduler: () -> Unit = {
+        val context = try {
+            PlaudBridgeApp.instance
+        } catch (e: UninitializedPropertyAccessException) {
+            null
+        }
+        if (context != null) UploadScheduler.enqueue(context)
+    }
+
+    /** Outcome of one [runPass]: what happened plus how much is still waiting. */
+    data class PassResult(
+        /** Recordings marked uploaded during this pass. */
+        val uploaded: Int,
+        /** Upload attempts that did not produce a validated result (retried later). */
+        val failed: Int,
+        /** Pending uploads (with a local file present) still left after the pass. */
+        val remaining: Int,
+        /** Another pass held the guard; nothing was attempted and the counts are informational. */
+        val alreadyRunning: Boolean = false
+    )
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /**
+     * Single-pass guard shared by the in-app path (kick) and the WorkManager path (runPass from
+     * UploadWorker). Both read the same pending list, so two concurrent passes would upload the
+     * same file twice; whoever fails the CAS gets [PassResult.alreadyRunning] instead.
+     */
     private val running = AtomicBoolean(false)
 
     /**
@@ -95,36 +136,79 @@ object UploadManager {
     private val _state = MutableStateFlow<UploadState>(UploadState.Idle)
     val state: StateFlow<UploadState> = _state.asStateFlow()
 
-    /** Process the pending-upload queue (kicks arriving mid-run are queued, never lost). */
+    /**
+     * Process the pending-upload queue now (kicks arriving mid-run are queued, never lost) AND
+     * make sure the durable WorkManager retry is scheduled, so a failure followed by process
+     * death is still retried. Enqueueing is idempotent (unique work, KEEP), so calling this
+     * often is cheap.
+     */
     fun kick() {
         if (!RecordingStore.isServerConfigured) return
-        dirty.set(true)
-        if (!running.compareAndSet(false, true)) return
-        scope.launch {
-            // Stale in-flight entries (callback never arrived, e.g. disconnect) must not block
-            // retries forever; a late callback then finds no entry and is safely ignored.
-            inFlightDeletes.clear()
-            try {
-                while (dirty.getAndSet(false)) {
-                    processQueue()
-                    processPendingDeletes()
-                }
-            } finally {
-                running.set(false)
-                // A kick may have landed between the last getAndSet and releasing the flag.
-                if (dirty.get()) kick()
-            }
-        }
+        scheduler()
+        launchPass()
     }
 
-    private fun processQueue() {
-        val pending = RecordingStore.pendingUploads
-            .filter { it.localPath != null && File(it.localPath!!).exists() }
+    /**
+     * Schedule the durable retry WITHOUT uploading right now. For call sites where a recording
+     * just became pending but an immediate attempt is pointless, e.g. the WiFi fast-transfer
+     * path (phone on the recorder's hotspot, no internet): the transfer end kicks; this covers
+     * the process being killed before that.
+     */
+    fun ensureScheduled() {
+        if (!RecordingStore.isServerConfigured) return
+        scheduler()
+    }
+
+    /** In-app fast path: run a pass on our own IO scope; the guard inside runPass coalesces. */
+    private fun launchPass() {
+        scope.launch { runPass() }
+    }
+
+    /**
+     * One upload pass, callable from any coroutine (the in-app scope or a CoroutineWorker):
+     * uploads everything pending, then retries deferred device deletes, looping while more work
+     * arrived mid-run (dirty flag). Returns [PassResult.alreadyRunning] without touching anything
+     * if another pass holds the guard; that pass will see the dirty flag and loop once more, so
+     * the caller's work is not lost, only handled by the other pass.
+     */
+    internal suspend fun runPass(): PassResult {
+        dirty.set(true)
+        if (!running.compareAndSet(false, true)) {
+            return PassResult(uploaded = 0, failed = 0, remaining = pendingWithLocalFile().size, alreadyRunning = true)
+        }
+        var uploaded = 0
+        var failed = 0
+        // Stale in-flight entries (callback never arrived, e.g. disconnect) must not block
+        // retries forever; a late callback then finds no entry and is safely ignored.
+        inFlightDeletes.clear()
+        try {
+            while (dirty.getAndSet(false)) {
+                val (u, f) = processQueue()
+                uploaded += u
+                failed += f
+                processPendingDeletes()
+            }
+        } finally {
+            running.set(false)
+            // A kick may have landed between the last getAndSet and releasing the flag.
+            if (dirty.get()) launchPass()
+        }
+        return PassResult(uploaded = uploaded, failed = failed, remaining = pendingWithLocalFile().size)
+    }
+
+    /** Pending uploads that can actually be attempted (index entries without a file are skipped). */
+    private fun pendingWithLocalFile() = RecordingStore.pendingUploads
+        .filter { it.localPath != null && File(it.localPath!!).exists() }
+
+    /** Upload every pending recording once; returns (uploaded, failed). */
+    private fun processQueue(): Pair<Int, Int> {
+        val pending = pendingWithLocalFile()
         if (pending.isEmpty()) {
             _state.value = UploadState.Idle
-            return
+            return 0 to 0
         }
         AppLog.i(TAG, "Uploading ${pending.size} pending recording(s)")
+        var uploaded = 0
         var failures = 0
         pending.forEachIndexed { index, rec ->
             _state.value = UploadState.Uploading(index + 1, pending.size, rec.name)
@@ -151,7 +235,8 @@ object UploadManager {
                 } else {
                     // Only a validated result reaches this point (non-blank id, exact contract).
                     RecordingStore.markAsUploaded(rec.deviceSN, rec.sessionId, result.id)
-                    onFilesChanged()
+                    uploaded++
+                    notifyFilesChanged()
                     AppLog.i(TAG, "Uploaded sessionId=${rec.sessionId} duplicate=${result.duplicate}")
                     if (RecordingStore.deleteAfterUpload) {
                         requestDeviceDelete(rec.deviceSN, rec.sessionId)
@@ -164,12 +249,35 @@ object UploadManager {
         }
         _state.value = if (failures == 0) UploadState.Idle
         else UploadState.Failed("$failures upload(s) failed — will retry on the next sync")
+        return uploaded to failures
+    }
+
+    /**
+     * UI refresh is best-effort: the recording is already persisted as uploaded, so a failure
+     * here (e.g. SyncManager touching the BLE SDK in a WorkManager-started process where it was
+     * never initialized) must neither count as an upload failure nor skip the device delete.
+     */
+    private fun notifyFilesChanged() {
+        try {
+            onFilesChanged()
+        } catch (t: Throwable) {
+            AppLog.w(TAG, "files-changed notification failed", t)
+        }
     }
 
     // MARK: - Delete after upload
 
-    /** SN of the currently connected device, or null. */
-    private fun connectedDeviceSN(): String? = deviceLink.connectedDeviceSN()
+    /**
+     * SN of the currently connected device, or null. Any failure (the SDK facade not initialized
+     * in a background process, a static initializer error) reads as "nothing connected", which
+     * is the safe direction: deletes are deferred, never issued.
+     */
+    private fun connectedDeviceSN(): String? = try {
+        deviceLink.connectedDeviceSN()
+    } catch (t: Throwable) {
+        AppLog.w(TAG, "connectedDeviceSN unavailable", t)
+        null
+    }
 
     /**
      * Delete the (validated-uploaded) recording from ITS OWN device, or persist a pending flag
