@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit
  *   GET  /api/v1/recordings/lookup?device_sn=..&session_id=..
  *   GET  /api/v1/recordings/{id}/transcript      200 ready / 409 pending
  *   PATCH /api/v1/recordings/{id}/marks          {"marks": list of seconds} -> {id, marks, highlights}
+ *   PATCH /api/v1/recordings/{id}/speakers       {"renames": {"Speaker 1": "Alex"}} -> the transcript document
  *   GET  /api/v1/recordings?limit=&offset=&q=     {"recordings": [...]} newest first (Library)
  *   GET  /api/v1/recordings/{id}                  one recording object
  *   PATCH /api/v1/recordings/{id}                 {"title": ...} -> renamed object (422 on empty)
@@ -64,6 +65,22 @@ object ApiClient {
     private val jsonType = "application/json".toMediaType()
 
     class ApiException(val code: Int, message: String) : Exception("HTTP $code: $message")
+
+    /**
+     * The server's human-readable `detail` for a rejected request ({"detail": "Automations are
+     * turned off on the server"}), or null when the body is not JSON, has no string detail (FastAPI
+     * validation errors carry a list), or is empty. Screens show this text, never the status code.
+     */
+    internal fun detailOf(body: String?): String? {
+        if (body.isNullOrBlank()) return null
+        return try {
+            val obj = JSONObject(body)
+            val detail = obj.opt("detail")
+            (detail as? String)?.trim()?.takeIf { it.isNotEmpty() }
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     /** Configured server root without a trailing slash; throws when onboarding never saved one. */
     internal fun baseUrl(): String =
@@ -371,7 +388,41 @@ object ApiClient {
         /** 404: the server does not know this recording id (stale/foreign id). */
         object NotFound : TranscriptResult()
         data class AuthError(val code: Int) : TranscriptResult()
-        data class Error(val message: String) : TranscriptResult()
+        /** [detail] is the server's own sentence for a rejected request, when it sent one. */
+        data class Error(val message: String, val detail: String? = null) : TranscriptResult()
+    }
+
+    /**
+     * PATCH /api/v1/recordings/{id}/speakers with {"renames": {"Speaker 1": "Alex", ...}}: rename
+     * speakers throughout the transcript. Answers with the full transcript document, the same
+     * shape as [fetchTranscript], so the screen re-renders from it. 404 also means an older
+     * server without the endpoint; 422 (blank new name) carries the server's `detail`.
+     */
+    fun renameSpeakers(recordingId: String, renames: Map<String, String>): TranscriptResult {
+        val body = JSONObject().put("renames", JSONObject().apply {
+            renames.forEach { (old, new) -> put(old, new) }
+        }).toString().toRequestBody(jsonType)
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/recordings/$recordingId/speakers")
+            .header("Authorization", authHeader())
+            .patch(body)
+            .build()
+        return try {
+            client.newCall(req).execute().use { resp ->
+                val text = resp.body?.string() ?: ""
+                when {
+                    resp.isSuccessful -> TranscriptResult.Ready(text)
+                    resp.code == 404 -> TranscriptResult.NotFound
+                    resp.code == 401 || resp.code == 403 -> TranscriptResult.AuthError(resp.code)
+                    else -> {
+                        AppLog.w(TAG, "rename speakers failed: HTTP ${resp.code} (${text.length} bytes)")
+                        TranscriptResult.Error("HTTP ${resp.code}", detailOf(text))
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            TranscriptResult.Error(e.message ?: "network error")
+        }
     }
 
     /** GET /api/v1/recordings/{id}/transcript. */
@@ -451,7 +502,8 @@ object ApiClient {
         data class Ok(val recording: ServerRecording) : RecordingResult()
         object NotFound : RecordingResult()
         data class AuthError(val code: Int) : RecordingResult()
-        data class Error(val message: String) : RecordingResult()
+        /** [detail] is the server's own sentence for a rejected request, when it sent one. */
+        data class Error(val message: String, val detail: String? = null) : RecordingResult()
     }
 
     /** GET /api/v1/recordings/{id}. */
@@ -484,10 +536,10 @@ object ApiClient {
             when {
                 resp.code == 404 -> RecordingResult.NotFound
                 resp.code == 401 || resp.code == 403 -> RecordingResult.AuthError(resp.code)
-                resp.code == 422 -> RecordingResult.Error("rejected by the server (422)")
+                resp.code == 422 -> RecordingResult.Error("rejected by the server (422)", detailOf(text))
                 !resp.isSuccessful -> {
                     AppLog.w(TAG, "$what failed: HTTP ${resp.code} (${text.length} bytes)")
-                    RecordingResult.Error("HTTP ${resp.code}")
+                    RecordingResult.Error("HTTP ${resp.code}", detailOf(text))
                 }
                 else -> try {
                     RecordingResult.Ok(ServerRecording.fromJson(JSONObject(text)))
@@ -505,7 +557,12 @@ object ApiClient {
         object Ok : ActionResult()
         object NotFound : ActionResult()
         data class AuthError(val code: Int) : ActionResult()
-        data class Error(val message: String) : ActionResult()
+        /**
+         * [code] is the HTTP status when the server answered at all (null for a network failure);
+         * [detail] its own sentence for the refusal, when it sent one. Screens show [detail] or a
+         * generic line, never [message], which exists for logs and tests.
+         */
+        data class Error(val message: String, val code: Int? = null, val detail: String? = null) : ActionResult()
     }
 
     /** DELETE /api/v1/recordings/{id} (204). Removes audio and transcript on the server. */
@@ -536,7 +593,7 @@ object ApiClient {
                 resp.code == 401 || resp.code == 403 -> ActionResult.AuthError(resp.code)
                 else -> {
                     AppLog.w(TAG, "$what failed: HTTP ${resp.code}")
-                    ActionResult.Error("HTTP ${resp.code}")
+                    ActionResult.Error("HTTP ${resp.code}", resp.code, detailOf(resp.body?.string()))
                 }
             }
         }
@@ -631,7 +688,8 @@ object ApiClient {
         object Conflict : RetryResult()
         object NotFound : RetryResult()
         data class AuthError(val code: Int) : RetryResult()
-        data class Error(val message: String) : RetryResult()
+        /** [detail] is the server's own sentence for a rejected request, when it sent one. */
+        data class Error(val message: String, val detail: String? = null) : RetryResult()
     }
 
     /** POST /api/v1/deliveries/{id}/retry: run a failed delivery again. */
@@ -650,7 +708,7 @@ object ApiClient {
                     resp.code == 401 || resp.code == 403 -> RetryResult.AuthError(resp.code)
                     else -> {
                         AppLog.w(TAG, "retry delivery failed: HTTP ${resp.code}")
-                        RetryResult.Error("HTTP ${resp.code}")
+                        RetryResult.Error("HTTP ${resp.code}", detailOf(resp.body?.string()))
                     }
                 }
             }

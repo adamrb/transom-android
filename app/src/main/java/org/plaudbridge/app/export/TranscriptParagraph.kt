@@ -85,6 +85,23 @@ data class TranscriptParagraph(
             return paragraphs.map { it.build() }
         }
 
+        /**
+         * The distinct speaker labels of a document in first-appearance order: the server's own
+         * `speakers` array when the document carries one (newer servers write it for the rename
+         * UI), else derived from [paragraphs]. Empty for an undiarized transcript.
+         */
+        fun speakersOf(transcriptJSON: String?, paragraphs: List<TranscriptParagraph>): List<String> {
+            val listed = try {
+                transcriptJSON?.let { JSONObject(it).optJSONArray("speakers") }?.let { arr ->
+                    (0 until arr.length()).mapNotNull { i -> (arr.opt(i) as? String)?.trim()?.takeIf { it.isNotEmpty() } }
+                }
+            } catch (e: Exception) {
+                null
+            }
+            if (!listed.isNullOrEmpty()) return listed.distinct()
+            return paragraphs.mapNotNull { it.speaker }.distinct()
+        }
+
         /** Server `paragraphs_markdown`: bold speaker label, "★ " on bookmarked paragraphs, one blank line between. */
         fun markdown(paragraphs: List<TranscriptParagraph>): String =
             paragraphs.joinToString("\n\n") { p ->

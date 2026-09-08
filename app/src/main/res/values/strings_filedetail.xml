@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Strings used only by the recording detail screen (FileDetailActivity and its sheets). -->
+<resources>
+    <!-- Toolbar -->
+    <string name="detail_back">Back</string>
+    <string name="detail_more">More options</string>
+    <string name="detail_back_to_top">Back to top</string>
+    <string name="detail_jump_to">Jump to</string>
+    <string name="detail_jump_bookmarks">Bookmarks</string>
+    <string name="detail_jump_speakers">Speaker changes</string>
+    <string name="detail_jump_time_marks">Every 10 minutes</string>
+    <!-- Time mark rows in the Jump to sheet have no words of their own; the time is the label -->
+    <string name="detail_jump_time_mark_cd">Jump to %1$s</string>
+
+    <!-- Transcript -->
+    <string name="detail_transcript_loading">Loading the transcript…</string>
+    <string name="detail_seek_to_fmt">Play from %1$s</string>
+    <string name="detail_rename_speaker_cd">Rename speaker</string>
+    <string name="detail_bookmarked">Bookmarked</string>
+    <string name="detail_return_to_playback">Return to playback</string>
+    <string name="detail_no_speech_line">Nothing was said in this recording</string>
+    <string name="detail_error_details">Details</string>
+
+    <!-- Actions -->
+    <string name="detail_export_audio">Export audio</string>
+    <string name="detail_summary_copied">Summary copied</string>
+    <string name="detail_save">Save</string>
+    <string name="detail_rename_title">Rename recording</string>
+    <string name="detail_rename_hint">Title</string>
+    <string name="detail_title_required">Enter a title</string>
+    <string name="detail_rename_speaker_title_fmt">Rename %1$s</string>
+    <string name="detail_rename_speaker_hint">Name</string>
+    <string name="detail_name_required">Enter a name</string>
+    <string name="detail_rename_speaker_merge_fmt">Merges with %1$s</string>
+    <string name="detail_speaker_renamed">Speaker renamed</string>
+    <string name="detail_server_needs_update">Your server needs an update for this</string>
+    <string name="detail_request_failed">Couldn\'t reach your server. Try again.</string>
+    <string name="detail_export_failed">Export failed</string>
+    <string name="detail_export_failed_body">Couldn\'t export this recording.</string>
+
+    <!-- Player -->
+    <string name="detail_play_pause">Play or pause</string>
+    <string name="detail_rewind_15">Back 15 seconds</string>
+    <string name="detail_forward_30">Forward 30 seconds</string>
+    <string name="detail_speed_1x">1x</string>
+    <string name="detail_speed_1_5x">1.5x</string>
+    <string name="detail_speed_2x">2x</string>
+
+    <!-- Automations: a delivery that is on its way but not handed off yet -->
+    <string name="detail_delivery_waiting">Waiting</string>
+</resources>

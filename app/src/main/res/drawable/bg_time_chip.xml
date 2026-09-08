@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The small time chip on each transcript paragraph (tap to play from there) -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android" android:color="@color/light_gray">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/separator" />
+            <corners android:radius="12dp" />
+        </shape>
+    </item>
+</ripple>
