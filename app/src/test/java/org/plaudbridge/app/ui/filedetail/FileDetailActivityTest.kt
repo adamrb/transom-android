@@ -244,8 +244,10 @@ class FileDetailActivityTest {
         /** When set, rerunRouting parks on it so a test can hold the call "on the wire". */
         var rerunGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
         var rerunResult: org.plaudbridge.app.net.ApiClient.ActionResult = org.plaudbridge.app.net.ApiClient.ActionResult.Ok
-        override suspend fun rerunRouting(id: String): org.plaudbridge.app.net.ApiClient.ActionResult {
+        val rerunKeys = mutableListOf<String>()
+        override suspend fun rerunRouting(id: String, idempotencyKey: String): org.plaudbridge.app.net.ApiClient.ActionResult {
             reruns += id
+            rerunKeys += idempotencyKey
             rerunGate?.await()
             return rerunResult
         }
@@ -1258,6 +1260,9 @@ class FileDetailActivityTest {
         assertTrue(activity.onMenuAction(R.id.action_run_automations))
         looper.idle()
         assertEquals(2, fake.reruns.size)
+        // The lost request's run was found, so the second tap is a new intent with its own key.
+        assertEquals(2, fake.rerunKeys.toSet().size)
+        assertTrue(fake.rerunKeys.all { it.length in 8..128 && it.matches(Regex("[A-Za-z0-9_-]+")) })
     }
 
     @Test
@@ -1283,6 +1288,11 @@ class FileDetailActivityTest {
         activity.applyMenuVisibility(menu)
         assertTrue(menu.findItem(R.id.action_run_automations).isEnabled)
         assertEquals(1, fake.reruns.size)
+        // Nothing showed up, so the request may still land: the next tap replays the same key.
+        assertTrue(activity.onMenuAction(R.id.action_run_automations))
+        looper.idle()
+        assertEquals(2, fake.reruns.size)
+        assertEquals(fake.rerunKeys[0], fake.rerunKeys[1])
     }
 
     @Test

@@ -599,12 +599,18 @@ object ApiClient {
      * timeout rather than the shared 120 s one, which a slow model could exceed while the run
      * still completes.
      */
-    fun rerunRouting(recordingId: String): ActionResult {
-        val req = Request.Builder()
+    /**
+     * Re-run the router. [idempotencyKey] (per user intent, reused on retry) makes a re-sent
+     * request return the run the server already made instead of starting another one with
+     * duplicate side effects; the server replays by key and dedupes concurrent duplicates.
+     */
+    fun rerunRouting(recordingId: String, idempotencyKey: String? = null): ActionResult {
+        val builder = Request.Builder()
             .url("${baseUrl()}/api/v1/recordings/$recordingId/route")
             .header("Authorization", authHeader())
             .post(ByteArray(0).toRequestBody(null))
-            .build()
+        if (!idempotencyKey.isNullOrBlank()) builder.header("Idempotency-Key", idempotencyKey)
+        val req = builder.build()
         val patient = client.newBuilder().readTimeout(REROUTE_READ_TIMEOUT_S, TimeUnit.SECONDS).build()
         return executeAction(req, "rerun routing", patient)
     }

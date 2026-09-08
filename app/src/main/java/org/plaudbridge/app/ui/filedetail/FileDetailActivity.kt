@@ -138,7 +138,7 @@ class FileDetailActivity : AppCompatActivity() {
         suspend fun recording(id: String): ApiClient.RecordingResult
         suspend fun transcript(id: String): ApiClient.TranscriptResult
         suspend fun routing(id: String): ApiClient.RoutingResult
-        suspend fun rerunRouting(id: String): ApiClient.ActionResult
+        suspend fun rerunRouting(id: String, idempotencyKey: String): ApiClient.ActionResult
         suspend fun retryDelivery(deliveryId: String): ApiClient.RetryResult
     }
 
@@ -146,7 +146,8 @@ class FileDetailActivity : AppCompatActivity() {
         override suspend fun recording(id: String) = withContext(Dispatchers.IO) { ApiClient.fetchRecording(id) }
         override suspend fun transcript(id: String) = withContext(Dispatchers.IO) { ApiClient.fetchTranscript(id) }
         override suspend fun routing(id: String) = withContext(Dispatchers.IO) { ApiClient.fetchRouting(id) }
-        override suspend fun rerunRouting(id: String) = withContext(Dispatchers.IO) { ApiClient.rerunRouting(id) }
+        override suspend fun rerunRouting(id: String, idempotencyKey: String) =
+            withContext(Dispatchers.IO) { ApiClient.rerunRouting(id, idempotencyKey) }
         override suspend fun retryDelivery(deliveryId: String) = withContext(Dispatchers.IO) { ApiClient.retryDelivery(deliveryId) }
     }
 
@@ -178,6 +179,8 @@ class FileDetailActivity : AppCompatActivity() {
 
         /** Recording ids with a Run automations call on the wire, see [runAutomations]. */
         private val rerunsInFlight = mutableSetOf<String>()
+        /** Idempotency key of the user's pending Run automations intent, per server id. */
+        private val pendingRerunKeys = mutableMapOf<String, String>()
 
         /**
          * The screen currently showing each server recording, so a rerun that finishes after a
@@ -193,6 +196,7 @@ class FileDetailActivity : AppCompatActivity() {
         @VisibleForTesting
         internal fun resetProcessStateForTests() {
             rerunsInFlight.clear()
+            pendingRerunKeys.clear()
             liveScreens.clear()
         }
 
@@ -1046,9 +1050,13 @@ class FileDetailActivity : AppCompatActivity() {
         val history = routingRuns ?: return // not loaded yet; the menu item is disabled then
         if (!rerunsInFlight.add(serverId)) return
         val baselineRunId = history.firstOrNull()?.id
+        // One idempotency key per user intent: kept across an ambiguous failure so the next
+        // tap re-sends the same key and the server replays the run it already made instead
+        // of starting a second one; dropped once the server has answered definitively.
+        val idempotencyKey = pendingRerunKeys.getOrPut(serverId) { UUID.randomUUID().toString() }
         rerunScope.launch {
             val result = try {
-                serverSource.rerunRouting(serverId)
+                serverSource.rerunRouting(serverId, idempotencyKey)
             } catch (e: Throwable) {
                 rerunsInFlight.remove(serverId)
                 throw e
@@ -1056,8 +1064,15 @@ class FileDetailActivity : AppCompatActivity() {
             // Only companion state and ids from here: this coroutine may outlive the screen that
             // started it by minutes and must not keep that screen (and its views) alive.
             val screen = liveScreens[serverId]
+            if (!isAmbiguousRerunFailure(result)) pendingRerunKeys.remove(serverId)
             if (screen == null || !isAmbiguousRerunFailure(result)) rerunsInFlight.remove(serverId)
-            screen?.onRerunFinished(result, baselineRunId) { rerunsInFlight.remove(serverId) }
+            screen?.onRerunFinished(result, baselineRunId) { runFound ->
+                rerunsInFlight.remove(serverId)
+                // The run the lost response was about has shown up: the intent is spent, so the
+                // next tap is a new one and must not replay it. Not found: keep the key, the
+                // request may still have landed and a replay is the safe outcome.
+                if (runFound) pendingRerunKeys.remove(serverId)
+            }
         }
     }
 
@@ -1068,9 +1083,9 @@ class FileDetailActivity : AppCompatActivity() {
      * the in-flight guard) runs only once a run newer than [baselineRunId] has shown up, or the
      * scheduled reads are exhausted: the user sees what happened before a second tap is possible.
      */
-    private fun onRerunFinished(result: ApiClient.ActionResult, baselineRunId: String?, onReconciled: () -> Unit) {
+    private fun onRerunFinished(result: ApiClient.ActionResult, baselineRunId: String?, onReconciled: (runFound: Boolean) -> Unit) {
         if (isDestroyed || isFinishing) {
-            onReconciled()
+            onReconciled(false)
             return
         }
         when (result) {
@@ -1092,28 +1107,29 @@ class FileDetailActivity : AppCompatActivity() {
     }
 
     /** One ambiguous rerun being reconciled, see [reconcileRerun]. [release] is idempotent. */
-    private inner class RerunReconciliation(private val baselineRunId: String?, private val onDone: () -> Unit) {
+    private inner class RerunReconciliation(private val baselineRunId: String?, private val onDone: (runFound: Boolean) -> Unit) {
         private var released = false
         var readsLeft = RERUN_REFRESH_DELAYS_MS.size + 1
 
-        fun release() {
+        fun release(runFound: Boolean = false) {
             if (released) return
             released = true
             rerunReconciliations.remove(this)
-            onDone()
+            onDone(runFound)
         }
 
         /** After each read: a newer run than the one before the tap settles it; so does the last read. */
         fun onRead() {
             readsLeft--
             val latest = routingRuns?.firstOrNull()?.id
-            if ((latest != null && latest != baselineRunId) || readsLeft <= 0) release()
+            val runFound = latest != null && latest != baselineRunId
+            if (runFound || readsLeft <= 0) release(runFound)
         }
     }
 
     private val rerunReconciliations = mutableListOf<RerunReconciliation>()
 
-    private fun reconcileRerun(baselineRunId: String?, onReconciled: () -> Unit) {
+    private fun reconcileRerun(baselineRunId: String?, onReconciled: (runFound: Boolean) -> Unit) {
         val reconciliation = RerunReconciliation(baselineRunId, onReconciled)
         rerunReconciliations += reconciliation
         refreshRouting(onSettled = { reconciliation.onRead() })

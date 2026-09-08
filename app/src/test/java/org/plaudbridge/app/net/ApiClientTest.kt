@@ -557,6 +557,17 @@ class ApiClientTest {
     }
 
     @Test
+    fun rerunRoutingSendsTheIdempotencyKeyWhenGiven() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+        assertEquals(ApiClient.ActionResult.Ok, ApiClient.rerunRouting("rec-1", "click-0001-abcdef"))
+        val req = server.takeRequest()
+        assertEquals("click-0001-abcdef", req.getHeader("Idempotency-Key"))
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+        ApiClient.rerunRouting("rec-1")
+        assertEquals(null, server.takeRequest().getHeader("Idempotency-Key"))
+    }
+
+    @Test
     fun rerunRoutingMapsFailures() {
         server.enqueue(MockResponse().setResponseCode(404))
         assertEquals(ApiClient.ActionResult.NotFound, ApiClient.rerunRouting("rec-1"))
