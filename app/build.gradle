@@ -47,6 +47,12 @@ android {
         unitTests {
             // Robolectric: real android.util/org.json/SharedPreferences implementations on the JVM
             includeAndroidResources = true
+            all {
+                // 700+ Robolectric tests exhaust the default 512m worker heap; recycle the JVM
+                // periodically so per-sandbox leaks cannot accumulate across the whole run.
+                maxHeapSize = "3g"
+                forkEvery = 40
+            }
         }
     }
 }
