@@ -181,6 +181,13 @@ class FileDetailActivity : AppCompatActivity() {
         @VisibleForTesting
         val RERUN_REFRESH_DELAYS_MS = longArrayOf(3_000L, 15_000L)
 
+        /** Transcripts at least this long are measured off the main thread before display. */
+        const val PRECOMPUTE_TRANSCRIPT_CHARS = 20_000
+
+        /** Where that measurement runs; tests swap in an inline dispatcher for determinism. */
+        @VisibleForTesting
+        var transcriptLayoutDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default
+
         /** How often the recording is re-read while the server is still transcribing it. */
         @VisibleForTesting
         const val TRANSCRIPTION_POLL_INTERVAL_MS = 5_000L
@@ -220,6 +227,7 @@ class FileDetailActivity : AppCompatActivity() {
         /** Tests share one process: clear the process-wide rerun state between them. */
         @VisibleForTesting
         internal fun resetProcessStateForTests() {
+            transcriptLayoutDispatcher = Dispatchers.Default
             rerunsInFlight.clear()
             pendingReruns.clear()
             liveScreens.clear()
@@ -438,12 +446,75 @@ class FileDetailActivity : AppCompatActivity() {
         transcriptCopyText = model.transcriptJSON?.let { copyTextFor(it) } ?: transcriptPlainText
         binding.transcriptActions.visibility = if (transcriptPlainText != null) View.VISIBLE else View.GONE
         if (shown != null) {
-            binding.transcriptText.text = shown
-            binding.transcriptText.visibility = View.VISIBLE
+            showTranscriptText(shown)
             binding.emptyState.visibility = View.GONE
         } else {
+            transcriptLayoutJob?.cancel()
+            pendingTranscriptText = null
+            appliedTranscriptText = null
             binding.transcriptText.visibility = View.GONE
             binding.emptyState.visibility = View.GONE
+        }
+    }
+
+    /** Off-main-thread text measurement in flight for a long transcript, see [showTranscriptText]. */
+    private var transcriptLayoutJob: kotlinx.coroutines.Job? = null
+
+    /** The transcript text the view currently shows / is being measured for, so a re-render with
+     * the same text (a metadata refresh, a poll, a resume) neither hides it nor measures it again. */
+    private var appliedTranscriptText: String? = null
+    private var pendingTranscriptText: String? = null
+
+    /**
+     * Put the transcript on screen. A short one is set directly. A long one (a two-hour recording
+     * is ~150k characters) would hold the main thread for over a second measuring text, so the
+     * header, summary and highlights would all wait on it; instead its measurement runs on a
+     * background thread ([PrecomputedTextCompat]) and the text lands a moment later, already
+     * measured. The result is only used if the view's text metrics have not changed meanwhile.
+     */
+    private fun showTranscriptText(shown: CharSequence) {
+        val view = binding.transcriptText
+        val key = shown.toString()
+        if (shown.length < PRECOMPUTE_TRANSCRIPT_CHARS) {
+            transcriptLayoutJob?.cancel()
+            pendingTranscriptText = null
+            view.text = shown
+            appliedTranscriptText = key
+            view.visibility = View.VISIBLE
+            return
+        }
+        // Same text already on screen, or already being measured: nothing to redo. (The spans
+        // rebuilt by renderParagraphs sit at the same offsets, so the shown text stays valid.)
+        if (key == appliedTranscriptText && view.visibility == View.VISIBLE) return
+        if (key == pendingTranscriptText && transcriptLayoutJob?.isActive == true) return
+        transcriptLayoutJob?.cancel()
+        pendingTranscriptText = key
+        val params = androidx.core.widget.TextViewCompat.getTextMetricsParams(view)
+        view.visibility = View.GONE
+        transcriptLayoutJob = lifecycleScope.launch {
+            val precomputed = try {
+                withContext(transcriptLayoutDispatcher) { androidx.core.text.PrecomputedTextCompat.create(shown, params) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                org.plaudbridge.app.common.AppLog.w("FileDetail", "transcript precompute failed, laying out inline", e)
+                null
+            }
+            val applied = precomputed != null &&
+                androidx.core.widget.TextViewCompat.getTextMetricsParams(view).equalsWithoutTextDirection(params) &&
+                try {
+                    androidx.core.widget.TextViewCompat.setPrecomputedText(view, precomputed)
+                    true
+                } catch (e: IllegalArgumentException) {
+                    // The view's metrics moved under us (or the platform disagrees about
+                    // equality): a plain set still shows the transcript, just measured inline.
+                    org.plaudbridge.app.common.AppLog.w("FileDetail", "precomputed transcript rejected, laying out inline", e)
+                    false
+                }
+            if (!applied) view.text = shown
+            appliedTranscriptText = key
+            pendingTranscriptText = null
+            view.visibility = View.VISIBLE
         }
     }
 
@@ -942,6 +1013,10 @@ class FileDetailActivity : AppCompatActivity() {
     private fun revealParagraph(position: Int) {
         val range = paragraphRanges.getOrNull(position) ?: return
         val text = binding.transcriptText
+        // A long transcript still being measured (or one the view has not caught up with) has
+        // no matching text to scroll or flash; the tap has still seeked the player.
+        if (text.visibility != View.VISIBLE || transcriptLayoutJob?.isActive == true) return
+        if (range.last >= text.text.length) return
         val layout = text.layout ?: return
         val line = layout.getLineForOffset(range.first)
         val y = text.top + text.totalPaddingTop + layout.getLineTop(line) - (16 * resources.displayMetrics.density).toInt()

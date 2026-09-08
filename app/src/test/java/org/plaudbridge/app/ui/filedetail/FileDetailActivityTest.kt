@@ -547,6 +547,48 @@ class FileDetailActivityTest {
         return Robolectric.buildActivity(FileDetailActivity::class.java, intent).setup()
     }
 
+    /** A two-hour-style document: hundreds of paragraphs, well past the off-main-thread threshold. */
+    private fun longTranscriptJson(paragraphCount: Int): String {
+        val sentence = "This is one more sentence of the very long recording that keeps going on and on."
+        val segs = StringBuilder(); val paras = StringBuilder()
+        for (i in 0 until paragraphCount) {
+            val speaker = if (i % 2 == 0) "Speaker 1" else "Speaker 2"
+            val text = (0 until 6).joinToString(" ") { sentence }
+            if (i > 0) { segs.append(','); paras.append(',') }
+            segs.append("""{"speaker":"$speaker","start":${i * 10}.0,"end":${i * 10 + 10}.0,"text":"$text"}""")
+            paras.append("""{"speaker":"$speaker","text":"$text","start":${i * 10}.0,"end":${i * 10 + 10}.0,"bookmarks":${if (i == 200) "[0]" else "[]"}}""")
+        }
+        return """{"text":"long","summary":"Long.","segments":[$segs],"marks":[2005.0],
+            "highlights":[{"at":2005.0,"start":2000.0,"end":2010.0,"speakers":["Speaker 1"],"text":"$sentence"}],
+            "paragraphs":[$paras]}"""
+    }
+
+    @Test
+    fun aLongTranscriptIsMeasuredOffTheMainThreadAndStillLandsWithItsParagraphs() {
+        // Inline dispatcher so the background hop is deterministic here; the production default is
+        // Dispatchers.Default, which is the whole point (the main thread never measures 150k chars).
+        FileDetailActivity.transcriptLayoutDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        val json = longTranscriptJson(300)
+        assertTrue(json.length > FileDetailActivity.PRECOMPUTE_TRANSCRIPT_CHARS)
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(json))
+        val activity = launchServer(fake)
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        val view = transcriptView(activity)
+        assertEquals(View.VISIBLE, view.visibility)
+        assertTrue(view.text.length > FileDetailActivity.PRECOMPUTE_TRANSCRIPT_CHARS)
+        assertNoClockTimes(view.text.toString())
+        assertTrue(view.text.toString().startsWith("Speaker 1\nThis is one more sentence"))
+        // The measured text still carries the spans the screen relies on: a tap seeks, a
+        // highlight reveals its paragraph (flash span applied) without throwing.
+        assertTrue(spans<android.text.style.ClickableSpan>(view).size >= 300)
+        activity.findViewById<android.widget.LinearLayout>(R.id.highlightsList).getChildAt(0).performClick()
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals(1, spans<android.text.style.BackgroundColorSpan>(view).size)
+        // Short transcripts skip the hop and are on screen synchronously.
+        val short = launchServer(FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptWithParagraphs)))
+        assertEquals(View.VISIBLE, transcriptView(short).visibility)
+    }
+
     @Test
     fun serverModeShowsFetchedTitleAndTranscript() {
         val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptWithHighlights))
