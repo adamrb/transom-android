@@ -6,6 +6,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.common.AppLog
@@ -156,6 +157,28 @@ object UploadManager {
     private val _state = MutableStateFlow<UploadState>(UploadState.Idle)
     val state: StateFlow<UploadState> = _state.asStateFlow()
 
+    private val _failedUploads = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * [RecordingFile.id]s whose most recent upload attempt in this process failed and that are
+     * still waiting to be uploaded. The lists read it to say "Upload failed" on the row instead
+     * of "Uploading" forever. An id leaves the set the moment a new attempt starts for it (the
+     * row reads "Uploading" again), or when nothing is pending any more; it comes back if that
+     * attempt fails too. Process-scoped on purpose: after a restart the durable WorkManager retry
+     * runs within moments and re-derives it, so nothing needs persisting.
+     */
+    val failedUploads: StateFlow<Set<String>> = _failedUploads.asStateFlow()
+
+    /**
+     * "Retry upload" on a failed row: forget the failure right away so the row flips back to
+     * Uploading without waiting for the pass to reach it, then run a pass. The pass re-adds the
+     * id if the upload fails again.
+     */
+    fun retryUpload(fileId: String) {
+        _failedUploads.update { it - fileId }
+        kick()
+    }
+
     /**
      * Process the pending-upload queue now (kicks arriving mid-run are queued, never lost) AND
      * make sure the durable WorkManager retry is scheduled, so a failure followed by process
@@ -226,13 +249,18 @@ object UploadManager {
         val pending = pendingWithLocalFile()
         if (pending.isEmpty()) {
             _state.value = UploadState.Idle
+            _failedUploads.value = emptySet()
             return 0 to 0
         }
         AppLog.i(TAG, "Uploading ${pending.size} pending recording(s)")
         var uploaded = 0
         var failures = 0
+        val failedIds = mutableSetOf<String>()
         pending.forEachIndexed { index, rec ->
             _state.value = UploadState.Uploading(index + 1, pending.size, rec.displayName)
+            // A fresh attempt: the row reads "Uploading" while it runs, "Upload failed" again if
+            // this attempt fails too.
+            _failedUploads.update { it - rec.id }
             try {
                 val file = File(rec.localPath!!)
                 // Server-config generation guard: if the user switches server URL/token while
@@ -253,6 +281,8 @@ object UploadManager {
                 )
                 if (RecordingStore.serverConfigGeneration != configGen) {
                     failures++
+                    failedIds += rec.id
+                    _failedUploads.update { it + rec.id }
                     AppLog.w(TAG, "Upload result discarded — server config changed mid-upload (sessionId=${rec.sessionId})")
                 } else {
                     // Only a validated result reaches this point (non-blank id, exact contract).
@@ -282,9 +312,13 @@ object UploadManager {
                 }
             } catch (e: Exception) {
                 failures++
+                failedIds += rec.id
+                _failedUploads.update { it + rec.id }
                 AppLog.w(TAG, "Upload failed for sessionId=${rec.sessionId}", e)
             }
         }
+        // Exactly what failed in this pass; ids of recordings deleted or uploaded meanwhile drop out.
+        _failedUploads.value = failedIds
         _state.value = if (failures == 0) UploadState.Idle
         else UploadState.Failed("$failures upload(s) failed — will retry on the next sync")
         return uploaded to failures

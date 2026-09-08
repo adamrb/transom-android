@@ -173,6 +173,71 @@ class RecordingsAdapterTest {
         assertTrue(meta(RecordingItem(local("/tmp/1.opus", uploaded = true), null)).endsWith("1m 1s"))
     }
 
+    // MARK: - Upload failed
+
+    @Test
+    fun aFailedUploadSaysSoInsteadOfUploadingForever() {
+        val failed = RecordingItem(local("/tmp/1.opus", uploaded = false), null, uploadFailed = true)
+        assertEquals(RecordingItem.Status.UPLOAD_FAILED, failed.status)
+        assertTrue(failed.canRetryUpload)
+        assertTrue(meta(failed).endsWith("Upload failed"))
+        // Nothing to retry once it is uploading again, downloaded-not-yet, or on the server.
+        assertEquals(RecordingItem.Status.UPLOADING, RecordingItem(local("/tmp/1.opus", uploaded = false), null).status)
+        assertEquals(RecordingItem.Status.DOWNLOADING, RecordingItem(local(null, uploaded = false), null, uploadFailed = true).status)
+        assertEquals(RecordingItem.Status.NONE, RecordingItem(local("/tmp/1.opus", uploaded = false), server("done"), uploadFailed = true).status)
+        assertFalse(RecordingItem(local("/tmp/1.opus", uploaded = false), server("done"), uploadFailed = true).canRetryUpload)
+    }
+
+    @Test
+    fun failureWordsAreDrawnInTheFailureColourOnlyWhileInFlightWordsAreNot() {
+        val failedUpload = RecordingsAdapter.metaText(context, RecordingItem(local("/tmp/1.opus", uploaded = false), null, uploadFailed = true))
+        val spans = (failedUpload as android.text.Spanned).getSpans(0, failedUpload.length, android.text.style.ForegroundColorSpan::class.java)
+        assertEquals(1, spans.size)
+        val start = failedUpload.getSpanStart(spans[0])
+        assertEquals("Upload failed", failedUpload.subSequence(start, failedUpload.getSpanEnd(spans[0])).toString())
+
+        val failed = RecordingsAdapter.metaText(context, RecordingItem(null, server("failed")))
+        assertEquals(1, (failed as android.text.Spanned).getSpans(0, failed.length, android.text.style.ForegroundColorSpan::class.java).size)
+
+        val uploading = RecordingsAdapter.metaText(context, RecordingItem(local("/tmp/1.opus", uploaded = false), null))
+        assertFalse(uploading is android.text.Spanned && uploading.getSpans(0, uploading.length, Any::class.java).isNotEmpty())
+        assertEquals(meta(RecordingItem(local("/tmp/1.opus", uploaded = false), null)), uploading.toString())
+    }
+
+    // MARK: - Search snippets
+
+    @Test
+    fun snippetOnlyWhenTheMatchIsNotInTheTitle() {
+        val rec = ServerRecording.fromJson(JSONObject(
+            """{"id":"s","filename":"s.mp3","status":"done","title":"Standup","text_preview":"we discussed the BUDGET for Q3"}"""
+        ))
+        val item = RecordingItem(null, rec)
+        val snippet = RecordingsAdapter.snippetFor(item, "budget")!!
+        assertTrue(snippet.text, snippet.text.contains("BUDGET"))
+        assertEquals("BUDGET", snippet.text.substring(snippet.matchStart, snippet.matchEnd))
+        assertEquals(null, RecordingsAdapter.snippetFor(item, "standup"))
+        assertEquals(null, RecordingsAdapter.snippetFor(item, null))
+        // The phone's cached summary counts too.
+        val cached = local("/tmp/1.opus", uploaded = true).apply { summaryText = "Notes about the garden fence" }
+        assertTrue(RecordingsAdapter.snippetFor(RecordingItem(cached, null), "fence")!!.text.contains("fence"))
+    }
+
+    @Test
+    fun noSpeechRowMatchedByItsHiddenNameShowsThatNameAsTheSnippet() {
+        // The row reads "No speech detected"; search matched the file name it does not show.
+        val quiet = RecordingItem(null, noSpeech())
+        val shown = title(quiet)
+        assertEquals("No speech detected", shown)
+        val snippet = RecordingsAdapter.snippetFor(quiet, "r.mp3", shownTitle = shown)!!
+        assertEquals("r.mp3", snippet.text)
+        assertEquals("r.mp3", snippet.text.substring(snippet.matchStart, snippet.matchEnd))
+        // Searching for the wording of the stand-in itself matches nothing (see searchDoesNotMatchTheNoSpeechWording).
+        assertEquals(null, RecordingsAdapter.snippetFor(quiet, "detected", shownTitle = shown))
+        // An ordinary row whose shown title is its title behaves as before.
+        val plain = RecordingItem(null, server("done"))
+        assertEquals(null, RecordingsAdapter.snippetFor(plain, "r.mp3", shownTitle = title(plain)))
+    }
+
     @Test
     fun implementationWordsNeverAppear() {
         val rows = listOf(

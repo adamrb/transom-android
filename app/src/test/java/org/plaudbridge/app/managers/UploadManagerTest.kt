@@ -142,6 +142,27 @@ class UploadManagerTest {
         awaitCondition("run finished") { UploadManager.state.value is UploadState.Failed }
         assertFalse(RecordingStore.allFiles.single().uploaded)
         assertTrue(fakeLink.deletedSnapshot().isEmpty())
+        // The list learns which recording failed, so its row can say "Upload failed".
+        assertEquals(setOf(RecordingStore.allFiles.single().id), UploadManager.failedUploads.value)
+    }
+
+    @Test
+    fun retryUploadForgetsTheFailureAtOnceAndClearsItForGoodOnSuccess() {
+        addSyncedRecording("SN-A", 3)
+        val id = RecordingStore.allFiles.single().id
+        server.enqueue(MockResponse().setResponseCode(500).setBody("boom"))
+        UploadManager.kick()
+        awaitCondition("first run failed") { UploadManager.failedUploads.value == setOf(id) }
+        awaitCondition("first run finished") { UploadManager.state.value is UploadState.Failed }
+
+        // Retry: the row flips back to "Uploading" before the pass even starts...
+        server.enqueue(okUploadResponse("srv-3"))
+        UploadManager.retryUpload(id)
+        assertFalse(UploadManager.failedUploads.value.contains(id))
+        // ...and stays clear once the upload lands.
+        awaitCondition("recording uploaded") { RecordingStore.allFiles.single().uploaded }
+        awaitCondition("run finished") { UploadManager.state.value is UploadState.Idle }
+        assertEquals(emptySet<String>(), UploadManager.failedUploads.value)
     }
 
     @Test

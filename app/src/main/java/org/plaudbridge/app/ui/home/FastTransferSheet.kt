@@ -60,11 +60,9 @@ class FastTransferSheet : BottomSheetDialogFragment() {
                         is SyncState.WiFiConnecting -> showPhase(state.phase)
                         is SyncState.WiFiTransferring -> dismissAllowingStateLoss() // banner takes over
                         is SyncState.Failed -> {
-                            // Only surface WiFi-related failures here (mirrors iOS filter)
-                            if (state.message.contains("WiFi", ignoreCase = true) ||
-                                state.message.contains("handshake", ignoreCase = true) ||
-                                state.message.contains("hotspot", ignoreCase = true)
-                            ) showError(state.message)
+                            // Only WiFi failures belong to this sheet (mirrors iOS filter). The
+                            // SDK's message stays in the log; the user gets a sentence.
+                            if (state.reason == SyncState.Reason.WIFI) showError()
                         }
                         else -> {}
                     }
@@ -89,9 +87,9 @@ class FastTransferSheet : BottomSheetDialogFragment() {
         }
     }
 
-    private fun showError(message: String) {
+    private fun showError() {
         binding.spinner.visibility = View.GONE
-        binding.connectStatusLabel.text = getString(R.string.connection_failed_fmt, message)
+        binding.connectStatusLabel.text = getString(R.string.sync_failed_wifi)
         binding.root.postDelayed({ if (isAdded) dismissAllowingStateLoss() }, 3000)
     }
 

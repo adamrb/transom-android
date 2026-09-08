@@ -35,6 +35,13 @@ class SyncManager private constructor() : SyncManagerProtocol {
         /** How long to wait for the device to confirm the post-transfer batch delete. */
         private const val DELETE_CONFIRM_TIMEOUT_MS = 15_000L
 
+        /**
+         * A BLE sync that produces no state change for this long (no file list back, no download
+         * progress) is declared failed, see [StallWatchdog]. Generous enough for a slow recorder
+         * to answer a file-list request; local transcoding is exempt, see [stallWatchdog].
+         */
+        const val SYNC_STALL_TIMEOUT_MS = 30_000L
+
         @Volatile
         private var instance: SyncManager? = null
 
@@ -55,6 +62,36 @@ class SyncManager private constructor() : SyncManagerProtocol {
     // before any new sync runs.
     private val _files = MutableStateFlow<List<RecordingFile>>(RecordingStore.allFiles)
     override val files: StateFlow<List<RecordingFile>> = _files.asStateFlow()
+
+    /**
+     * Whether a recorder is connected right now, asked before a manual sync so that Sync now with
+     * nothing to talk to fails at once instead of waiting on a file list that never comes.
+     * Replaceable for unit tests only.
+     */
+    internal var recorderConnected: () -> Boolean = {
+        DeviceManager.shared.connectedDevice.value?.serialNumber?.isNotBlank() == true
+    }
+
+    /**
+     * Turns a BLE sync that stopped making progress into [SyncState.Failed]. Armed by every
+     * Syncing emission and disarmed by anything else (see the collector in init), so it never
+     * has to be threaded through the individual progress paths. The SDK's local transcode after
+     * a download reports no progress, which is expected quiet, not a stall.
+     */
+    private val stallWatchdog = StallWatchdog(
+        scope = scope,
+        timeoutMs = SYNC_STALL_TIMEOUT_MS,
+        isBusyLocally = { bleExportStage == sdk.audio.ExportStage.TRANSCODING },
+        onStall = { onSyncStalled() }
+    )
+
+    init {
+        scope.launch {
+            _state.collect { state ->
+                if (state is SyncState.Syncing) stallWatchdog.arm() else stallWatchdog.disarm()
+            }
+        }
+    }
 
     private val pendingSessionIds = mutableListOf<Long>()
     private var totalToSync = 0
@@ -142,7 +179,15 @@ class SyncManager private constructor() : SyncManagerProtocol {
 
     override fun startSync() {
         if (_state.value.isActive) return
+        if (!recorderConnected()) {
+            // getFileList() on a disconnected SDK neither throws nor calls back, which is how the
+            // "Retrieving file list" banner used to stay up for good.
+            AppLog.i(TAG, "startSync ignored: no recorder connected")
+            _state.value = SyncState.Failed("No recorder connected", SyncState.Reason.NOT_CONNECTED)
+            return
+        }
         silentFetch = false
+        syncRun++
         fileListRequest.set(currentDeviceSN()?.let { FileListRequest(it) })
         _state.value = SyncState.Syncing(SyncProgress(totalFiles = 0, syncedFiles = 0))
         queryDeviceFileList()
@@ -160,6 +205,27 @@ class SyncManager private constructor() : SyncManagerProtocol {
                 silentFetch = false
             }
         }
+    }
+
+    /**
+     * The recorder went quiet mid-sync (see [stallWatchdog]): give up on this run so the banner
+     * clears and the user gets a Retry, and drop the outstanding file-list request so a very
+     * late answer is ignored rather than starting downloads under a run nobody is watching.
+     */
+    private fun onSyncStalled() {
+        if (_state.value !is SyncState.Syncing) return
+        AppLog.w(TAG, "Sync stalled: no progress for ${SYNC_STALL_TIMEOUT_MS / 1000}s, giving up")
+        syncRun++ // the interrupted export's callbacks belong to the run that just ended
+        bleExportStage = null
+        pendingSessionIds.clear()
+        fileListRequest.set(null)
+        silentFetch = false
+        try {
+            PlaudDeviceAgent.stopSyncFile()
+        } catch (e: Exception) {
+            AppLog.w(TAG, "stopSyncFile after stall failed", e)
+        }
+        _state.value = SyncState.Failed("Recorder stopped responding", SyncState.Reason.TIMED_OUT)
     }
 
     /** Entry for the facade bleFileList callback (forwarded by DeviceManager's listener). */
@@ -347,7 +413,7 @@ class SyncManager private constructor() : SyncManagerProtocol {
             override fun onDeviceBatteryUpdate(level: Int, charging: Boolean) {}
             override fun onError(code: Int, message: String) {
                 AppLog.e(TAG, "WiFi transfer error ($code): $message")
-                scope.launch { finishWiFiTransfer(SyncState.Failed(message)) }
+                scope.launch { finishWiFiTransfer(SyncState.Failed(message, SyncState.Reason.WIFI)) }
             }
             // Batch-download callbacks belong to the agent's raw downloadAllFiles() path, which we
             // no longer drive (see onFileListReceived) — kept as no-ops for interface completeness.
@@ -362,7 +428,7 @@ class SyncManager private constructor() : SyncManagerProtocol {
 
         if (!started) {
             AppLog.w(TAG, "startWifiTransfer returned false")
-            finishWiFiTransfer(SyncState.Failed("Failed to start WiFi fast transfer"))
+            finishWiFiTransfer(SyncState.Failed("Failed to start WiFi fast transfer", SyncState.Reason.WIFI))
         }
     }
 
@@ -589,6 +655,7 @@ class SyncManager private constructor() : SyncManagerProtocol {
     }
 
     override fun stopSync() {
+        syncRun++ // whatever the interrupted export reports next is not this run's business
         scope.launch {
             pendingSessionIds.clear()
             _state.value = SyncState.Idle
@@ -601,6 +668,7 @@ class SyncManager private constructor() : SyncManagerProtocol {
     }
 
     fun reset() {
+        syncRun++
         pendingSessionIds.clear()
         scope.launch { _state.value = SyncState.Idle }
         _files.value = emptyList()
@@ -779,8 +847,18 @@ class SyncManager private constructor() : SyncManagerProtocol {
 
     /** [deviceSN] is captured when the export is ISSUED (closure), never read at completion. */
     fun handleDownloadComplete(deviceSN: String, sessionId: Int, outputPath: String) {
-        org.plaudbridge.app.common.OpusRepair.repairIfNeeded(outputPath)
         syncedCount++
+        storeDownload(deviceSN, sessionId, outputPath)
+        downloadNextFile()
+    }
+
+    /**
+     * Record a finished download: repair, index it as synced, ask for its marks, and queue the
+     * upload. Independent of which sync run produced it, so a file that finishes after its run
+     * was given up on (see [onSyncStalled]) is kept rather than downloaded again next time.
+     */
+    private fun storeDownload(deviceSN: String, sessionId: Int, outputPath: String) {
+        org.plaudbridge.app.common.OpusRepair.repairIfNeeded(outputPath)
         RecordingStore.markAsSynced(deviceSN, sessionId.toLong(), outputPath, audioDurationSec(outputPath))
         // Read the button-press marks over BLE right away so they are in the store (and in the
         // upload metadata) by the time UploadManager gets to this file.
@@ -790,10 +868,20 @@ class SyncManager private constructor() : SyncManagerProtocol {
         // UploadManager pushes it to the bridge server and — only when the user enabled
         // "delete after upload" — removes it from the device once the server confirms.
         UploadManager.kick()
-        downloadNextFile()
     }
 
     // MARK: - Private
+
+    /**
+     * Identifies the BLE sync run the current export belongs to. Bumped when a run is given up
+     * on (stall, stop, reset) or a new one starts, so the callbacks of an export issued under an
+     * earlier run cannot drive that run any further: stopSyncFile() makes the SDK report
+     * onError for the export it interrupted, and a late onComplete can still arrive; either
+     * would otherwise call downloadNextFile() on an emptied queue and publish Completed over the
+     * Failed (or over a retry the user has since started).
+     */
+    @Volatile
+    private var syncRun = 0
 
     private fun downloadNextFile() {
         if (pendingSessionIds.isEmpty()) {
@@ -808,6 +896,7 @@ class SyncManager private constructor() : SyncManagerProtocol {
         // Capture the owning SN for THIS export now; the completion callback uses the captured
         // value so a run started later can never change this file's attribution.
         val exportSN = activeSyncSN
+        val run = syncRun
 
         val currentFile = RecordingStore.allFiles.firstOrNull { it.sessionId == nextSessionId }
         scope.launch {
@@ -826,20 +915,32 @@ class SyncManager private constructor() : SyncManagerProtocol {
             channels = 1,
             callback = object : AudioExporter.ExportCallback {
                 override fun onProgress(progress: Int, message: String) {
+                    if (run != syncRun) return
                     // SDK 1.0.9 contract: 0-100 is monotonic download-byte progress only.
                     handleDownloadProgress(nextSessionId.toInt(), progress)
                 }
                 override fun onStageChanged(stage: sdk.audio.ExportStage) {
+                    if (run != syncRun) return
                     // Language-neutral phase signal (1.0.9). TRANSCODING means the bytes are off
                     // the device and only local work remains — see startWiFiTransfer.
                     bleExportStage = stage
                 }
                 override fun onComplete(outputFile: File) {
+                    if (run != syncRun) {
+                        // The run this belonged to is over; keep the file, drive nothing.
+                        AppLog.i(TAG, "Export finished after its sync run ended (sessionId=$nextSessionId), keeping the file")
+                        storeDownload(exportSN, nextSessionId.toInt(), outputFile.absolutePath)
+                        return
+                    }
                     bleExportStage = null
                     handleDownloadComplete(exportSN, nextSessionId.toInt(), outputFile.absolutePath)
                     resumeDeferredWiFiTransferIfNeeded()
                 }
                 override fun onError(error: String) {
+                    if (run != syncRun) {
+                        AppLog.i(TAG, "Export error after its sync run ended (sessionId=$nextSessionId): $error")
+                        return
+                    }
                     AppLog.e(TAG, "Download failed for sessionId=$nextSessionId: $error")
                     bleExportStage = null
                     syncedCount++

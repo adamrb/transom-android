@@ -1,31 +1,70 @@
 package org.plaudbridge.app.ui.recordings
 
 import android.content.Context
+import android.graphics.Typeface
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
+import androidx.core.content.ContextCompat
 import org.plaudbridge.app.R
 import org.plaudbridge.app.models.ServerRecording
 import org.plaudbridge.app.ui.list.DateGroupedAdapter
 import org.plaudbridge.app.ui.list.DateGrouping
+import java.util.concurrent.Executor
 
 /**
- * Merged recordings drawn with the Files rows. The meta line is "MMM d  ·  HH:mm  ·  Xm Ys",
- * then a status word only while something is still happening to the recording, then a star
- * count when it carries button marks. A finished recording shows date, time and duration only.
+ * Merged recordings as rows. The meta line is "Today 6:47 PM  ·  4m 12s", then a status word
+ * only while something is still happening to the recording (Failed and Upload failed in red),
+ * then a star count when it carries button marks. A finished recording shows time and duration
+ * only. During a search, a row that matched on text the title does not show gets a one-line
+ * snippet with the term in bold.
  */
 class RecordingsAdapter(
     private val onTapped: (RecordingItem) -> Unit,
-    private val onLongPressed: (RecordingItem) -> Unit
-) : DateGroupedAdapter<RecordingItem>(timestamp = { it.recordedAt }) {
+    private val onActions: (RecordingItem) -> Unit,
+    diffExecutor: Executor? = null
+) : DateGroupedAdapter<RecordingItem>(timestamp = { it.recordedAt }, key = { it.key }, diffExecutor = diffExecutor) {
 
-    override fun rowName(context: Context, item: RecordingItem): String = rowTitle(context, item)
+    /** The search the shown rows were filtered by; drives the snippets. */
+    var query: String? = null
+        private set
 
-    override fun rowMeta(context: Context, item: RecordingItem): String = metaLine(context, item)
+    /**
+     * Replace the rows. A changed [query] rebinds the labels of every row that survives the
+     * diff, since the same item may now need a snippet (or no longer need one).
+     */
+    fun submit(items: List<RecordingItem>, query: String?) {
+        val q = query?.trim()?.takeIf { it.isNotEmpty() }
+        val queryChanged = q != this.query
+        this.query = q
+        if (queryChanged && itemCount > 0) notifyItemRangeChanged(0, itemCount, PAYLOAD_LABELS)
+        submit(items)
+    }
+
+    override fun rowName(context: Context, item: RecordingItem): CharSequence = rowTitle(context, item)
+
+    override fun rowMeta(context: Context, item: RecordingItem): CharSequence = metaText(context, item)
+
+    override fun rowSnippet(context: Context, item: RecordingItem): CharSequence? {
+        val snippet = snippetFor(item, query, shownTitle = rowTitle(context, item)) ?: return null
+        val text = SpannableString(snippet.text)
+        if (snippet.hasMatch) {
+            text.setSpan(StyleSpan(Typeface.BOLD), snippet.matchStart, snippet.matchEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        return text
+    }
 
     override fun onRowTapped(item: RecordingItem) = onTapped(item)
 
     override fun onRowLongPressed(item: RecordingItem): Boolean {
-        onLongPressed(item)
+        onActions(item)
         return true
     }
+
+    override fun onRowMore(item: RecordingItem) = onActions(item)
+
+    override fun hasRowActions(item: RecordingItem): Boolean = true
 
     companion object {
         /**
@@ -41,9 +80,14 @@ class RecordingsAdapter(
             RecordingItem.Status.NONE -> null
             RecordingItem.Status.DOWNLOADING -> context.getString(R.string.status_downloading)
             RecordingItem.Status.UPLOADING -> context.getString(R.string.status_uploading)
+            RecordingItem.Status.UPLOAD_FAILED -> context.getString(R.string.status_upload_failed)
             RecordingItem.Status.TRANSCRIBING -> transcribingText(context, item.server)
             RecordingItem.Status.FAILED -> context.getString(R.string.status_failed)
         }
+
+        /** Statuses whose word is drawn in the failure colour. */
+        fun isFailureStatus(status: RecordingItem.Status): Boolean =
+            status == RecordingItem.Status.FAILED || status == RecordingItem.Status.UPLOAD_FAILED
 
         /**
          * What the server is doing right now, in user words: waiting in the queue, transcribing
@@ -63,6 +107,7 @@ class RecordingsAdapter(
             }
         }
 
+        /** The meta line as plain text (what tests compare against). */
         fun metaLine(context: Context, item: RecordingItem): String = buildString {
             append(DateGrouping.formatDateTime(item.recordedAt))
             append(DateGrouping.SEPARATOR)
@@ -76,5 +121,38 @@ class RecordingsAdapter(
                 append("★ ${item.marksCount}")
             }
         }
+
+        /** [metaLine] with the status word coloured when it is a failure. */
+        fun metaText(context: Context, item: RecordingItem): CharSequence {
+            val line = metaLine(context, item)
+            if (!isFailureStatus(item.status)) return line
+            val word = statusText(context, item) ?: return line
+            val start = line.indexOf(word)
+            if (start < 0) return line
+            return SpannableString(line).apply {
+                setSpan(
+                    ForegroundColorSpan(ContextCompat.getColor(context, R.color.red)),
+                    start, start + word.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            }
+        }
+
+        /**
+         * The search snippet for a row, or null when there is no search or the title the row
+         * SHOWS ([shownTitle], see [rowTitle]) already contains the match. A no-speech row shows
+         * "No speech detected" while search matched its hidden plain title or file name, so that
+         * hidden name is the first snippet source: the user sees why the row is in the results.
+         * The server's `match_snippet` (CONTRACTS §4) is not on the list model yet; once it is,
+         * pass it as [SearchSnippet.derive]'s serverSnippet here.
+         */
+        fun snippetFor(item: RecordingItem, query: String?, shownTitle: String = item.title): SearchSnippet.Snippet? =
+            SearchSnippet.derive(
+                query = query,
+                title = shownTitle,
+                bodies = listOf(
+                    item.title.takeIf { it != shownTitle },
+                    item.server?.textPreview, item.server?.summary, item.local?.summaryText
+                )
+            )
     }
 }

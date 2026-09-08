@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Recordings tab: title row with search icon, the recorder-to-phone sync banner, then the
-     date-grouped card list of every recording (phone, server, or both). -->
+<!-- Recordings tab: title row with search icon, the recorder-to-phone sync banner, the search
+     field (with its clear icon), then the date-grouped card list of every recording (phone,
+     server, or both). -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -12,8 +13,8 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingStart="24dp"
-        android:paddingEnd="24dp"
-        android:paddingTop="16dp">
+        android:paddingTop="16dp"
+        android:paddingEnd="24dp">
 
         <TextView
             android:layout_width="wrap_content"
@@ -29,9 +30,9 @@
             android:layout_height="48dp"
             android:layout_gravity="end|center_vertical"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Search"
+            android:contentDescription="@string/search"
             android:src="@drawable/ic_search"
-            android:tint="@color/text_primary" />
+            app:tint="@color/text_primary" />
     </FrameLayout>
 
     <!-- Sync Banner (recorder to phone transfer progress) -->
@@ -39,8 +40,8 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingStart="24dp"
-        android:paddingEnd="24dp"
-        android:paddingTop="12dp">
+        android:paddingTop="12dp"
+        android:paddingEnd="24dp">
 
         <include
             android:id="@+id/syncBanner"
@@ -50,33 +51,44 @@
             android:visibility="gone" />
     </FrameLayout>
 
-    <!-- Search field (revealed by the search icon): a card-styled single line -->
-    <FrameLayout
+    <!-- Search field (revealed by the search icon): card-styled, clear icon appears with text -->
+    <com.google.android.material.textfield.TextInputLayout
         android:id="@+id/searchContainer"
+        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox.Dense"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingStart="24dp"
-        android:paddingEnd="24dp"
-        android:paddingTop="12dp"
-        android:visibility="gone">
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="24dp"
+        android:visibility="gone"
+        app:boxBackgroundColor="@color/white"
+        app:boxCornerRadiusBottomEnd="12dp"
+        app:boxCornerRadiusBottomStart="12dp"
+        app:boxCornerRadiusTopEnd="12dp"
+        app:boxCornerRadiusTopStart="12dp"
+        app:boxStrokeColor="@color/light_gray"
+        app:boxStrokeWidth="0dp"
+        app:boxStrokeWidthFocused="1dp"
+        app:endIconMode="clear_text"
+        app:endIconTint="@color/text_secondary"
+        app:hintEnabled="false"
+        app:startIconDrawable="@drawable/ic_search"
+        app:startIconTint="@color/text_secondary">
 
-        <EditText
+        <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/searchField"
             android:layout_width="match_parent"
-            android:layout_height="44dp"
-            android:background="@drawable/bg_card"
+            android:layout_height="wrap_content"
             android:fontFamily="sans-serif"
             android:hint="@string/library_search_hint"
             android:imeOptions="actionSearch"
             android:importantForAutofill="no"
             android:inputType="text"
             android:maxLines="1"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp"
             android:textColor="@color/dark_gray"
             android:textColorHint="@color/text_secondary"
             android:textSize="14sp" />
-    </FrameLayout>
+    </com.google.android.material.textfield.TextInputLayout>
 
     <!-- Slim inline error: message + Retry, list content stays underneath -->
     <LinearLayout
@@ -86,8 +98,8 @@
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingStart="24dp"
-        android:paddingEnd="24dp"
         android:paddingTop="12dp"
+        android:paddingEnd="24dp"
         android:visibility="gone">
 
         <TextView
@@ -106,17 +118,17 @@
             android:layout_height="32dp"
             android:layout_marginStart="8dp"
             android:background="@drawable/bg_secondary_button"
+            android:fontFamily="sans-serif"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            app:backgroundTint="@null"
-            android:fontFamily="sans-serif"
             android:minWidth="0dp"
             android:paddingStart="16dp"
             android:paddingEnd="16dp"
             android:text="@string/retry"
             android:textAllCaps="false"
             android:textColor="@color/text_primary"
-            android:textSize="14sp" />
+            android:textSize="14sp"
+            app:backgroundTint="@null" />
     </LinearLayout>
 
     <!-- Recording list; the FrameLayout lets the empty label share the pull-to-refresh area -->
@@ -136,9 +148,9 @@
                 android:layout_height="match_parent"
                 android:clipToPadding="false"
                 android:paddingStart="24dp"
-                android:paddingEnd="24dp"
                 android:paddingTop="24dp"
-                android:paddingBottom="120dp"
+                android:paddingEnd="24dp"
+                android:paddingBottom="24dp"
                 android:scrollbars="none" />
 
             <!-- Empty state: 80dp below the title (mirrors iOS), not vertically centered -->
@@ -149,6 +161,8 @@
                 android:layout_marginTop="80dp"
                 android:fontFamily="sans-serif"
                 android:gravity="center"
+                android:paddingStart="24dp"
+                android:paddingEnd="24dp"
                 android:text="@string/no_recordings_yet"
                 android:textColor="@color/text_secondary"
                 android:textSize="14sp"

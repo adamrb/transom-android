@@ -5,7 +5,7 @@
     android:layout_height="match_parent"
     android:clipToPadding="false"
     android:fillViewport="true"
-    android:paddingBottom="120dp"
+    android:paddingBottom="24dp"
     android:scrollbars="none">
 
     <LinearLayout
@@ -37,6 +37,52 @@
             android:clipToPadding="true"
             android:orientation="vertical">
 
+            <!-- No recorder connected: the card is one call to action, nothing else -->
+            <LinearLayout
+                android:id="@+id/noRecorderContent"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="16dp"
+                android:visibility="gone">
+
+                <ImageView
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_device"
+                    app:tint="@color/gray_ad" />
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:layout_weight="1"
+                    android:fontFamily="sans-serif"
+                    android:text="@string/no_recorder_connected"
+                    android:textColor="@color/dark_gray"
+                    android:textSize="14sp" />
+
+                <Button
+                    android:id="@+id/connectRecorderButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:layout_marginStart="12dp"
+                    android:background="@drawable/bg_primary_button"
+                    android:fontFamily="sans-serif"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:text="@string/connect_recorder"
+                    android:textAllCaps="false"
+                    android:textColor="@color/white"
+                    android:textSize="14sp"
+                    app:backgroundTint="@null" />
+            </LinearLayout>
+
             <!-- Collapsed row: device icon + name + status + chevron -->
             <RelativeLayout
                 android:id="@+id/deviceCardHeader"
@@ -50,7 +96,7 @@
                     android:layout_width="32dp"
                     android:layout_height="32dp"
                     android:layout_centerVertical="true"
-                    android:contentDescription="Device"
+                    android:contentDescription="@null"
                     android:src="@drawable/ic_device" />
 
                 <TextView
@@ -98,9 +144,9 @@
                     android:layout_height="16dp"
                     android:layout_alignParentEnd="true"
                     android:layout_centerVertical="true"
-                    android:contentDescription="Expand"
+                    android:contentDescription="@null"
                     android:src="@drawable/ic_chevron_right"
-                    android:tint="@color/gray7" />
+                    app:tint="@color/gray7" />
             </RelativeLayout>
 
             <!-- Expanded content -->
@@ -239,9 +285,9 @@
                 android:layout_height="32dp"
                 android:layout_marginStart="16dp"
                 android:layout_marginTop="16dp"
-                android:contentDescription="Record"
+                android:contentDescription="@null"
                 android:src="@drawable/icon_record_mic"
-                android:tint="@color/white" />
+                app:tint="@color/white" />
 
             <ImageView
                 android:layout_width="16dp"
@@ -249,9 +295,9 @@
                 android:layout_gravity="end"
                 android:layout_marginTop="21dp"
                 android:layout_marginEnd="12dp"
-                android:contentDescription="Go"
+                android:contentDescription="@null"
                 android:src="@drawable/ic_chevron_right"
-                android:tint="@color/white" />
+                app:tint="@color/white" />
 
             <LinearLayout
                 android:layout_width="wrap_content"
@@ -336,9 +382,9 @@
             <ImageView
                 android:layout_width="16dp"
                 android:layout_height="16dp"
-                android:contentDescription="Go"
+                android:contentDescription="@null"
                 android:src="@drawable/ic_chevron_right"
-                android:tint="@color/text_secondary" />
+                app:tint="@color/text_secondary" />
         </LinearLayout>
 
         <!-- ===== Recent recordings Section ===== -->

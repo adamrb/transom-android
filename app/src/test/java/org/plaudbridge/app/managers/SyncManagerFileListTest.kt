@@ -55,6 +55,25 @@ class SyncManagerFileListTest {
     }
 
     @Test
+    fun syncNowWithoutARecorderFailsAtOnceInsteadOfWaitingForever() {
+        val previous = SyncManager.shared.recorderConnected
+        SyncManager.shared.recorderConnected = { false }
+        try {
+            SyncManager.shared.startSync()
+            shadowOf(Looper.getMainLooper()).idle()
+            val state = SyncManager.shared.state.value
+            assertTrue(state.toString(), state is SyncState.Failed)
+            assertEquals(SyncState.Reason.NOT_CONNECTED, (state as SyncState.Failed).reason)
+            // Nothing is active, so the banner has nothing to show and Sync now works again later.
+            assertTrue(!state.isActive)
+        } finally {
+            SyncManager.shared.recorderConnected = previous
+            SyncManager.shared.reset()
+            shadowOf(Looper.getMainLooper()).idle()
+        }
+    }
+
+    @Test
     fun deletedSessionListedByTheDeviceIsNotReAddedOrDownloaded() {
         val audio = File(context.filesDir, "1.mp3").apply { writeBytes(byteArrayOf(1)) }
         RecordingStore.addFiles(listOf(rec("SN-A", 1)))

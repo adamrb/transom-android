@@ -5,15 +5,19 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.view.View
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
+import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -21,20 +25,31 @@ import org.plaudbridge.app.BuildConfig
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.databinding.ActivityMainBinding
+import org.plaudbridge.app.managers.UploadManager
 import org.plaudbridge.app.models.DeviceConnectionState
+import org.plaudbridge.app.models.SyncState
 import org.plaudbridge.app.net.UpdateManager
 import org.plaudbridge.app.service.DeviceConnectionService
 import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.ui.common.AppManagers
+import org.plaudbridge.app.ui.common.SnackbarHost
+import org.plaudbridge.app.ui.common.SyncFeedback
 import org.plaudbridge.app.ui.home.HomeFragment
-import org.plaudbridge.app.ui.recordings.RecordingsFragment
+import org.plaudbridge.app.ui.onboarding.ScanningActivity
 import org.plaudbridge.app.ui.onboarding.WelcomeActivity
+import org.plaudbridge.app.ui.recordings.RecordingsFragment
 import org.plaudbridge.app.ui.settings.SettingsFragment
 import org.plaudbridge.app.ui.update.AppUpdateFlow
 
 /**
- * Main screen: bottom floating Tab Bar + 3 Fragments (Home, Recordings, Settings)
+ * Main screen: three tabs (Home, Recordings, Settings) over an opaque bottom tab bar.
+ *
+ * Back from Recordings or Settings returns to Home; back from Home leaves the app, the way
+ * every other tabbed Android app behaves. The activity is also the one place snackbars come
+ * from ([SnackbarHost]), anchored above the tab bar, and the one observer that turns a failed
+ * recorder sync into a message with Retry, whichever tab is showing.
  */
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), SnackbarHost {
 
     private lateinit var binding: ActivityMainBinding
 
@@ -46,9 +61,34 @@ class MainActivity : AppCompatActivity() {
     private lateinit var settingsFragment: Fragment
     private var activeFragment: Fragment? = null
 
-    private var selectedTab = 0
+    private var selectedTab = TAB_HOME
 
-    private val deviceManager get() = (application as PlaudBridgeApp).deviceManager
+    private val app get() = application as PlaudBridgeApp
+    private val deviceManager get() = AppManagers.device(app)
+    private val syncManager get() = AppManagers.sync(app)
+
+    /** Enabled only away from Home, so Home's back still leaves the app. */
+    private val backToHome = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() = selectTab(TAB_HOME)
+    }
+
+    /** The last failure a snackbar was shown for; a replayed StateFlow value must not repeat it. */
+    private var notifiedFailure: SyncState.Failed? = null
+
+    /** What the last snackbar said and offered (tests read these; production ignores them). */
+    @VisibleForTesting
+    var lastSnackbarMessage: String? = null
+        private set
+
+    @VisibleForTesting
+    var lastSnackbarAction: (() -> Unit)? = null
+        private set
+
+    @VisibleForTesting
+    fun clearLastSnackbarForTests() {
+        lastSnackbarMessage = null
+        lastSnackbarAction = null
+    }
 
     /**
      * API 33+ POST_NOTIFICATIONS. Granted or denied, the connection service starts either way: a
@@ -75,17 +115,26 @@ class MainActivity : AppCompatActivity() {
 
         setupFragments(savedInstanceState)
         setupTabBar()
-        selectTab((savedInstanceState?.getInt(KEY_SELECTED_TAB, 0) ?: 0).coerceIn(0, 2), force = true)
+        onBackPressedDispatcher.addCallback(this, backToHome)
+        selectTab((savedInstanceState?.getInt(KEY_SELECTED_TAB, TAB_HOME) ?: TAB_HOME).coerceIn(TAB_HOME, TAB_SETTINGS), force = true)
 
-        // Cloud binding alerts (e.g. device bound to another account)
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                deviceManager.cloudAlerts.collect { message ->
-                    AlertDialog.Builder(this@MainActivity)
-                        .setTitle("Device Binding")
-                        .setMessage(message)
-                        .setPositiveButton(android.R.string.ok, null)
-                        .show()
+                // Cloud binding alerts (e.g. device bound to another account)
+                launch {
+                    deviceManager.cloudAlerts.collect { message ->
+                        MaterialAlertDialogBuilder(this@MainActivity)
+                            .setTitle(R.string.recorder_notice_title)
+                            .setMessage(message)
+                            .setPositiveButton(android.R.string.ok, null)
+                            .show()
+                    }
+                }
+                // A recorder sync that did not finish: say so once, with a way forward.
+                launch {
+                    syncManager.state.collect { state ->
+                        if (state is SyncState.Failed) onSyncFailed(state)
+                    }
                 }
             }
         }
@@ -197,28 +246,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupTabBar() {
-        // Pin the floating bar to safe-area bottom + 8dp (mirrors iOS)
-        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(binding.tabBar) { v, insets ->
-            val bottom = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars()).bottom
-            (v.layoutParams as android.widget.FrameLayout.LayoutParams).bottomMargin =
-                bottom + (8 * v.resources.displayMetrics.density).toInt()
-            v.requestLayout()
+        // The bar sits flush with the bottom edge; the system bar inset becomes bottom padding so
+        // the labels stay above the gesture area.
+        val basePadding = binding.tabBar.paddingBottom
+        ViewCompat.setOnApplyWindowInsetsListener(binding.tabBar) { v, insets ->
+            val bottom = insets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom
+            v.setPadding(v.paddingLeft, v.paddingTop, v.paddingRight, basePadding + bottom)
             insets
         }
 
-        binding.tabHome.setOnClickListener { selectTab(0) }
-        binding.tabRecordings.setOnClickListener { selectTab(1) }
-        binding.tabSettings.setOnClickListener { selectTab(2) }
+        binding.tabHome.setOnClickListener { selectTab(TAB_HOME) }
+        binding.tabRecordings.setOnClickListener { selectTab(TAB_RECORDINGS) }
+        binding.tabSettings.setOnClickListener { selectTab(TAB_SETTINGS) }
     }
 
-    private fun selectTab(index: Int, force: Boolean = false) {
+    /** The tab showing right now: [TAB_HOME], [TAB_RECORDINGS] or [TAB_SETTINGS]. */
+    val currentTab: Int get() = selectedTab
+
+    fun selectTab(index: Int, force: Boolean = false) {
         if (!force && selectedTab == index && activeFragment != null) return
         selectedTab = index
 
         val target = when (index) {
-            0 -> homeFragment
-            1 -> recordingsFragment
-            2 -> settingsFragment
+            TAB_HOME -> homeFragment
+            TAB_RECORDINGS -> recordingsFragment
+            TAB_SETTINGS -> settingsFragment
             else -> homeFragment
         }
 
@@ -230,6 +282,7 @@ class MainActivity : AppCompatActivity() {
         tx.commit()
         activeFragment = target
 
+        backToHome.isEnabled = index != TAB_HOME
         updateTabAppearance()
     }
 
@@ -245,6 +298,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 null
             }
+            tabs[i].isSelected = isSelected
             // Selected = black icon+label, unselected = #7A7A7A (mirrors iOS)
             val tint = ContextCompat.getColor(this, if (isSelected) R.color.black else R.color.tab_unselected)
             icons[i].setColorFilter(tint)
@@ -252,7 +306,49 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // MARK: - Feedback
+
+    override fun showSnackbar(message: String, actionLabel: String?, action: (() -> Unit)?) {
+        lastSnackbarMessage = message
+        lastSnackbarAction = action
+        val duration = if (action != null) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT
+        Snackbar.make(binding.root, message, duration).apply {
+            anchorView = binding.tabBar
+            if (actionLabel != null && action != null) setAction(actionLabel) { action() }
+        }.show()
+    }
+
+    /**
+     * A sync that did not finish: one snackbar per failure. Stale failures (replayed by the
+     * StateFlow when this screen subscribes again after a recreation) are skipped; a fresh one
+     * gets Retry (of the same kind of transfer that failed: Fast Transfer again for a WiFi
+     * failure, an ordinary sync otherwise), or Connect when no recorder was connected.
+     */
+    private fun onSyncFailed(failed: SyncState.Failed) {
+        if (failed === notifiedFailure || !SyncFeedback.isFresh(failed)) return
+        notifiedFailure = failed
+        val message = getString(SyncFeedback.messageRes(failed))
+        if (SyncFeedback.offersRetry(failed)) {
+            showSnackbar(message, getString(R.string.retry)) {
+                if (failed.reason == SyncState.Reason.WIFI) {
+                    syncManager.startWiFiTransfer()
+                } else {
+                    syncManager.startSync()
+                    UploadManager.kick()
+                }
+            }
+        } else {
+            showSnackbar(message, getString(R.string.connect)) {
+                startActivity(Intent(this, ScanningActivity::class.java).putExtra(ScanningActivity.EXTRA_ADDING_DEVICE, true))
+            }
+        }
+    }
+
     companion object {
         private const val KEY_SELECTED_TAB = "selected_tab"
+
+        const val TAB_HOME = 0
+        const val TAB_RECORDINGS = 1
+        const val TAB_SETTINGS = 2
     }
 }

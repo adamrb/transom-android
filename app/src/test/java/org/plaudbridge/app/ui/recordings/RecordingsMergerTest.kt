@@ -191,6 +191,20 @@ class RecordingsMergerTest {
     }
 
     @Test
+    fun failedUploadsMarkTheirPhoneOnlyRows() {
+        val failing = local(1)
+        val fine = local(2)
+        val onServer = local(3, serverId = "srv-3")
+        val items = RecordingsMerger.merge(listOf(failing, fine, onServer), listOf(server("srv-3")), failedUploads = setOf(failing.id, onServer.id))
+        assertEquals(RecordingItem.Status.UPLOAD_FAILED, items.single { it.local === failing }.status)
+        assertEquals(RecordingItem.Status.UPLOADING, items.single { it.local === fine }.status)
+        // A row the server already has is not "upload failed", whatever the phone remembers.
+        assertEquals(RecordingItem.Status.NONE, items.single { it.local === onServer }.status)
+        // Same rows, nothing failed: no flag anywhere.
+        assertEquals(true, RecordingsMerger.merge(listOf(failing), emptyList()).none { it.uploadFailed })
+    }
+
+    @Test
     fun serverStatusMapsToTranscribingFailedOrNothing() {
         assertEquals(RecordingItem.Status.TRANSCRIBING, RecordingItem(null, server("a", status = "pending")).status)
         assertEquals(RecordingItem.Status.TRANSCRIBING, RecordingItem(null, server("a", status = "transcribing")).status)

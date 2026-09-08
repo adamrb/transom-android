@@ -1,109 +1,127 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- Main screen: the tab content above an opaque bottom tab bar. The two are stacked, not
+     overlaid, so no row ever scrolls under the bar. The CoordinatorLayout root is what
+     snackbars attach to (anchored above the bar, see MainActivity.showSnackbar). -->
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/mainRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg_primary">
 
-    <!-- Fragment container -->
-    <FrameLayout
-        android:id="@+id/fragmentContainer"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
-    <!-- Floating Tab Bar -->
     <LinearLayout
-        android:id="@+id/tabBar"
-        android:layout_width="336dp"
-        android:layout_height="62dp"
-        android:layout_gravity="bottom|center_horizontal"
-        android:layout_marginBottom="24dp"
-        android:background="@drawable/bg_floating_tab"
-        android:elevation="8dp"
-        android:gravity="center"
-        android:orientation="horizontal"
-        android:paddingStart="8dp"
-        android:paddingEnd="8dp">
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
 
-        <!-- Home Tab -->
+        <!-- Fragment container -->
+        <FrameLayout
+            android:id="@+id/fragmentContainer"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/separator" />
+
+        <!-- Tab bar: opaque, full width; MainActivity adds the system bar inset as bottom padding -->
         <LinearLayout
-            android:id="@+id/tabHome"
-            android:layout_width="0dp"
-            android:layout_height="54dp"
-            android:layout_weight="1"
-            android:layout_margin="2dp"
+            android:id="@+id/tabBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@color/white"
+            android:baselineAligned="false"
+            android:elevation="8dp"
             android:gravity="center"
-            android:orientation="vertical">
+            android:orientation="horizontal"
+            android:paddingStart="16dp"
+            android:paddingTop="6dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="6dp">
 
-            <ImageView
-                android:id="@+id/tabHomeIcon"
-                android:layout_width="24dp"
-                android:layout_height="24dp"
-                android:contentDescription="Home"
-                android:src="@drawable/ic_home" />
+            <!-- Home Tab -->
+            <LinearLayout
+                android:id="@+id/tabHome"
+                android:layout_width="0dp"
+                android:layout_height="54dp"
+                android:layout_margin="2dp"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:orientation="vertical">
 
-            <TextView
-                android:id="@+id/tabHomeLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:fontFamily="sans-serif"
-                android:text="Home"
-                android:textSize="11sp" />
-        </LinearLayout>
+                <ImageView
+                    android:id="@+id/tabHomeIcon"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_home" />
 
-        <!-- Recordings Tab (phone + server, merged) -->
-        <LinearLayout
-            android:id="@+id/tabRecordings"
-            android:layout_width="0dp"
-            android:layout_height="54dp"
-            android:layout_weight="1"
-            android:layout_margin="2dp"
-            android:gravity="center"
-            android:orientation="vertical">
+                <TextView
+                    android:id="@+id/tabHomeLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:fontFamily="sans-serif"
+                    android:text="@string/home"
+                    android:textSize="11sp" />
+            </LinearLayout>
 
-            <ImageView
-                android:id="@+id/tabRecordingsIcon"
-                android:layout_width="24dp"
-                android:layout_height="24dp"
-                android:contentDescription="Recordings"
-                android:src="@drawable/ic_files" />
+            <!-- Recordings Tab (phone + server, merged) -->
+            <LinearLayout
+                android:id="@+id/tabRecordings"
+                android:layout_width="0dp"
+                android:layout_height="54dp"
+                android:layout_margin="2dp"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:orientation="vertical">
 
-            <TextView
-                android:id="@+id/tabRecordingsLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:fontFamily="sans-serif"
-                android:text="Recordings"
-                android:textSize="11sp" />
-        </LinearLayout>
+                <ImageView
+                    android:id="@+id/tabRecordingsIcon"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_files" />
 
-        <!-- Settings Tab -->
-        <LinearLayout
-            android:id="@+id/tabSettings"
-            android:layout_width="0dp"
-            android:layout_height="54dp"
-            android:layout_weight="1"
-            android:layout_margin="2dp"
-            android:gravity="center"
-            android:orientation="vertical">
+                <TextView
+                    android:id="@+id/tabRecordingsLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:fontFamily="sans-serif"
+                    android:text="@string/recordings"
+                    android:textSize="11sp" />
+            </LinearLayout>
 
-            <ImageView
-                android:id="@+id/tabSettingsIcon"
-                android:layout_width="24dp"
-                android:layout_height="24dp"
-                android:contentDescription="Settings"
-                android:src="@drawable/ic_settings" />
+            <!-- Settings Tab -->
+            <LinearLayout
+                android:id="@+id/tabSettings"
+                android:layout_width="0dp"
+                android:layout_height="54dp"
+                android:layout_margin="2dp"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:orientation="vertical">
 
-            <TextView
-                android:id="@+id/tabSettingsLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:fontFamily="sans-serif"
-                android:text="Settings"
-                android:textSize="11sp" />
+                <ImageView
+                    android:id="@+id/tabSettingsIcon"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_settings" />
+
+                <TextView
+                    android:id="@+id/tabSettingsLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:fontFamily="sans-serif"
+                    android:text="@string/settings"
+                    android:textSize="11sp" />
+            </LinearLayout>
         </LinearLayout>
     </LinearLayout>
 
-</FrameLayout>
+</androidx.coordinatorlayout.widget.CoordinatorLayout>
