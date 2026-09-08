@@ -1,74 +1,102 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vocabulary (shared with the web dashboard): the Plaud is "your recorder", the phone is
+  "this phone", the self-hosted server is "your server", the API token is the "access token".
+  Never surface HTTP codes, exception text, SDK terms or device model names to the user.
+-->
 <resources>
     <string name="app_name">Plaud Bridge</string>
 
+    <!-- Accessibility labels for icon-only controls -->
+    <string name="cd_back">Back</string>
+    <string name="cd_close">Close</string>
+    <string name="cd_open">Open</string>
+    <string name="cd_expand">Expand</string>
+    <string name="cd_more">More options</string>
+    <string name="cd_remove">Remove</string>
+
     <!-- Onboarding -->
     <string name="welcome_app_name">Plaud Bridge</string>
-    <string name="get_started">Get Started</string>
-    <string name="connect_later">Connect device later</string>
-    <string name="scanning_subtitle">Press record button to\nturn on Plaud device</string>
-    <string name="searching">Searching...</string>
-    <string name="device_found">Device found!</string>
-    <string name="bluetooth_permission_denied">Bluetooth permission is required to scan for devices</string>
-    <string name="warning_unbound">Device must be unbound from the Plaud App first. Plaud App → Device → Unbind.</string>
-    <string name="connect_device">Connect Device</string>
-    <string name="connecting">Connecting...</string>
+    <string name="get_started">Get started</string>
+    <string name="connect_later">Connect a recorder later</string>
+    <string name="scanning_subtitle">Press the record button on\nyour recorder to turn it on</string>
+    <string name="searching">Searching…</string>
+    <string name="device_found">Recorder found</string>
+    <string name="bluetooth_permission_denied">Bluetooth permission is needed to find your recorder</string>
+    <string name="warning_unbound">Still linked to the Plaud app? Unlink it there first (Plaud app › Device › Unbind).</string>
+    <string name="connect_device">Connect your recorder</string>
+    <string name="connecting">Connecting…</string>
     <string name="connect">Connect</string>
     <string name="youre_all_set">You\'re all set!</string>
-    <string name="success_subtitle">Your device is connected and ready to use.</string>
-    <string name="explore_intelligence">Explore Intelligence</string>
+    <string name="success_subtitle">Your recorder is connected and ready to use.</string>
+    <string name="explore_intelligence">Open Plaud Bridge</string>
+    <!-- Fallback name for a recorder whose name is unknown -->
+    <string name="default_recorder_name">Your recorder</string>
+    <!-- Shown under the recorder name in the connect sheet -->
+    <string name="serial_fmt">Serial %1$s</string>
+    <!-- A connect attempt was refused, probably because the recorder is still locked by an earlier account -->
+    <string name="recorder_locked_title">Recorder locked</string>
+    <string name="recorder_locked_message_fmt">%1$s may still be locked by a previous account. Try to recover it?</string>
+    <string name="recover">Recover</string>
+    <string name="recorder_recovery_title">Recorder recovery</string>
+    <!-- Title for the recorder account alerts MainActivity shows (token fetch, linked to another account) -->
+    <string name="recorder_link_failed_title">Couldn\'t link your recorder</string>
 
     <!-- Home -->
     <string name="home">Home</string>
     <string name="connected">Connected</string>
     <string name="disconnected">Disconnected</string>
-    <string name="no_device">No Device</string>
+    <string name="no_device">No recorder</string>
     <string name="battery">Battery</string>
     <string name="storage">Storage</string>
-    <string name="manage_device">Manage device</string>
-    <string name="add_device">+ Add device</string>
-    <string name="firmware_update">Firmware Update</string>
-    <string name="preparing">Preparing...</string>
-    <string name="firmware_update_notes">Note:\n•  Keep device charging.\n•  Keep the app open.\n•  Keep device close to your phone.</string>
-    <string name="firmware_updating_desc">%1$s is updating. This may take a few minutes. The device will restart automatically when the update is complete.</string>
-    <string name="firmware_restarting_desc">Device is restarting with the new firmware. Please wait...</string>
-    <string name="firmware_success_desc">Firmware updated successfully.</string>
-    <string name="firmware_failed_desc">Update failed. Please try again.</string>
-    <string name="firmware_no_update_desc">Your firmware is already up to date.</string>
+    <string name="manage_device">Manage recorder</string>
+    <string name="add_device">+ Add a recorder</string>
+    <string name="firmware_update">Firmware update</string>
+    <string name="preparing">Preparing…</string>
+    <string name="firmware_update_notes">While it updates:\n•  Keep the recorder charging.\n•  Keep the app open.\n•  Keep the recorder near this phone.</string>
+    <string name="firmware_updating_desc">%1$s is updating. This can take a few minutes. The recorder restarts on its own when the update finishes.</string>
+    <string name="firmware_restarting_desc">Your recorder is restarting with the new firmware…</string>
+    <string name="firmware_success_desc">Firmware updated.</string>
+    <string name="firmware_failed_desc">The update didn\'t finish. Try again.</string>
+    <string name="firmware_no_update_desc">Your recorder\'s firmware is already up to date.</string>
+    <string name="firmware_restarting_status">Restarting your recorder…</string>
+    <string name="firmware_complete_status">Update complete</string>
+    <string name="firmware_still_restarting_status">Your recorder is still restarting…</string>
+    <string name="firmware_failed_title">Update didn\'t finish</string>
     <string name="capture_moments">Start a recording</string>
-    <string name="record_via_device">Record on your Plaud from here</string>
-    <string name="syncing_recordings">Syncing recordings from device</string>
-    <string name="fast_transfer">Fast Transfer</string>
-    <string name="retrieving_file_list">Retrieving file list...</string>
-    <string name="recording_ellipsis">Recording...</string>
+    <string name="record_via_device">Record on your recorder from here</string>
+    <string name="syncing_recordings">Syncing recordings from your recorder</string>
+    <string name="fast_transfer">Fast transfer</string>
+    <string name="retrieving_file_list">Checking for new recordings…</string>
+    <string name="recording_ellipsis">Recording…</string>
     <string name="recent_recordings">Recent recordings</string>
     <string name="sync_now">Sync now</string>
     <string name="no_recordings_yet">No recordings yet</string>
 
     <!-- Device Panel -->
-    <string name="device">Device</string>
-    <string name="device_name">Device Name</string>
-    <string name="serial_number">Serial Number</string>
+    <string name="device">Recorder</string>
+    <string name="device_name">Name</string>
+    <string name="serial_number">Serial number</string>
     <string name="firmware">Firmware</string>
     <string name="update">Update</string>
-    <string name="disconnect_device">Disconnect device</string>
+    <string name="disconnect_device">Disconnect recorder</string>
     <string name="disconnect">Disconnect</string>
     <string name="unpair">Unpair</string>
-    <string name="disconnect_subtitle">Temporarily disconnect from this device</string>
-    <string name="unpair_device">Unpair device</string>
-    <string name="unpair_subtitle">Remove this device from your account</string>
-    <string name="confirm_disconnect">The device will stay paired.</string>
-    <string name="confirm_unpair">You\'ll need to pair again to use it.</string>
-    <string name="bluetooth_off_title">Bluetooth Is Off</string>
-    <string name="bluetooth_open_settings">Open Settings</string>
-    <string name="device_recording_title">Device Is Recording</string>
-    <string name="device_recording_blocks_unpair">Stop the recording first — unpairing now would lose the recording in progress.</string>
+    <string name="disconnect_subtitle">Temporarily disconnect from this recorder</string>
+    <string name="unpair_device">Unpair recorder</string>
+    <string name="unpair_subtitle">Forget this recorder on this phone</string>
+    <string name="confirm_disconnect">The recorder stays paired.</string>
+    <string name="confirm_unpair">You\'ll need to pair it again to use it.</string>
+    <string name="bluetooth_off_title">Bluetooth is off</string>
+    <string name="bluetooth_open_settings">Open settings</string>
+    <string name="device_recording_title">Recording in progress</string>
+    <string name="device_recording_blocks_unpair">Stop the recording first. Unpairing now would lose the recording in progress.</string>
     <string name="cancel">Cancel</string>
     <string name="confirm">Confirm</string>
 
     <!-- Recording -->
-    <string name="start_recording">Start Recording</string>
-    <string name="starting_recording">Starting...</string>
+    <string name="start_recording">Start recording</string>
+    <string name="starting_recording">Starting…</string>
     <string name="recording">Recording</string>
     <string name="paused">Paused</string>
     <string name="pause">Pause</string>
@@ -99,8 +127,8 @@
     <string name="transcription_pending">Your server is still transcribing this. The transcript will appear here when it is ready.</string>
     <string name="no_speech_detected">No speech was detected in this recording.</string>
     <string name="transcript_not_on_server">Your server has no record of this recording yet. It may still be uploading.</string>
-    <string name="transcript_auth_error">The server rejected the access token. Check it in Settings.</string>
-    <string name="transcript_server_error">Could not reach your server. It may be down or unreachable.</string>
+    <string name="transcript_auth_error">Your server didn\'t accept the access token. Check it in Settings.</string>
+    <string name="transcript_server_error">Couldn\'t reach your server. It may be off or unreachable.</string>
     <string name="checking_transcript">Checking for a transcript…</string>
     <string name="check_transcript">Check for transcript</string>
     <string name="no_transcript">No transcript available</string>
@@ -110,15 +138,16 @@
     <string name="transcript">Transcript</string>
     <string name="highlights">Highlights</string>
     <string name="highlight_no_speech">(no speech near this mark)</string>
-    <string name="export_audio">Export Audio</string>
+    <string name="export_audio">Export audio</string>
     <string name="rename">Rename</string>
-    <string name="copy_summary">Copy Summary</string>
-    <string name="copy_transcript">Copy Transcript</string>
-    <string name="export_markdown">Export Markdown</string>
+    <string name="copy_summary">Copy summary</string>
+    <string name="copy_transcript">Copy transcript</string>
+    <string name="export_markdown">Export markdown</string>
     <string name="action_copy_transcript">Copy transcript</string>
     <string name="action_export_markdown">Export markdown</string>
     <string name="transcript_copied">Transcript copied</string>
     <string name="delete">Delete</string>
+    <string name="export_failed_title">Couldn\'t export</string>
 
     <!-- Automations: what the server's AI router did with the recording (routes matched, deliveries) -->
     <string name="automations">Automations</string>
@@ -135,7 +164,7 @@
     <string name="automations_queued">Automations queued</string>
     <!-- A tap while an earlier Run automations request is still unresolved: that one is re-sent, not the new one -->
     <string name="automations_retrying_earlier">Retrying the earlier run first. Run again once it has finished.</string>
-    <string name="automations_need_transcript">The recording has no transcript to route yet.</string>
+    <string name="automations_need_transcript">The recording has no transcript yet, so there is nothing for automations to read.</string>
     <string name="automation_retry_queued">Retry queued</string>
     <string name="automation_state_working">Working</string>
     <string name="automation_state_done">Done</string>
@@ -153,18 +182,23 @@
     <string name="settings">Settings</string>
     <string name="automatic_sync">Sync new recordings automatically</string>
     <string name="auto_sync_subtitle">When the recorder connects, download new recordings and send them to your server</string>
-    <string name="device_firmware">Device Firmware</string>
-    <string name="sdk_logs">SDK Logs</string>
+    <string name="device_firmware">Recorder firmware</string>
+    <string name="not_connected">Not connected</string>
+    <string name="sdk_logs">Diagnostic logs</string>
     <string name="app_version">Version</string>
+    <string name="build_number">Build number</string>
     <string name="switch_env">Switch</string>
     <string name="bridge_server">Your server</string>
     <string name="edit">Edit</string>
     <string name="copy">Copy</string>
     <string name="not_configured">Not configured</string>
-    <string name="server_saved">Server settings verified and saved.</string>
-    <string name="plaud_region">Plaud Cloud Region</string>
+    <string name="access_token_set">Access token set</string>
+    <string name="access_token_missing">No access token</string>
+    <string name="server_saved">Your server and access token were verified and saved.</string>
+    <string name="server_changed_note">Server changed: upload state and transcripts were reset. Synced recordings will re-upload to the new server.</string>
+    <string name="plaud_region">Plaud cloud region</string>
     <string name="plaud_region_restart_fmt">Plaud region switched to %1$s. Restart the app to apply.</string>
-    <string name="exit_now">Exit Now</string>
+    <string name="exit_now">Exit now</string>
     <string name="later">Later</string>
     <string name="user_id">User ID</string>
     <string name="background_sync">Keep syncing in the background</string>
@@ -172,63 +206,70 @@
     <string name="battery_optimization">Battery optimization</string>
     <string name="battery_optimization_exempt">Unrestricted. Background sync can run reliably</string>
     <string name="battery_optimization_restricted">Optimized. Tap to allow background activity so sync keeps running</string>
-    <string name="battery_optimization_unavailable">Could not open battery settings on this device</string>
+    <string name="battery_optimization_unavailable">Couldn\'t open battery settings on this phone</string>
     <string name="delete_after_upload">Delete after upload</string>
-    <string name="delete_after_upload_subtitle">Remove recordings from the device once your server confirms the upload</string>
-    <string name="sdk_logs_desc">Export SDK log files for debugging</string>
+    <string name="delete_after_upload_subtitle">Remove recordings from your recorder once your server confirms the upload</string>
+    <string name="sdk_logs_desc">Share a log file when something isn\'t working</string>
     <string name="export_logs">Export</string>
-    <string name="export_failed">No logs to export</string>
+    <string name="export_failed">No logs to share yet</string>
     <string name="advanced">Advanced</string>
 
     <!-- Fast Transfer -->
-    <string name="fast_transfer_title">Fast Transfer via WiFi</string>
-    <string name="fast_transfer_message">Your phone will temporarily connect to the device\'s hotspot to transfer files faster. Your original WiFi connection will be restored after transfer completes.</string>
-    <string name="turn_on">Turn On</string>
-    <string name="fast_transfer_body">Increase transfer speed by up to <b>10x</b>.\n\nYour phone will temporarily connect to the Plaud NotePin hotspot during transfer and reconnect to Wi-Fi afterward.</string>
-    <string name="never_show_again">Never show again</string>
-    <string name="wifi_opening_hotspot">Opening device hotspot...</string>
-    <string name="wifi_connecting">Connecting to device WiFi...\nPlease tap \"Join\" when prompted</string>
-    <string name="wifi_starting_transfer">Starting transfer...</string>
-    <string name="connection_failed_fmt">Connection failed:\n%1$s</string>
+    <string name="fast_transfer_title">Fast transfer over Wi-Fi</string>
+    <string name="fast_transfer_message">This phone connects briefly to your recorder\'s own Wi-Fi to copy files faster, then returns to your usual network.</string>
+    <string name="turn_on">Turn on</string>
+    <string name="fast_transfer_body">Copy recordings up to <b>10x</b> faster.\n\nThis phone connects briefly to your recorder\'s own Wi-Fi during the transfer and returns to your usual network afterward.</string>
+    <string name="never_show_again">Don\'t show this again</string>
+    <string name="wifi_opening_hotspot">Turning on the recorder\'s Wi-Fi…</string>
+    <string name="wifi_connecting">Connecting to the recorder\'s Wi-Fi…\nTap Join if Android asks</string>
+    <string name="wifi_starting_transfer">Starting transfer…</string>
+    <string name="connection_failed_fmt">Couldn\'t connect to the recorder.\n%1$s</string>
 
     <!-- Server setup (onboarding + settings) -->
     <string name="server_setup_title">Connect your server</string>
     <string name="server_setup_subtitle">Enter the address of your Plaud Bridge server and its access token. Audio goes only to your server, never to Plaud\'s cloud.</string>
-    <string name="server_url">Server URL</string>
+    <string name="server_url">Server address</string>
     <string name="server_url_hint">https://bridge.example.com</string>
     <string name="server_auth_token">Access token</string>
-    <string name="server_auth_token_hint">Paste your server API token</string>
+    <string name="server_auth_token_hint">Paste your server\'s access token</string>
     <string name="test_connection">Test connection</string>
     <string name="continue_label">Continue</string>
-    <string name="server_setup_missing_fields">Enter both the server URL and the auth token first.</string>
-    <string name="server_setup_https_required">The server URL must use https:// — Android blocks plain-HTTP (cleartext) traffic.</string>
+    <string name="server_setup_missing_fields">Enter the server address and the access token first.</string>
+    <string name="server_setup_https_required">Use an https:// address.</string>
     <string name="server_setup_testing">Testing connection…</string>
-    <string name="server_setup_health_failed">Server unreachable — the health check failed. Check the URL.</string>
-    <string name="server_setup_auth_failed">The server rejected the access token. Check it in Settings.</string>
-    <string name="server_setup_error_fmt">Connection failed: %1$s</string>
-    <string name="server_setup_success">Connected! Server and token verified.</string>
+    <string name="server_setup_health_failed">Couldn\'t reach that address. Check the URL and that your server is on.</string>
+    <string name="server_setup_auth_failed">That access token was not accepted.</string>
+    <!-- %1$s is a sentence, never a status code: the server's own explanation when it gave one -->
+    <string name="server_setup_error_fmt">Couldn\'t connect to your server. %1$s</string>
+    <string name="server_setup_success">Connected. Your server and access token work.</string>
     <string name="scan_qr">Scan QR code</string>
-    <string name="qr_scan_prompt">Scan the setup QR from your server\'s dashboard</string>
-    <string name="qr_invalid_fmt">QR code not recognized: %1$s</string>
+    <string name="qr_scan_prompt">Scan the setup code from your server\'s dashboard</string>
+    <string name="qr_invalid_fmt">That code can\'t be used (%1$s).</string>
+
+    <!-- Server errors as sentences (clients never show status codes or exception text) -->
+    <string name="error_server_unexpected">Your server answered in an unexpected way. Try again.</string>
+    <string name="error_server_rejected">Your server rejected that.</string>
 
     <!-- Server list and server actions (Recordings tab, detail screen, web dashboard) -->
     <string name="library_not_configured">Set up your server in Settings to see the recordings it holds.</string>
     <string name="library_load_failed">Couldn\'t reach your server. Check that it\'s running and that you\'re online.</string>
-    <string name="library_auth_failed">The server rejected the access token. Check it in Settings.</string>
+    <string name="library_auth_failed">Your server didn\'t accept the access token. Check it in Settings.</string>
     <string name="library_search_hint">Search titles and transcripts</string>
     <string name="retry">Retry</string>
     <string name="retranscribe">Re-transcribe</string>
     <string name="retranscribe_queued">Transcription queued</string>
     <string name="recording_deleted">Recording deleted</string>
-    <string name="server_request_failed_fmt">Server request failed: %1$s</string>
+    <!-- %1$s should be the server's own explanation (its "detail"), never a status code -->
+    <string name="server_request_failed_fmt">Your server couldn\'t do that right now. %1$s</string>
     <string name="recording_not_on_server">This recording is no longer on the server.</string>
     <string name="transcription_failed">Transcription failed on your server.</string>
     <string name="transcript_not_started">This recording has not been transcribed.</string>
     <string name="title_required">Enter a title first.</string>
 
-    <!-- Web dashboard (the server\'s own UI, for automations and everything else the app does not do) -->
+    <!-- Web dashboard (the server's own UI). Settings opens its Automations tab directly; the full view lives under Advanced -->
     <string name="web_dashboard">Web dashboard</string>
-    <string name="web_dashboard_subtitle">Automations and the full server view</string>
+    <string name="web_dashboard_subtitle">Everything your server offers, in its browser view</string>
+    <string name="automations_subtitle">Rules for what happens to each new recording</string>
     <string name="download_use_export">Use the app\'s Export instead</string>
 
     <!-- Sign in on a computer: approve the web dashboard's login QR with the phone -->
@@ -239,7 +280,7 @@
     <string name="qr_login_scan">Scan sign-in code</string>
     <string name="qr_login_scan_prompt">Scan the sign-in code from the dashboard</string>
     <string name="qr_login_not_configured">Set up your server first. Sign-in codes can only be approved for the server this app is connected to.</string>
-    <string name="qr_login_invalid_fmt">Code not recognized: %1$s</string>
+    <string name="qr_login_invalid_fmt">That code can\'t be used (%1$s).</string>
     <string name="qr_login_got_setup_code">This is a server setup code, not a sign-in code. To change servers, use Your server above.</string>
     <string name="qr_login_wrong_server_fmt">This code is for a different server (%1$s). Only codes from your server (%2$s) can be approved.</string>
     <string name="qr_login_confirm_title">Sign in on this computer?</string>
@@ -254,44 +295,74 @@
     <!-- Custom vocabulary (names and terms the server's transcriber should get right) -->
     <string name="custom_vocabulary">Custom vocabulary</string>
     <string name="custom_vocabulary_subtitle">Names and terms the transcriber should get right</string>
-    <string name="vocabulary_help">One term per line. Add the mis-hearings after an equals sign to have them corrected: Plaud Bridge = Plogged Bridge</string>
+    <string name="vocabulary_help">Names, places and products the transcriber keeps getting wrong. Add what it usually hears instead and those get corrected automatically.</string>
     <string name="vocabulary_hint">Plaud Bridge = Plogged Bridge, Plod Bridge</string>
+    <string name="vocabulary_search_hint">Search terms</string>
     <string name="save">Save</string>
     <string name="vocabulary_loading">Loading…</string>
     <string name="vocabulary_saving">Saving…</string>
-    <string name="vocabulary_empty">No custom vocabulary yet.</string>
+    <string name="vocabulary_empty">No custom vocabulary yet. Add a term to get started.</string>
     <plurals name="vocabulary_terms">
         <item quantity="one">%d term</item>
         <item quantity="other">%d terms</item>
     </plurals>
     <string name="vocabulary_status_fmt">%1$s · %2$d with corrections</string>
-    <string name="vocabulary_saved">Vocabulary saved. Applies to new transcriptions.</string>
-    <string name="vocabulary_unsupported">This server does not support vocabulary yet. Update the server.</string>
-    <string name="vocabulary_load_failed_fmt">Could not load vocabulary: %1$s</string>
-    <string name="vocabulary_save_failed_fmt">Could not save vocabulary: %1$s</string>
+    <string name="vocabulary_unsaved">Unsaved changes</string>
+    <string name="vocabulary_filter_status_fmt">%1$d of %2$d terms match</string>
+    <string name="vocabulary_no_match">No terms match your search.</string>
+    <string name="vocabulary_saved">Saved. Applies to new transcriptions.</string>
+    <string name="vocabulary_unsupported">Your server doesn\'t support custom vocabulary yet. Update the server.</string>
+    <string name="vocabulary_load_failed_fmt">Couldn\'t load the vocabulary. %1$s</string>
+    <string name="vocabulary_save_failed_fmt">Couldn\'t save. %1$s</string>
+    <string name="vocabulary_add_term">Add term</string>
+    <string name="vocabulary_edit_term">Edit term</string>
+    <string name="vocabulary_term_hint">Term, spelled the way you want it</string>
+    <string name="vocabulary_aliases_hint">Usually heard as (comma separated)</string>
+    <string name="vocabulary_aliases_fmt">Usually heard as %1$s</string>
+    <string name="vocabulary_term_required">Enter the term first.</string>
+    <string name="vocabulary_term_exists">That term is already in the list.</string>
+    <string name="vocabulary_removed_fmt">Removed %1$s</string>
+    <string name="undo">Undo</string>
+    <string name="vocabulary_unsaved_title">Discard changes?</string>
+    <string name="vocabulary_unsaved_message">Your edits to the vocabulary haven\'t been saved.</string>
+    <string name="discard">Discard</string>
+    <string name="keep_editing">Keep editing</string>
+    <string name="vocabulary_import">Import from your vault</string>
+    <string name="vocabulary_import_help">Pick the names file from your Obsidian vault (Life/_names.md). Terms already on the list are kept; new names and mis-hearings are added.</string>
+    <string name="choose_file">Choose file</string>
+    <string name="vocabulary_import_save_first">Save or discard your changes before importing.</string>
+    <string name="vocabulary_importing">Importing…</string>
+    <string name="vocabulary_import_nothing">No names were found in that file.</string>
+    <string name="vocabulary_import_unreadable">Couldn\'t read that file.</string>
+    <plurals name="vocabulary_import_added">
+        <item quantity="one">%d term added</item>
+        <item quantity="other">%d terms added</item>
+    </plurals>
+    <string name="vocabulary_import_none_added">Nothing new. Every name in that file was already on the list.</string>
+    <string name="vocabulary_import_failed_fmt">Couldn\'t import. %1$s</string>
 
     <!-- App update (APK hosted on the bridge server) -->
     <string name="check_updates">Check</string>
     <string name="update_checking">Checking your server…</string>
     <string name="update_up_to_date">Up to date</string>
-    <string name="update_not_hosted">Your server hosts no APK</string>
-    <string name="update_check_failed_fmt">Update check failed: %1$s</string>
+    <string name="update_not_hosted">Your server hosts no app update</string>
+    <string name="update_check_failed">Couldn\'t check for updates</string>
     <string name="update_available_title">Update available</string>
     <string name="update_available_fmt">Plaud Bridge %1$s is available on your server.</string>
     <string name="update_available_short_fmt">Update %1$s available</string>
     <string name="update_download_install">Download &amp; install</string>
     <string name="update_downloading">Downloading update…</string>
-    <string name="update_download_failed_fmt">Update download failed: %1$s</string>
+    <string name="update_download_failed">Couldn\'t download the update. Try again.</string>
     <string name="update_allow_installs">To install updates from your server, allow Plaud Bridge to install unknown apps, then try again.</string>
     <string name="update_install_success">Update installed</string>
-    <string name="update_install_failed_fmt">Update install failed: %1$s</string>
+    <string name="update_install_failed">The update couldn\'t be installed.</string>
     <!-- Background sync foreground service -->
-    <string name="bg_sync_channel_name">Device connection</string>
+    <string name="bg_sync_channel_name">Recorder connection</string>
     <string name="bg_sync_channel_desc">Shows whether Plaud Bridge is connected to your recorder while running in the background</string>
     <string name="bg_sync_notif_connected_fmt">Connected to %1$s</string>
     <string name="bg_sync_notif_searching_fmt">Searching for %1$s…</string>
     <string name="bg_sync_notif_disconnected">Disconnected</string>
 
     <string name="qr_confirm_title">Connect to this server?</string>
-    <string name="qr_confirm_fmt">Server: %1$s\n\nThe URL and auth token from the QR code will be verified against this server before saving.</string>
+    <string name="qr_confirm_fmt">Server: %1$s\n\nThe address and access token from the code will be checked against this server before they are saved.</string>
 </resources>

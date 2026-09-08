@@ -25,20 +25,38 @@ import kotlinx.coroutines.withContext
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.common.AppLog
+import org.plaudbridge.app.common.ServerErrorText
 import org.plaudbridge.app.databinding.FragmentSettingsBinding
 import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.service.DeviceConnectionService
 import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.ui.library.WebDashboardActivity
 import org.plaudbridge.app.ui.onboarding.WelcomeActivity
 
 /**
- * Settings Tab: sync toggles, server config, firmware, version, unpair, and a collapsed
- * Advanced section for the plumbing (Plaud region, user id, SDK logs).
+ * Settings Tab: sync toggles, server config, Automations, firmware, version, unpair, and a
+ * collapsed Advanced section for the plumbing (full web dashboard, Plaud region, user id,
+ * diagnostic logs, build number). The recorder rows (firmware, unpair) only appear once a
+ * recorder is paired; before that they would be inert.
  */
 class SettingsFragment : Fragment() {
 
     companion object {
         private const val TAG = "SettingsFragment"
+
+        /** Version row text: the version name alone, plus the latest update-check result. */
+        fun versionLabel(versionName: String, status: String?): String =
+            if (status.isNullOrBlank()) versionName else "$versionName · $status"
+
+        /**
+         * "Your server" row text: the address plus whether an access token is stored. Never a
+         * fragment of the token itself.
+         */
+        fun serverLabel(context: Context, url: String?, token: String?): String = when {
+            url.isNullOrBlank() -> context.getString(R.string.not_configured)
+            token.isNullOrBlank() -> "$url · ${context.getString(R.string.access_token_missing)}"
+            else -> "$url · ${context.getString(R.string.access_token_set)}"
+        }
     }
 
     private var _binding: FragmentSettingsBinding? = null
@@ -99,10 +117,16 @@ class SettingsFragment : Fragment() {
             startActivity(Intent(requireContext(), VocabularyActivity::class.java))
         }
 
-        // The server's own web UI, for the Automations editor and anything else the native
-        // screens do not cover. Lives here rather than in a tab so the Library can stay native.
+        // Automations live in the server's web UI; open it straight on that tab so the row reads
+        // as a feature, not as "a second recordings list". The full dashboard is under Advanced.
         binding.webDashboardRow.setOnClickListener {
-            startActivity(Intent(requireContext(), org.plaudbridge.app.ui.library.WebDashboardActivity::class.java))
+            startActivity(
+                Intent(requireContext(), WebDashboardActivity::class.java)
+                    .putExtra(WebDashboardActivity.EXTRA_TAB, WebDashboardActivity.TAB_AUTOMATIONS)
+            )
+        }
+        binding.webDashboardAdvancedRow.setOnClickListener {
+            startActivity(Intent(requireContext(), WebDashboardActivity::class.java))
         }
 
         // Approve the dashboard's login QR with the phone so a computer's browser gets its own
@@ -127,20 +151,32 @@ class SettingsFragment : Fragment() {
         binding.userIdLabel.text = RecordingStore.getOrCreateUserId()
         binding.copyUserIdButton.setOnClickListener {
             val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText("User ID", RecordingStore.getOrCreateUserId()))
+            clipboard.setPrimaryClip(
+                ClipData.newPlainText(getString(R.string.user_id), RecordingStore.getOrCreateUserId())
+            )
         }
 
-        // SDK Logs export: encrypted .plaud package → share sheet → clear logs
+        // Diagnostic logs: encrypted .plaud package → share sheet → clear logs
         binding.exportLogsButton.setOnClickListener { exportSdkLogs() }
 
-        // App version + manual update check against the self-hosted server
+        // App version + manual update check against the self-hosted server; the build number
+        // is plumbing, so it sits under Advanced.
         renderVersionLabel(null)
+        binding.buildNumberLabel.text = org.plaudbridge.app.BuildConfig.VERSION_CODE.toString()
         binding.checkUpdateButton.setOnClickListener { checkForUpdates() }
 
-        // Unpair
+        // Recorder rows: inert without a paired recorder, so hidden until there is one.
+        renderRecorderRows()
         binding.signOutButton.setOnClickListener { showUnpairConfirmation() }
 
         observeDevice()
+    }
+
+    /** Firmware and Unpair only make sense once a recorder is paired. */
+    private fun renderRecorderRows() {
+        val paired = RecordingStore.pairedDeviceSNs.isNotEmpty()
+        binding.firmwareCard.visibility = if (paired) View.VISIBLE else View.GONE
+        binding.signOutButton.visibility = if (paired) View.VISIBLE else View.GONE
     }
 
     override fun onResume() {
@@ -204,7 +240,10 @@ class SettingsFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 deviceManager.connectedDevice.collect { device ->
-                    binding.firmwareVersionLabel.text = device?.firmwareVersion?.let { "Version $it" } ?: "--"
+                    // Pairing can change underneath us (connect sheet, unpair elsewhere).
+                    renderRecorderRows()
+                    binding.firmwareVersionLabel.text =
+                        device?.firmwareVersion?.takeIf { it.isNotBlank() } ?: getString(R.string.not_connected)
 
                     // Show the firmware update button
                     val hasUpdate = device?.latestFirmwareVersion != null &&
@@ -212,7 +251,7 @@ class SettingsFragment : Fragment() {
                     binding.firmwareUpdateButton.visibility = if (hasUpdate) View.VISIBLE else View.GONE
                     binding.firmwareUpdateButton.setOnClickListener {
                         FirmwareUpdateSheet
-                            .newInstance(device?.name ?: "Plaud Device")
+                            .newInstance(device?.name?.ifBlank { null } ?: getString(R.string.default_recorder_name))
                             .show(childFragmentManager, "FirmwareUpdateSheet")
                     }
                 }
@@ -254,11 +293,9 @@ class SettingsFragment : Fragment() {
 
     // MARK: - App update (APK hosted on the bridge server)
 
-    /** "0.2.0 (2)" plus the latest check result, e.g. "0.2.0 (2) · Up to date". */
+    /** "0.4.6" plus the latest check result, e.g. "0.4.6 · Up to date". */
     private fun renderVersionLabel(status: String?) {
-        val version =
-            "${org.plaudbridge.app.BuildConfig.VERSION_NAME} (${org.plaudbridge.app.BuildConfig.VERSION_CODE})"
-        binding.appVersionLabel.text = if (status.isNullOrBlank()) version else "$version · $status"
+        binding.appVersionLabel.text = versionLabel(org.plaudbridge.app.BuildConfig.VERSION_NAME, status)
     }
 
     private fun checkForUpdates() {
@@ -281,8 +318,10 @@ class SettingsFragment : Fragment() {
                     renderVersionLabel(getString(R.string.update_up_to_date))
                 is org.plaudbridge.app.net.UpdateManager.CheckResult.NotHosted ->
                     renderVersionLabel(getString(R.string.update_not_hosted))
-                is org.plaudbridge.app.net.UpdateManager.CheckResult.Error ->
-                    renderVersionLabel(getString(R.string.update_check_failed_fmt, result.message))
+                is org.plaudbridge.app.net.UpdateManager.CheckResult.Error -> {
+                    AppLog.w(TAG, "update check failed: ${result.message}")
+                    renderVersionLabel(getString(R.string.update_check_failed))
+                }
                 is org.plaudbridge.app.net.UpdateManager.CheckResult.UpdateAvailable -> {
                     renderVersionLabel(
                         getString(R.string.update_available_short_fmt, result.manifest.versionName)
@@ -298,18 +337,8 @@ class SettingsFragment : Fragment() {
     // MARK: - Bridge server settings
 
     private fun renderServerCard() {
-        val url = RecordingStore.serverBaseUrl
-        val token = RecordingStore.serverAuthToken
-        binding.serverInfoLabel.text = when {
-            url.isNullOrBlank() -> getString(R.string.not_configured)
-            else -> "$url · ${maskToken(token)}"
-        }
-    }
-
-    private fun maskToken(token: String?): String = when {
-        token.isNullOrBlank() -> "no token"
-        token.length <= 8 -> "••••"
-        else -> "${token.take(4)}…${token.takeLast(4)}"
+        binding.serverInfoLabel.text =
+            serverLabel(requireContext(), RecordingStore.serverBaseUrl, RecordingStore.serverAuthToken)
     }
 
     /** Edit the server URL + auth token; verified against the server before saving. */
@@ -374,10 +403,13 @@ class SettingsFragment : Fragment() {
         val oldHost = RecordingStore.serverBaseUrl?.let { android.net.Uri.parse(it).host }
         val newHost = android.net.Uri.parse(finalUrl).host
         val hostChanged = oldHost != null && newHost != null && oldHost != newHost
+        val ctx = requireContext().applicationContext
         viewLifecycleOwner.lifecycleScope.launch {
+            // The error is already a user sentence (unreachable, token refused, unexpected
+            // answer); codes and exception text stay in the log.
             val error = withContext(Dispatchers.IO) {
                 try {
-                    if (!ApiClient.checkHealth(finalUrl)) return@withContext getString(R.string.server_setup_health_failed)
+                    if (!ApiClient.checkHealth(finalUrl)) return@withContext ctx.getString(R.string.server_setup_health_failed)
                     val plaudToken = ApiClient.fetchUserToken(
                         finalUrl, token, RecordingStore.getOrCreateUserId()
                     )
@@ -388,7 +420,8 @@ class SettingsFragment : Fragment() {
                     try { sdk.NiceBuildSdk.setPartnerToken(plaudToken.accessToken) } catch (_: Exception) { }
                     null
                 } catch (e: Exception) {
-                    e.message ?: "connection failed"
+                    AppLog.w(TAG, "server verification failed", e)
+                    ServerErrorText.forServerSetup(ctx, e)
                 }
             }
             if (!isAdded) return@launch
@@ -397,11 +430,8 @@ class SettingsFragment : Fragment() {
                 .setTitle(R.string.bridge_server)
                 .setMessage(
                     when {
-                        error != null -> getString(R.string.server_setup_error_fmt, error)
-                        hostChanged ->
-                            getString(R.string.server_saved) +
-                                "\n\nServer changed: upload state and transcripts were reset — " +
-                                "synced recordings will re-upload to the new server."
+                        error != null -> error
+                        hostChanged -> getString(R.string.server_saved) + "\n\n" + getString(R.string.server_changed_note)
                         else -> getString(R.string.server_saved)
                     }
                 )

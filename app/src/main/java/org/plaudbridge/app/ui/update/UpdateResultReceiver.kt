@@ -51,11 +51,7 @@ class UpdateResultReceiver : BroadcastReceiver() {
                 val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
                     ?: "status $status"
                 AppLog.w(TAG, "update install failed: $message")
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.update_install_failed_fmt, message),
-                    Toast.LENGTH_LONG
-                ).show()
+                Toast.makeText(context, R.string.update_install_failed, Toast.LENGTH_LONG).show()
             }
         }
     }

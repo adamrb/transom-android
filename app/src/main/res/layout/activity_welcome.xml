@@ -35,7 +35,7 @@
             android:layout_width="36dp"
             android:layout_height="36dp"
             android:layout_gravity="center"
-            android:contentDescription="Logo"
+            android:contentDescription="@null"
             android:src="@drawable/ic_device"
             android:tint="@color/text_primary" />
     </FrameLayout>
@@ -54,7 +54,7 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- Get Started button, above the skip entry -->
+    <!-- "Get started" button, above the skip entry -->
     <Button
         android:id="@+id/getStartedButton"
         android:layout_width="0dp"

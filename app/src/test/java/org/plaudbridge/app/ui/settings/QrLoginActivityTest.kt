@@ -182,7 +182,7 @@ class QrLoginActivityTest {
     @Test
     fun garbageIsReportedWithTheParserReason() {
         val activity = launch("https://bridge.example.com/whatever")
-        assertEquals("Code not recognized: not a Plaud Bridge sign-in code", status(activity))
+        assertEquals("That code can't be used (not a Plaud Bridge sign-in code).", status(activity))
         assertTrue(fake.calls.isEmpty())
     }
 
@@ -190,7 +190,7 @@ class QrLoginActivityTest {
     fun malformedIdNeverReachesTheApprover() {
         val activity = launch(code("https://bridge.example.com", requestId = "../../admin"))
         assertNull(ShadowDialog.getLatestDialog())
-        assertEquals("Code not recognized: malformed request id", status(activity))
+        assertEquals("That code can't be used (malformed request id).", status(activity))
         assertTrue(fake.calls.isEmpty())
     }
 
@@ -219,7 +219,7 @@ class QrLoginActivityTest {
         fake.result = ApiClient.ApproveLoginResult.AuthError(401)
         val activity = launch(code("https://bridge.example.com"))
         clickPositive()
-        assertEquals("The server rejected the access token. Check it in Settings.", status(activity))
+        assertEquals("Your server didn't accept the access token. Check it in Settings.", status(activity))
     }
 
     @Test
@@ -231,11 +231,11 @@ class QrLoginActivityTest {
     }
 
     @Test
-    fun unexpectedHttpStatusIsNamed() {
+    fun unexpectedHttpStatusIsASentenceNotACode() {
         fake.result = ApiClient.ApproveLoginResult.Error("HTTP 500")
         val activity = launch(code("https://bridge.example.com"))
         clickPositive()
-        assertEquals("Server request failed: HTTP 500", status(activity))
+        assertEquals("Your server answered in an unexpected way. Try again.", status(activity))
     }
 
     // MARK: - No server configured

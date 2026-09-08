@@ -92,6 +92,11 @@ class WebDashboardActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         binding.backButton.setOnClickListener { backCallback.handleOnBackPressed() }
+        // Opened for one tab (Settings > Automations) the screen is titled after it; the full
+        // dashboard (Settings > Advanced) keeps the generic title.
+        binding.titleLabel.text = getString(
+            if (requestedTab() == TAB_AUTOMATIONS) R.string.automations else R.string.web_dashboard
+        )
 
         binding.webView.settings.apply {
             javaScriptEnabled = true          // the dashboard is an SPA
@@ -180,9 +185,12 @@ class WebDashboardActivity : AppCompatActivity() {
 
         showWeb()
         // ?embedded=1 tells the dashboard it is inside the app: it hides the brand,
-        // "Connect a phone" and "Lock" (which would log this WebView out).
-        binding.webView.loadUrl(embeddedUrl(url))
+        // "Connect a phone" and "Sign out" (which would log this WebView out). ?tab opens that
+        // tab and hides the tab switcher; ?theme keeps the page in step with the app's theme.
+        binding.webView.loadUrl(embeddedUrl(url, requestedTab(), DashboardTheme.current()))
     }
+
+    private fun requestedTab(): String? = intent.getStringExtra(EXTRA_TAB)?.takeIf { it in KNOWN_TABS }
 
     private fun showError(message: String) {
         binding.errorLabel.text = message
@@ -294,8 +302,23 @@ class WebDashboardActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "WebDashboard"
 
-        /** Dashboard URL for in-app display: same origin, plus the embedded flag. */
-        fun embeddedUrl(base: String): String =
-            Uri.parse(base).buildUpon().appendQueryParameter("embedded", "1").build().toString()
+        /** Intent extra: which dashboard tab to open ([TAB_AUTOMATIONS] or [TAB_RECORDINGS]). */
+        const val EXTRA_TAB = "tab"
+        const val TAB_AUTOMATIONS = "automations"
+        const val TAB_RECORDINGS = "recordings"
+        private val KNOWN_TABS = setOf(TAB_AUTOMATIONS, TAB_RECORDINGS)
+
+        /**
+         * Dashboard URL for in-app display: same origin, plus the embedded flag, plus the
+         * optional tab and theme the dashboard understands (`?tab=automations&theme=light`).
+         */
+        fun embeddedUrl(base: String, tab: String? = null, theme: String? = null): String =
+            Uri.parse(base).buildUpon()
+                .appendQueryParameter("embedded", "1")
+                .apply {
+                    if (tab != null) appendQueryParameter("tab", tab)
+                    if (theme != null) appendQueryParameter("theme", theme)
+                }
+                .build().toString()
     }
 }

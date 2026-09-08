@@ -16,6 +16,7 @@ import kotlinx.coroutines.withContext
 import org.plaudbridge.app.BuildConfig
 import org.plaudbridge.app.R
 import org.plaudbridge.app.common.AppLog
+import org.plaudbridge.app.common.ServerErrorText
 import org.plaudbridge.app.databinding.ActivityQrLoginBinding
 import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.storage.RecordingStore
@@ -182,14 +183,9 @@ class QrLoginActivity : AppCompatActivity() {
                     showStatus(getString(R.string.library_auth_failed), isError = true)
                 is ApiClient.ApproveLoginResult.Error -> {
                     AppLog.w(TAG, "approve failed: ${result.message}")
-                    // "HTTP nnn" is the server answering with something unexpected; anything else
-                    // is the connection itself (timeout, DNS, refused).
-                    val message = if (result.message.startsWith("HTTP ")) {
-                        getString(R.string.server_request_failed_fmt, result.message)
-                    } else {
-                        getString(R.string.library_load_failed)
-                    }
-                    showStatus(message, isError = true)
+                    // One sentence: an unexpected server answer or a connection problem; the
+                    // code itself stays in the log.
+                    showStatus(ServerErrorText.fromResultMessage(this@QrLoginActivity, result.message), isError = true)
                 }
             }
         }

@@ -17,12 +17,18 @@ import org.json.JSONObject
 data class VocabEntry(
     val term: String,
     val aliases: List<String> = emptyList(),
-    val source: String = SOURCE_MANUAL
+    val source: String = SOURCE_MANUAL,
+    /**
+     * Hotword ranking weight. Null (the editors' case) tells the server to keep whatever weight
+     * the term already has; the vault import sets it so gazetteer names outrank the rest.
+     */
+    val weight: Int? = null
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("term", term)
         .put("aliases", JSONArray().apply { aliases.forEach { put(it) } })
         .put("source", source)
+        .apply { if (weight != null) put("weight", weight) }
 
     companion object {
         const val SOURCE_MANUAL = "manual"

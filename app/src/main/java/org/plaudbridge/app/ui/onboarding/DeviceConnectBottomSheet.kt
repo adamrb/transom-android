@@ -161,7 +161,7 @@ class DeviceConnectBottomSheet : BottomSheetDialogFragment() {
         if (currentDevices.isEmpty()) return
         val device = currentDevices[currentIndex]
         binding.deviceNameLabel.text = device.name
-        binding.deviceSnLabel.text = "SN: ${device.serialNumber}"
+        binding.deviceSnLabel.text = getString(R.string.serial_fmt, device.serialNumber)
     }
 
     private fun updateDots() {
@@ -205,9 +205,9 @@ class DeviceConnectBottomSheet : BottomSheetDialogFragment() {
     private fun offerRecovery() {
         val device = currentDevices.getOrNull(currentIndex) ?: return
         androidx.appcompat.app.AlertDialog.Builder(requireContext())
-            .setTitle("Connection Failed")
-            .setMessage("The device may still be locked by a previous account. Try to recover it?")
-            .setPositiveButton("Recover") { _, _ ->
+            .setTitle(R.string.recorder_locked_title)
+            .setMessage(getString(R.string.recorder_locked_message_fmt, device.name.ifBlank { getString(R.string.default_recorder_name) }))
+            .setPositiveButton(R.string.recover) { _, _ ->
                 recoveryRunning = true
                 deviceManager.startDeviceRecovery(device)
             }
@@ -217,7 +217,7 @@ class DeviceConnectBottomSheet : BottomSheetDialogFragment() {
 
     private fun showRecoveryResult(message: String) {
         androidx.appcompat.app.AlertDialog.Builder(requireContext())
-            .setTitle("Device Recovery")
+            .setTitle(R.string.recorder_recovery_title)
             .setMessage(message)
             .setPositiveButton(android.R.string.ok, null)
             .show()

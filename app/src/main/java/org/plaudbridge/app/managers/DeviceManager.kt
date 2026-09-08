@@ -65,7 +65,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
         private const val RECOVERY_RESCAN_TIMEOUT_MS = 20_000L
 
         /** Failure text used when a scan is refused because the phone's Bluetooth is off. */
-        const val BLUETOOTH_OFF_MESSAGE = "Bluetooth is off. Turn it on to find your device."
+        const val BLUETOOTH_OFF_MESSAGE = "Bluetooth is off. Turn it on to find your recorder."
 
         /**
          * Pick-list label for a scan hit. BLE local names sometimes arrive with control bytes or
@@ -186,7 +186,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
             } catch (e: Exception) {
                 AppLog.e(TAG, "configure: could not fetch Plaud user token from bridge server", e)
                 _cloudAlerts.tryEmit(
-                    "Could not fetch the Plaud access token from your server. Check the server URL and token in Settings."
+                    "Couldn't get a Plaud access token from your server. Check the server address and access token in Settings."
                 )
             }
         }
@@ -349,7 +349,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
                             onHandshakeRejected()
                         } else {
                             awaitingHandshake = false
-                            _connectionState.value = DeviceConnectionState.Failed("Connection failed")
+                            _connectionState.value = DeviceConnectionState.Failed("Couldn't connect to the recorder.")
                         }
                     }
                 }
@@ -711,7 +711,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
         isAutoReconnectAttempt = false
         AppLog.w(TAG, "handshake rejected (auto=$wasAuto)")
         _connectionState.value = DeviceConnectionState.Failed(
-            "The device refused the connection — it may still be locked by another account."
+            "The recorder refused the connection. It may still be locked by another account."
         )
         if (wasAuto) {
             suppressAutoReconnect = true
@@ -896,7 +896,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
         val bleDevice = scannedBleDevices.firstOrNull { it.getSerialNumber() == device.serialNumber }
         if (bleDevice == null) {
             AppLog.e(TAG, "connect: BleDevice not found for sn=${device.serialNumber}")
-            _connectionState.value = DeviceConnectionState.Failed("Device not found, please rescan")
+            _connectionState.value = DeviceConnectionState.Failed("Recorder not found. Scan again.")
             return
         }
 
@@ -916,7 +916,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
                     awaitingHandshake = false
                     withContext(Dispatchers.Main) {
                         _connectionState.value = DeviceConnectionState.Failed(
-                            "Could not refresh the Plaud access token from your server. Check Settings."
+                            "Couldn't refresh the Plaud access token from your server. Check Settings."
                         )
                     }
                     return@launch
@@ -945,7 +945,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
             } catch (e: Exception) {
                 AppLog.e(TAG, "connectBleDevice failed", e)
                 scope.launch {
-                    _connectionState.value = DeviceConnectionState.Failed("Connection failed: ${e.message}")
+                    _connectionState.value = DeviceConnectionState.Failed("Couldn't connect to the recorder.")
                 }
             }
         }
@@ -1017,7 +1017,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
     override fun startFirmwareUpdate() {
         val info = pendingUpdateInfo
         if (!PlaudDeviceAgent.isConnected()) {
-            emitFirmwareState(_firmwareProgress.value ?: 0f, FirmwareUpdateUiState.Phase.FAILED, "Update failed", "Device not connected")
+            emitFirmwareState(_firmwareProgress.value ?: 0f, FirmwareUpdateUiState.Phase.FAILED, "Update didn't start", "Your recorder isn't connected.")
             return
         }
         if (info == null || !info.hasUpdate) {
@@ -1027,8 +1027,8 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
         // The pending update was checked for a specific device — never install it on another one.
         if (pendingUpdateInfoSN == null || pendingUpdateInfoSN != _connectedDevice.value?.serialNumber) {
             emitFirmwareState(
-                0f, FirmwareUpdateUiState.Phase.FAILED, "Update failed",
-                "The update check belongs to a different device — reopen Settings to re-check."
+                0f, FirmwareUpdateUiState.Phase.FAILED, "Update didn't start",
+                "The update was checked for a different recorder. Reopen Settings to check again."
             )
             return
         }
@@ -1065,13 +1065,13 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
      * app ("Already resumed"). Tracked in sdk-requests-android-parity.md #13/#14.
      */
     private fun installFirmware(file: java.io.File, info: FirmwareUpdateInfo) {
-        emitFirmwareState(0.5f, FirmwareUpdateUiState.Phase.INSTALLING, "Installing on device...")
+        emitFirmwareState(0.5f, FirmwareUpdateUiState.Phase.INSTALLING, "Installing on your recorder…")
 
         val done = java.util.concurrent.atomic.AtomicBoolean(false)
         fun finish(success: Boolean, error: String? = null) {
             if (!done.compareAndSet(false, true)) return
             if (success) {
-                emitFirmwareState(1f, FirmwareUpdateUiState.Phase.COMPLETED, "Update complete!")
+                emitFirmwareState(1f, FirmwareUpdateUiState.Phase.COMPLETED, "Update complete")
                 pendingUpdateInfo = null
                 scope.launch {
                     _connectedDevice.value = _connectedDevice.value?.copy(
@@ -1113,7 +1113,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
                         emitFirmwareState(
                             0.5f + progress.toFloat() / 100f * 0.5f,
                             FirmwareUpdateUiState.Phase.INSTALLING,
-                            "Installing on device... ${progress.toInt()}%"
+                            "Installing on your recorder… ${progress.toInt()}%"
                         )
                     }
 
@@ -1129,7 +1129,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
                         // A device-side rejection (e.g. Retry Too Much) arrives via otaPushError
                         // shortly after, so give it a grace window before declaring success.
                         AppLog.i(TAG, "OTA push finished, waiting for device verdict")
-                        emitFirmwareState(1f, FirmwareUpdateUiState.Phase.RESTARTING, "Restarting device...")
+                        emitFirmwareState(1f, FirmwareUpdateUiState.Phase.RESTARTING, "Restarting your recorder…")
                         scope.launch {
                             delay(8_000)
                             finish(true)
@@ -1202,21 +1202,21 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
         scope.launch(Dispatchers.IO) {
             val info = queryCloudBinding(sn)
             if (info == null) {
-                failRecovery("Recovery failed: could not query the cloud binding state."); return@launch
+                failRecovery("Couldn't check which account the recorder is linked to. Try again."); return@launch
             }
             if (info.isBind == true) {
-                failRecovery("This device is bound to another account. That owner must unbind it first."); return@launch
+                failRecovery("This recorder is linked to another account. That owner must unlink it first."); return@launch
             }
             // bind_history has one entry PER device.bind event, so the same id repeats for every
             // past connect (live-verified: 50+ duplicates of one id) — dedupe before bounding,
             // otherwise the attempts would try the same key five times.
             val history = info.bindHistory.distinct().take(RECOVERY_MAX_ATTEMPTS)
             if (history.isEmpty()) {
-                failRecovery("Recovery not possible: the device has no bind history."); return@launch
+                failRecovery("This recorder can't be recovered here: it has no previous account to clear."); return@launch
             }
             val bleDevice = scannedBleDevices.firstOrNull { it.getSerialNumber() == sn }
             if (bleDevice == null) {
-                failRecovery("Device not found, please rescan."); return@launch
+                failRecovery("Recorder not found. Scan again."); return@launch
             }
 
             suppressAutoReconnect = true
@@ -1256,7 +1256,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
                     AppLog.i(TAG, "recovery: bond wiped — rescanning (MAC changes after depair)")
                     val fresh = rescanForDevice(sn)
                     if (fresh == null) {
-                        failRecovery("The device was unlocked but did not reappear — please rescan and connect it.")
+                        failRecovery("The recorder was unlocked but didn't reappear. Scan again and connect it.")
                         return@launch
                     }
                     AppLog.i(TAG, "recovery: device reappeared — reconnecting as the current user")
@@ -1266,7 +1266,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
                     }
                     return@launch
                 }
-                failRecovery("Recovery failed: none of the previous accounts matched the device lock.")
+                failRecovery("Couldn't unlock the recorder: none of its previous accounts matched.")
             } finally {
                 recoveryInProgress = false
                 recoverySignal = null
@@ -1331,7 +1331,7 @@ class DeviceManager private constructor() : DeviceManagerProtocol {
             }
             if (code == 403) {
                 _cloudAlerts.emit(
-                    "This device is already bound to another account. Unbind it from that account first, then reconnect."
+                    "This recorder is already linked to another account. Unlink it from that account first, then reconnect."
                 )
             }
         }

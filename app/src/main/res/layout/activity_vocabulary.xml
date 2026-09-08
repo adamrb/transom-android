@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Custom vocabulary editor: toolbar (back + title), help text, monospace editor, status + Save. -->
+<!-- Custom vocabulary editor: toolbar (back + title + more), help text, search box, list of
+     terms (tap to edit, x to remove), status + Add + Save. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -19,7 +20,7 @@
             android:layout_gravity="start|center_vertical"
             android:layout_marginStart="4dp"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Back"
+            android:contentDescription="@string/cd_back"
             android:src="@drawable/ic_chevron_left"
             android:tint="@color/text_primary" />
 
@@ -31,6 +32,17 @@
             android:text="@string/custom_vocabulary"
             android:textColor="@color/text_primary"
             android:textSize="16sp" />
+
+        <ImageButton
+            android:id="@+id/moreButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="end|center_vertical"
+            android:layout_marginEnd="4dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/cd_more"
+            android:src="@drawable/ic_more"
+            android:tint="@color/text_primary" />
     </FrameLayout>
 
     <TextView
@@ -38,34 +50,67 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginStart="24dp"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="4dp"
         android:layout_marginEnd="24dp"
         android:fontFamily="sans-serif"
         android:text="@string/vocabulary_help"
         android:textColor="@color/gray_medium"
         android:textSize="13sp" />
 
-    <!-- Monospace so "Term = alias, alias" lines up; no suggestions because the whole point of
-         the list is spellings the keyboard's dictionary does not know. -->
+    <!-- Search narrows the list to terms (or mis-hearings) containing the text -->
     <EditText
-        android:id="@+id/editor"
+        android:id="@+id/filterInput"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="24dp"
+        android:background="@drawable/bg_card"
+        android:drawableStart="@drawable/ic_search"
+        android:drawablePadding="10dp"
+        app:drawableTint="@color/gray_medium"
+        android:hint="@string/vocabulary_search_hint"
+        android:imeOptions="actionSearch"
+        android:importantForAutofill="no"
+        android:inputType="text|textNoSuggestions"
+        android:maxLines="1"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:textColor="@color/text_primary"
+        android:textColorHint="@color/gray_ad"
+        android:textSize="14sp" />
+
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_marginStart="24dp"
         android:layout_marginTop="12dp"
         android:layout_marginEnd="24dp"
-        android:layout_weight="1"
-        android:background="@drawable/bg_card"
-        android:gravity="top|start"
-        android:hint="@string/vocabulary_hint"
-        android:importantForAutofill="no"
-        android:inputType="textMultiLine|textNoSuggestions"
-        android:padding="16dp"
-        android:scrollbars="vertical"
-        android:textColor="@color/text_primary"
-        android:textColorHint="@color/gray_ad"
-        android:textSize="14sp"
-        android:typeface="monospace" />
+        android:layout_weight="1">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/termsList"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/bg_card"
+            android:clipToPadding="false"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:scrollbars="vertical" />
+
+        <!-- Empty list, no search match, loading, or the reason nothing could load -->
+        <TextView
+            android:id="@+id/emptyLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:fontFamily="sans-serif"
+            android:gravity="center"
+            android:padding="24dp"
+            android:textColor="@color/gray_medium"
+            android:textSize="14sp"
+            android:visibility="gone" />
+    </FrameLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -88,10 +133,29 @@
             android:textSize="13sp" />
 
         <Button
-            android:id="@+id/saveButton"
+            android:id="@+id/addButton"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:layout_marginStart="12dp"
+            android:background="@drawable/bg_secondary_button"
+            android:enabled="false"
+            android:fontFamily="sans-serif"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:minWidth="0dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:text="@string/vocabulary_add_term"
+            android:textAllCaps="false"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp"
+            app:backgroundTint="@null" />
+
+        <Button
+            android:id="@+id/saveButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginStart="8dp"
             android:background="@drawable/bg_primary_button"
             android:enabled="false"
             android:fontFamily="sans-serif"

@@ -61,7 +61,8 @@ class FirmwareUpdateSheet : BottomSheetDialogFragment() {
         started = savedInstanceState?.getBoolean(KEY_STARTED, false) ?: false
         sawFreshState = savedInstanceState?.getBoolean(KEY_SAW_FRESH_STATE, false) ?: false
 
-        val deviceName = arguments?.getString(ARG_DEVICE_NAME) ?: "Plaud Device"
+        val deviceName = arguments?.getString(ARG_DEVICE_NAME)?.takeIf { it.isNotBlank() }
+            ?: getString(R.string.default_recorder_name)
         binding.descriptionLabel.text = getString(R.string.firmware_updating_desc, deviceName)
 
         buildSegments()
@@ -163,12 +164,14 @@ class FirmwareUpdateSheet : BottomSheetDialogFragment() {
         if (awaitingReconnect) return
         awaitingReconnect = true
         binding.descriptionLabel.text = getString(R.string.firmware_restarting_desc)
-        binding.statusLabel.text = "Restarting device..."
+        binding.statusLabel.text = getString(R.string.firmware_restarting_status)
         viewLifecycleOwner.lifecycleScope.launch {
             val reconnected = kotlinx.coroutines.withTimeoutOrNull(60_000) {
                 deviceManager.connectionState.first { it is org.plaudbridge.app.models.DeviceConnectionState.Connected }
             } != null
-            binding.statusLabel.text = if (reconnected) "Update complete!" else "Device is restarting..."
+            binding.statusLabel.text = getString(
+                if (reconnected) R.string.firmware_complete_status else R.string.firmware_still_restarting_status
+            )
             binding.descriptionLabel.text = getString(R.string.firmware_success_desc)
             isCancelable = true
             dismissAfterDelay()
@@ -181,7 +184,7 @@ class FirmwareUpdateSheet : BottomSheetDialogFragment() {
             val ctx = requireActivity()
             dismissAllowingStateLoss()
             androidx.appcompat.app.AlertDialog.Builder(ctx)
-                .setTitle("Update Failed")
+                .setTitle(R.string.firmware_failed_title)
                 .setMessage(error ?: getString(R.string.firmware_failed_desc))
                 .setPositiveButton(android.R.string.ok, null)
                 .show()

@@ -19,6 +19,7 @@ import org.plaudbridge.app.R
 import org.plaudbridge.app.common.AppLog
 import org.plaudbridge.app.common.QrLoginPayload
 import org.plaudbridge.app.common.QrSetupPayload
+import org.plaudbridge.app.common.ServerErrorText
 import org.plaudbridge.app.databinding.ActivityServerSetupBinding
 import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.storage.RecordingStore
@@ -139,6 +140,7 @@ class ServerSetupActivity : AppCompatActivity() {
         }
         // HTTPS only: Android's default network security config blocks cleartext HTTP, so an
         // http:// URL would only produce an opaque network error later (see README for LAN use).
+        // The user just sees "Use an https:// address."; the why belongs in the README.
         if (!url.startsWith("https://")) {
             showStatus(getString(R.string.server_setup_https_required), isError = true)
             return
@@ -157,17 +159,11 @@ class ServerSetupActivity : AppCompatActivity() {
                     val userId = RecordingStore.getOrCreateUserId()
                     val plaudToken = ApiClient.fetchUserToken(url, token, userId)
                     null to plaudToken
-                } catch (e: ApiClient.ApiException) {
-                    AppLog.w(TAG, "auth check failed", e)
-                    val msg = if (e.code == 401 || e.code == 403) {
-                        getString(R.string.server_setup_auth_failed)
-                    } else {
-                        getString(R.string.server_setup_error_fmt, e.message ?: "")
-                    }
-                    msg to null
                 } catch (e: Exception) {
+                    // One sentence for the user (wrong token, unreachable, unexpected answer);
+                    // the code and exception text only go to the log.
                     AppLog.w(TAG, "connection test failed", e)
-                    getString(R.string.server_setup_error_fmt, e.message ?: "network error") to null
+                    ServerErrorText.forServerSetup(this@ServerSetupActivity, e) to null
                 }
             }
 

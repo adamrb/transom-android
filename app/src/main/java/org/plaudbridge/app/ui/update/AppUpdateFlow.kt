@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.plaudbridge.app.R
+import org.plaudbridge.app.common.AppLog
 import org.plaudbridge.app.net.UpdateManager
 import java.io.File
 
@@ -17,6 +18,8 @@ import java.io.File
  * manual check and the foreground auto-check in MainActivity.
  */
 object AppUpdateFlow {
+
+    private const val TAG = "AppUpdateFlow"
 
     /**
      * A verified APK parked while the user grants the Android 8+ "install unknown apps"
@@ -54,13 +57,12 @@ object AppUpdateFlow {
             result.fold(
                 onSuccess = { apk -> install(activity, apk) },
                 onFailure = { e ->
+                    // The reason (hash mismatch, size, network) goes to the log; the user gets
+                    // one sentence, never exception text.
+                    AppLog.w(TAG, "update download failed", e)
                     AlertDialog.Builder(activity)
                         .setTitle(R.string.update_available_title)
-                        .setMessage(
-                            activity.getString(
-                                R.string.update_download_failed_fmt, e.message ?: "unknown error"
-                            )
-                        )
+                        .setMessage(R.string.update_download_failed)
                         .setPositiveButton(android.R.string.ok, null)
                         .show()
                 }
@@ -105,9 +107,10 @@ object AppUpdateFlow {
                 }
             }
             if (error != null && !activity.isFinishing && !activity.isDestroyed) {
+                AppLog.w(TAG, "update install failed: $error")
                 AlertDialog.Builder(activity)
                     .setTitle(R.string.update_available_title)
-                    .setMessage(activity.getString(R.string.update_install_failed_fmt, error))
+                    .setMessage(R.string.update_install_failed)
                     .setPositiveButton(android.R.string.ok, null)
                     .show()
             }

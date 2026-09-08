@@ -19,7 +19,7 @@
             android:layout_gravity="start|center_vertical"
             android:layout_marginStart="4dp"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Back"
+            android:contentDescription="@string/cd_back"
             android:src="@drawable/ic_chevron_left"
             android:tint="@color/text_primary" />
 
