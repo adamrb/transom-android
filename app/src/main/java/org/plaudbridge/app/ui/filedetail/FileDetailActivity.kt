@@ -42,6 +42,7 @@ import org.plaudbridge.app.models.RoutingRun
 import org.plaudbridge.app.models.ServerRecording
 import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.ui.common.MarkdownRenderer
 import org.plaudbridge.app.ui.recordings.ApiServerRecordingActions
 import org.plaudbridge.app.ui.recordings.RecordingActions
 import org.plaudbridge.app.ui.recordings.RecordingItem
@@ -365,7 +366,7 @@ class FileDetailActivity : AppCompatActivity() {
         val hasSummary = !model.summary.isNullOrBlank()
         binding.summaryHeader.visibility = if (hasSummary) View.VISIBLE else View.GONE
         binding.summaryText.visibility = if (hasSummary) View.VISIBLE else View.GONE
-        if (hasSummary) binding.summaryText.text = model.summary
+        if (hasSummary) MarkdownRenderer.setMarkdown(binding.summaryText, MarkdownRenderer.withoutSummaryHeading(model.summary!!))
 
         // Highlights: the server's transcript-around-each-button-press rows, above the transcript
         bindHighlights(model.transcriptJSON?.let { TranscriptHighlight.parse(it) } ?: emptyList())

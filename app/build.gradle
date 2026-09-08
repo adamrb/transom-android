@@ -13,8 +13,8 @@ android {
         targetSdk 34
         // In-app updates compare the server-hosted APK's version_code against this value:
         // EVERY release uploaded to the server must increment versionCode.
-        versionCode 10
-        versionName "0.4.2"
+        versionCode 11
+        versionName "0.4.3"
         // No build-time secrets: the Plaud user access token is fetched at runtime from your
         // self-hosted plaud-bridge-server. local.properties only needs sdk.dir.
     }
@@ -83,6 +83,12 @@ dependencies {
 
     // Gson
     implementation 'com.google.code.gson:gson:2.10.1'
+    // Markdown rendering for AI summaries (headings, bold, lists, tables, links)
+    implementation 'io.noties.markwon:core:4.6.2'
+    implementation 'io.noties.markwon:ext-strikethrough:4.6.2'
+    implementation 'io.noties.markwon:ext-tables:4.6.2'
+    implementation 'io.noties.markwon:ext-tasklist:4.6.2'
+    implementation 'io.noties.markwon:linkify:4.6.2'
 
     // Networking (self-hosted bridge server API)
     implementation 'com.squareup.okhttp3:okhttp:4.9.3'

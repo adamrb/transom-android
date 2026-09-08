@@ -309,6 +309,22 @@ class FileDetailActivityTest {
     }
 
     @Test
+    fun summaryMarkdownIsRenderedNotShownRaw() {
+        val markdownSummary = transcriptJson.replace(
+            "\"summary\":\"A greeting.\"",
+            "\"summary\":\"## Summary\\n\\n**Key point.** A greeting.\\n\\n- Hello\\n- Hi\""
+        )
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(markdownSummary))
+        val activity = launchServer(fake)
+        val view = activity.findViewById<android.widget.TextView>(R.id.summaryText)
+        val text = view.text.toString()
+        assertEquals(false, text.contains("**") || text.contains("##") || text.contains("- Hello"))
+        assertTrue(text.contains("Key point."))
+        val spanned = view.text as android.text.Spanned
+        assertEquals(1, spanned.getSpans(0, spanned.length, io.noties.markwon.core.spans.StrongEmphasisSpan::class.java).size)
+    }
+
+    @Test
     fun serverModePendingTranscriptShowsEmptyStateWithCheckButton() {
         val fake = FakeServerSource(serverRecording("transcribing"), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending)
         val activity = launchServer(fake)
