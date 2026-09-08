@@ -30,7 +30,7 @@ abstract class DateGroupedAdapter<T>(
     }
 
     /** Primary label of a row (the recording's display name). */
-    protected abstract fun rowName(item: T): String
+    protected abstract fun rowName(context: android.content.Context, item: T): String
 
     /** Secondary label of a row (date, time, duration and whatever state the list adds). */
     protected abstract fun rowMeta(context: android.content.Context, item: T): String
@@ -63,7 +63,7 @@ abstract class DateGroupedAdapter<T>(
     }
 
     private fun bindItem(holder: RecyclerView.ViewHolder, item: T) {
-        holder.itemView.findViewById<TextView>(R.id.fileNameLabel).text = rowName(item)
+        holder.itemView.findViewById<TextView>(R.id.fileNameLabel).text = rowName(holder.itemView.context, item)
         holder.itemView.findViewById<TextView>(R.id.fileMetaLabel).text = rowMeta(holder.itemView.context, item)
         holder.itemView.setOnClickListener { onRowTapped(item) }
         holder.itemView.setOnLongClickListener { onRowLongPressed(item) }

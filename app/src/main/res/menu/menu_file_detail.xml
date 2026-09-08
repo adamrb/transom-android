@@ -25,6 +25,9 @@
         android:id="@+id/action_run_automations"
         android:title="@string/run_automations" />
     <item
+        android:id="@+id/action_run_automations_with_instructions"
+        android:title="@string/run_automations_with_instructions" />
+    <item
         android:id="@+id/action_remove_from_phone"
         android:title="@string/remove_from_phone" />
     <item

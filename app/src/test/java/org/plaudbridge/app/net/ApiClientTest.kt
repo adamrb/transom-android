@@ -568,6 +568,39 @@ class ApiClientTest {
     }
 
     @Test
+    fun rerunRoutingSendsInstructionsAsTheJsonBodyWithTheKey() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+        assertEquals(ApiClient.ActionResult.Ok, ApiClient.rerunRouting("rec-1", "click-0002-abcdef", "  file this as a work meeting  "))
+        val req = server.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/api/v1/recordings/rec-1/route", req.path)
+        assertEquals("Bearer test-token", req.getHeader("Authorization"))
+        assertEquals("click-0002-abcdef", req.getHeader("Idempotency-Key"))
+        assertTrue(req.getHeader("Content-Type")!!.startsWith("application/json"))
+        assertEquals("""{"instructions":"file this as a work meeting"}""", req.body.readUtf8())
+    }
+
+    @Test
+    fun rerunRoutingBlankInstructionsMeanNoBodyAndLongOnesAreCut() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+        ApiClient.rerunRouting("rec-1", "k", "   ")
+        val blank = server.takeRequest()
+        assertEquals(0L, blank.bodySize)
+        assertEquals(null, blank.getHeader("Content-Type")?.takeIf { it.startsWith("application/json") })
+
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+        ApiClient.rerunRouting("rec-1", "k", "x".repeat(ApiClient.ROUTE_INSTRUCTIONS_MAX + 50))
+        assertEquals("""{"instructions":"${"x".repeat(ApiClient.ROUTE_INSTRUCTIONS_MAX)}"}""", server.takeRequest().body.readUtf8())
+
+        // Instructions without a key: body, no header.
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+        ApiClient.rerunRouting("rec-1", null, "do it")
+        val noKey = server.takeRequest()
+        assertEquals(null, noKey.getHeader("Idempotency-Key"))
+        assertEquals("""{"instructions":"do it"}""", noKey.body.readUtf8())
+    }
+
+    @Test
     fun rerunRoutingMapsFailures() {
         server.enqueue(MockResponse().setResponseCode(404))
         assertEquals(ApiClient.ActionResult.NotFound, ApiClient.rerunRouting("rec-1"))

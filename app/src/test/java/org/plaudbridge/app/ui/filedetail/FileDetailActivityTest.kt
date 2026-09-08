@@ -35,6 +35,13 @@ class FileDetailActivityTest {
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
+        // Animations off, as for any UI test. The transcription progress bar is a Material
+        // indicator whose animators (the indeterminate sweep, the determinate spring) request
+        // Choreographer frames; Robolectric advances the paused clock per frame, which would
+        // run every delayed poll early and make the timing assertions here meaningless.
+        android.provider.Settings.Global.putFloat(
+            context.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 0f
+        )
         org.plaudbridge.app.export.FileProviderTestSupport.resetCache()
         RecordingStore.init(context)
         RecordingStore.clearAll()
@@ -47,12 +54,13 @@ class FileDetailActivityTest {
         transcriptJson: String?,
         serverId: String? = "srv-7",
         uploaded: Boolean = true,
-        localPath: String? = null
+        localPath: String? = null,
+        serverTitle: String? = "Budget \"Q3\" call"
     ): RecordingFile {
         val file = RecordingFile(
             sessionId = 7L, deviceSN = "SN-A", name = "Untitled Recording", duration = 61,
             createdAt = 1_788_758_851_000L, uploaded = uploaded, serverId = serverId, localPath = localPath,
-            serverTitle = "Budget \"Q3\" call"
+            serverTitle = serverTitle
         )
         RecordingStore.addFiles(listOf(file))
         if (transcriptJson != null) RecordingStore.updateTranscript(file.id, transcriptJson)
@@ -230,10 +238,28 @@ class FileDetailActivityTest {
         val routingCalls = mutableListOf<String>()
         val reruns = mutableListOf<String>()
         val retries = mutableListOf<String>()
-        override suspend fun recording(id: String) =
-            if (id == rec.id) org.plaudbridge.app.net.ApiClient.RecordingResult.Ok(rec)
+        /** How many of the next recording reads answer with a transient error. */
+        var recordingFailures = 0
+        /** When set, recording reads park on it so a test can hold one "on the wire". */
+        var recordingGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+        override suspend fun recording(id: String): org.plaudbridge.app.net.ApiClient.RecordingResult {
+            recordingCalls += id
+            recordingGate?.await()
+            if (recordingFailures > 0) {
+                recordingFailures--
+                return org.plaudbridge.app.net.ApiClient.RecordingResult.Error("timeout")
+            }
+            return if (id == rec.id) org.plaudbridge.app.net.ApiClient.RecordingResult.Ok(rec)
             else org.plaudbridge.app.net.ApiClient.RecordingResult.NotFound
-        override suspend fun transcript(id: String) = transcript
+        }
+        /** When set, the transcript read parks on it so a test can look at the screen in between. */
+        var transcriptGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+        val transcriptCalls = mutableListOf<String>()
+        override suspend fun transcript(id: String): org.plaudbridge.app.net.ApiClient.TranscriptResult {
+            transcriptCalls += id
+            transcriptGate?.await()
+            return transcript
+        }
         /** When set, routing parks on it so a test can hold a read "on the wire". */
         var routingGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
         override suspend fun routing(id: String): org.plaudbridge.app.net.ApiClient.RoutingResult {
@@ -245,12 +271,16 @@ class FileDetailActivityTest {
         var rerunGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
         var rerunResult: org.plaudbridge.app.net.ApiClient.ActionResult = org.plaudbridge.app.net.ApiClient.ActionResult.Ok
         val rerunKeys = mutableListOf<String>()
-        override suspend fun rerunRouting(id: String, idempotencyKey: String): org.plaudbridge.app.net.ApiClient.ActionResult {
+        val rerunInstructions = mutableListOf<String?>()
+        override suspend fun rerunRouting(id: String, idempotencyKey: String, instructions: String?): org.plaudbridge.app.net.ApiClient.ActionResult {
             reruns += id
             rerunKeys += idempotencyKey
+            rerunInstructions += instructions
             rerunGate?.await()
             return rerunResult
         }
+        /** Recording reads, so a test can count the transcription polls. */
+        val recordingCalls = mutableListOf<String>()
         var retryResult: org.plaudbridge.app.net.ApiClient.RetryResult = org.plaudbridge.app.net.ApiClient.RetryResult.Ok
         override suspend fun retryDelivery(deliveryId: String): org.plaudbridge.app.net.ApiClient.RetryResult {
             retries += deliveryId
@@ -267,16 +297,41 @@ class FileDetailActivityTest {
 
     /** Uploaded a week ago by default: an old recording, routed long ago, nothing to wait for. */
     private fun serverRecording(
-        status: String = "done", error: String? = null, uploadedAt: String = "2026-09-01T05:30:00Z"
+        status: String = "done", error: String? = null, uploadedAt: String = "2026-09-01T05:30:00Z",
+        /** Extra JSON members (e.g. `"stage":"diarizing","progress":0.5`), appended verbatim. */
+        extra: String = ""
     ) = org.plaudbridge.app.models.ServerRecording.fromJson(
         org.json.JSONObject(
             """{"id":"srv-9","device_sn":"SN-A","session_id":9,"filename":"9.mp3","size_bytes":1,
             "duration_s":61.0,"started_at":"2026-09-07T05:27:31Z","uploaded_at":"$uploadedAt",
             "source":"plaud-bridge-android","status":"$status","title":"Server side \"Q3\" call",
             "summary":"From the list.","marks":[6.0],"has_transcript":true,"text_preview":null,
-            "error":${if (error == null) "null" else "\"$error\""}}"""
+            "error":${if (error == null) "null" else "\"$error\""}${if (extra.isEmpty()) "" else ",$extra"}}"""
         )
     )
+
+    /** A finished recording the server heard nothing in: no title, no summary, flagged no_speech. */
+    private fun noSpeechRecording(uploadedAt: String = "2026-09-01T05:30:00Z") = org.plaudbridge.app.models.ServerRecording.fromJson(
+        org.json.JSONObject(
+            """{"id":"srv-9","device_sn":"SN-A","session_id":9,"filename":"9.mp3","size_bytes":1,
+            "duration_s":61.0,"started_at":"2026-09-07T05:27:31Z","uploaded_at":"$uploadedAt",
+            "source":"plaud-bridge-android","status":"done","title":null,"summary":null,"marks":[],
+            "has_transcript":true,"text_preview":"","error":null,"no_speech":true}"""
+        )
+    )
+
+    private val noSpeechTranscript = """{"text":"","segments":[],"no_speech":true}"""
+
+    /** An upload time a minute ago: inside the window in which the router may not have run yet. */
+    private fun justNowIso(): String = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply {
+        timeZone = java.util.TimeZone.getTimeZone("UTC")
+    }.format(java.util.Date(System.currentTimeMillis() - 60_000L))
+
+    private fun menuOf(activity: FileDetailActivity): android.view.Menu =
+        android.widget.PopupMenu(activity, activity.findViewById(R.id.moreButton)).also {
+            it.menuInflater.inflate(R.menu.menu_file_detail, it.menu)
+            activity.applyMenuVisibility(it.menu)
+        }.menu
 
     private fun launchServer(source: FileDetailActivity.ServerDetailSource, id: String = "srv-9"): FileDetailActivity =
         serverController(source, id).get()
@@ -329,10 +384,581 @@ class FileDetailActivityTest {
         val fake = FakeServerSource(serverRecording("transcribing"), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending)
         val activity = launchServer(fake)
         assertEquals("Server side \"Q3\" call", activity.findViewById<android.widget.TextView>(R.id.fileNameLabel).text.toString())
-        assertEquals("Transcribing…", activity.findViewById<android.widget.TextView>(R.id.statusBadge).text.toString())
+        assertEquals("Transcribing", activity.findViewById<android.widget.TextView>(R.id.statusBadge).text.toString())
         assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.emptyState).visibility)
+        assertEquals("Transcribing", activity.findViewById<android.widget.TextView>(R.id.emptyTitle).text.toString())
         assertEquals(View.GONE, activity.findViewById<View>(R.id.transcriptActions).visibility)
         assertEquals("Check for transcript", activity.findViewById<android.widget.Button>(R.id.generateButton).text.toString())
+        // No percentage from the server: the bar is there but indeterminate.
+        val bar = activity.findViewById<com.google.android.material.progressindicator.LinearProgressIndicator>(R.id.transcriptionProgress)
+        assertEquals(View.VISIBLE, bar.visibility)
+        assertTrue(bar.isIndeterminate)
+    }
+
+    // MARK: - Recordings with no speech
+
+    @Test
+    fun noSpeechRecordingShowsItsOwnEmptyStateKeepsThePlayerAndHidesTheTextActions() {
+        val fake = FakeServerSource(noSpeechRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(noSpeechTranscript))
+        val activity = launchServer(fake)
+        // The header says why there is no title rather than showing the server's file name.
+        assertEquals("No speech detected", activity.findViewById<android.widget.TextView>(R.id.fileNameLabel).text.toString())
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.statusBadge).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.transcriptionProgress).visibility)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.emptyState).visibility)
+        assertEquals("No speech detected", activity.findViewById<android.widget.TextView>(R.id.emptyTitle).text.toString())
+        assertEquals("No speech was detected in this recording.",
+            activity.findViewById<android.widget.TextView>(R.id.emptySubtitle).text.toString())
+        // Nothing to check for, copy or export; nothing to summarize.
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.generateButton).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.transcriptActions).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.transcriptText).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.summaryHeader).visibility)
+        // Nothing was routed either, and no "No automations ran" verdict is needed.
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.automationsHeader).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.automationsEmpty).visibility)
+        // The audio is still there to listen to (the player binds when ExoPlayer is available;
+        // on the JVM it may not be, so only check that the bind was attempted through the
+        // server stream path, which never throws).
+        val menu = android.widget.PopupMenu(activity, activity.findViewById(R.id.moreButton)).also {
+            it.menuInflater.inflate(R.menu.menu_file_detail, it.menu)
+            activity.applyMenuVisibility(it.menu)
+        }.menu
+        assertEquals(false, menu.findItem(R.id.action_run_automations).isVisible)
+        assertEquals(false, menu.findItem(R.id.action_run_automations_with_instructions).isVisible)
+        assertEquals(false, menu.findItem(R.id.action_copy_summary).isVisible)
+        assertEquals(false, menu.findItem(R.id.action_copy_transcript).isVisible)
+        assertEquals(false, menu.findItem(R.id.action_export_markdown).isVisible)
+        assertTrue(menu.findItem(R.id.action_retranscribe).isVisible)
+        assertTrue(menu.findItem(R.id.action_delete).isVisible)
+        // Nothing to wait for: no routing polls.
+        val before = fake.routingCalls.size
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(5, java.util.concurrent.TimeUnit.MINUTES)
+        assertEquals(before, fake.routingCalls.size)
+    }
+
+    @Test
+    fun noSpeechTranscriptCachedOnThePhoneShowsTheEmptyStateBeforeTheServerAnswers() {
+        // The background title sync stored the empty transcript document; opened offline, the
+        // phone copy alone must already explain itself.
+        val file = storeFile(noSpeechTranscript, serverId = "srv-9")
+        val activity = launch(file.id)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.emptyState).visibility)
+        assertEquals("No speech detected", activity.findViewById<android.widget.TextView>(R.id.emptyTitle).text.toString())
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.generateButton).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.transcriptActions).visibility)
+    }
+
+    @Test
+    fun aFreshSpokenRecordingOverridesACachedNoSpeechDocument() {
+        // Re-transcribed elsewhere: the phone still caches the empty document, the server now
+        // has a spoken transcript. The server's word wins, in this direction too.
+        val file = storeFile(noSpeechTranscript, serverId = "srv-9")
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
+        configureServer(fake)
+        val activity = launchBoth(file.id)
+        assertEquals("Server side \"Q3\" call", activity.findViewById<android.widget.TextView>(R.id.fileNameLabel).text.toString())
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.transcriptText).visibility)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.transcriptActions).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.emptyState).visibility)
+        assertTrue(menuOf(activity).findItem(R.id.action_copy_transcript).isVisible)
+        assertTrue(menuOf(activity).findItem(R.id.action_run_automations).isVisible)
+        // The cache is brought up to date.
+        assertEquals(transcriptJson, RecordingStore.allFiles.single().transcriptJSON)
+    }
+
+    @Test
+    fun aFreshNoSpeechRecordingSuppressesCachedSpokenText() {
+        // The other direction: the phone caches a spoken transcript, the server has since
+        // re-transcribed and heard nothing. Its object arrives first, the document later.
+        val file = storeFile(transcriptJson, serverId = "srv-9")
+        val fake = FakeServerSource(noSpeechRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(noSpeechTranscript))
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        fake.transcriptGate = gate
+        configureServer(fake)
+        val activity = launchBoth(file.id)
+        // Recording object known, transcript document still on the wire: no stale text, no actions.
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.transcriptText).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.transcriptActions).visibility)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.emptyState).visibility)
+        assertEquals("No speech detected", activity.findViewById<android.widget.TextView>(R.id.emptyTitle).text.toString())
+        assertEquals("No speech was detected in this recording.",
+            activity.findViewById<android.widget.TextView>(R.id.emptySubtitle).text.toString())
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.summaryHeader).visibility)
+        var menu = menuOf(activity)
+        assertEquals(false, menu.findItem(R.id.action_copy_transcript).isVisible)
+        assertEquals(false, menu.findItem(R.id.action_export_markdown).isVisible)
+        assertEquals(false, menu.findItem(R.id.action_copy_summary).isVisible)
+        assertEquals(false, menu.findItem(R.id.action_run_automations).isVisible)
+        fake.transcriptGate = null
+        gate.complete(Unit)
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.transcriptText).visibility)
+        assertEquals("No speech detected", activity.findViewById<android.widget.TextView>(R.id.emptyTitle).text.toString())
+        menu = menuOf(activity)
+        assertEquals(false, menu.findItem(R.id.action_copy_transcript).isVisible)
+        // The phone's cache now holds the empty document, so the list agrees next time.
+        assertEquals(noSpeechTranscript, RecordingStore.allFiles.single().transcriptJSON)
+    }
+
+    @Test
+    fun aRecentNoSpeechUploadDoesNotWaitForARouterRun() {
+        // Uploaded a minute ago, but silent: the server routes nothing, so there is no run to
+        // wait for and no reason to poll the automations.
+        val fake = FakeServerSource(noSpeechRecording(uploadedAt = justNowIso()), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(noSpeechTranscript))
+        val controller = serverController(fake)
+        val activity = controller.get()
+        val looper = shadowOf(android.os.Looper.getMainLooper())
+        assertEquals(1, fake.routingCalls.size)
+        looper.idleFor(5, java.util.concurrent.TimeUnit.MINUTES)
+        assertEquals(1, fake.routingCalls.size)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.automationsHeader).visibility)
+        // Coming back re-reads once, as for any recording, and then stays quiet.
+        controller.pause().resume()
+        looper.idle()
+        assertEquals(2, fake.routingCalls.size)
+        looper.idleFor(5, java.util.concurrent.TimeUnit.MINUTES)
+        assertEquals(2, fake.routingCalls.size)
+    }
+
+    @Test
+    fun learningThatARecordingIsSilentEndsAWaitForItsRouterRun() {
+        // Opened while transcribing and recently uploaded: a wait for the router's run begins.
+        // The transcription then finishes with no speech: the wait is over, and no poll follows.
+        val fake = FakeServerSource(serverRecording("transcribing", uploadedAt = justNowIso()), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending)
+        val activity = launchServer(fake)
+        val looper = shadowOf(android.os.Looper.getMainLooper())
+        fake.rec = noSpeechRecording(uploadedAt = justNowIso())
+        fake.transcript = org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(noSpeechTranscript)
+        val before = fake.routingCalls.size
+        activity.findViewById<View>(R.id.generateButton).performClick()
+        looper.idle()
+        assertEquals("No speech detected", activity.findViewById<android.widget.TextView>(R.id.emptyTitle).text.toString())
+        // The load re-reads the automations (once for the object, once for the transcript's
+        // arrival), then nothing: no run is coming.
+        assertEquals(before + 2, fake.routingCalls.size)
+        looper.idleFor(5, java.util.concurrent.TimeUnit.MINUTES)
+        assertEquals(before + 2, fake.routingCalls.size)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.automationsHeader).visibility)
+    }
+
+    @Test
+    fun noSpeechRecordingBeingReTranscribedShowsTheProgressNotTheEmptyVerdict() {
+        val file = storeFile(noSpeechTranscript, serverId = "srv-9")
+        val fake = FakeServerSource(serverRecording("pending").copy(noSpeech = false, title = null), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending)
+        configureServer(fake)
+        val activity = launchBoth(file.id)
+        assertEquals("Waiting to transcribe", activity.findViewById<android.widget.TextView>(R.id.statusBadge).text.toString())
+        assertEquals("Waiting to transcribe", activity.findViewById<android.widget.TextView>(R.id.emptyTitle).text.toString())
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.transcriptionProgress).visibility)
+    }
+
+    // MARK: - Transcription progress
+
+    @Test
+    fun transcribingStageAndPercentShowInTheBadgeAndTheBar() {
+        val fake = FakeServerSource(
+            serverRecording("transcribing", extra = """"stage":"transcribing","progress":0.428"""),
+            org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending
+        )
+        val activity = launchServer(fake)
+        assertEquals("Transcribing · 42%", activity.findViewById<android.widget.TextView>(R.id.statusBadge).text.toString())
+        assertEquals("Transcribing · 42%", activity.findViewById<android.widget.TextView>(R.id.emptyTitle).text.toString())
+        val bar = activity.findViewById<com.google.android.material.progressindicator.LinearProgressIndicator>(R.id.transcriptionProgress)
+        assertEquals(View.VISIBLE, bar.visibility)
+        assertEquals(false, bar.isIndeterminate)
+        assertEquals(42, bar.progress)
+    }
+
+    @Test
+    fun transcriptionPollsEveryFewSecondsWhileWorkingThenLoadsTheTranscriptAndStops() {
+        val fake = FakeServerSource(
+            serverRecording("transcribing", extra = """"stage":"transcribing","progress":0.1"""),
+            org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending
+        )
+        val controller = serverController(fake)
+        val activity = controller.get()
+        val looper = shadowOf(android.os.Looper.getMainLooper())
+        val badge = activity.findViewById<android.widget.TextView>(R.id.statusBadge)
+        val bar = activity.findViewById<com.google.android.material.progressindicator.LinearProgressIndicator>(R.id.transcriptionProgress)
+        assertEquals("Transcribing · 10%", badge.text.toString())
+        val before = fake.recordingCalls.size
+        // The server moves on; nothing is read before the interval, one read at the interval.
+        fake.rec = serverRecording("transcribing", extra = """"stage":"transcribing","progress":0.999""")
+        looper.idleFor(FileDetailActivity.TRANSCRIPTION_POLL_INTERVAL_MS - 100, java.util.concurrent.TimeUnit.MILLISECONDS)
+        assertEquals(before, fake.recordingCalls.size)
+        looper.idleFor(100, java.util.concurrent.TimeUnit.MILLISECONDS)
+        assertEquals(before + 1, fake.recordingCalls.size)
+        // Rounded down and capped: never 100% while still transcribing.
+        assertEquals("Transcribing · 99%", badge.text.toString())
+        assertEquals(99, bar.progress)
+        // Stages without a percentage: words only, bar indeterminate.
+        fake.rec = serverRecording("transcribing", extra = """"stage":"diarizing","progress":1.0""")
+        looper.idleFor(FileDetailActivity.TRANSCRIPTION_POLL_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        assertEquals(before + 2, fake.recordingCalls.size)
+        assertEquals("Identifying speakers", badge.text.toString())
+        assertTrue(bar.isIndeterminate)
+        fake.rec = serverRecording("transcribing", extra = """"stage":"summarizing"""")
+        looper.idleFor(FileDetailActivity.TRANSCRIPTION_POLL_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        assertEquals("Summarizing", badge.text.toString())
+        // Done: the object the poll brought back is the one shown (no second read of it), the
+        // transcript is loaded from it, the badge and bar go, polling stops.
+        val beforeDone = fake.recordingCalls.size
+        fake.rec = serverRecording()
+        fake.transcript = org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson)
+        looper.idleFor(FileDetailActivity.TRANSCRIPTION_POLL_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        assertEquals(beforeDone + 1, fake.recordingCalls.size)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.transcriptText).visibility)
+        assertEquals(View.GONE, badge.visibility)
+        assertEquals(View.GONE, bar.visibility)
+        looper.idleFor(5, java.util.concurrent.TimeUnit.MINUTES)
+        assertEquals(beforeDone + 1, fake.recordingCalls.size)
+    }
+
+    @Test
+    fun aPollThatSeesTheTranscriptionFailShowsThatAndStops() {
+        val fake = FakeServerSource(serverRecording("transcribing"), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending)
+        val activity = launchServer(fake)
+        val looper = shadowOf(android.os.Looper.getMainLooper())
+        val before = fake.recordingCalls.size
+        fake.rec = serverRecording("failed", error = "GPU on fire")
+        looper.idleFor(FileDetailActivity.TRANSCRIPTION_POLL_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        // Exactly one read: the failed object the poll got is the one shown, not re-fetched.
+        assertEquals(before + 1, fake.recordingCalls.size)
+        assertEquals("Failed", activity.findViewById<android.widget.TextView>(R.id.statusBadge).text.toString())
+        assertEquals("GPU on fire", activity.findViewById<android.widget.TextView>(R.id.emptySubtitle).text.toString())
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.transcriptionProgress).visibility)
+        looper.idleFor(5, java.util.concurrent.TimeUnit.MINUTES)
+        assertEquals(before + 1, fake.recordingCalls.size)
+    }
+
+    @Test
+    fun legacyPhoneCopyKeepsWatchingTheTranscriptionAcrossALeaveAndATransientFailure() {
+        // A phone copy without a server id: the lookup resolves it and the transcript answers 409.
+        // No recording object yet, but the 409 is enough to keep watching, across a leave and
+        // a failed first read.
+        val fake = FakeServerSource(serverRecording("transcribing"), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending)
+        FileDetailActivity.serverSource = fake
+        val http = okhttp3.mockwebserver.MockWebServer().also { it.start() }
+        try {
+            RecordingStore.serverBaseUrl = http.url("/").toString().trimEnd('/')
+            RecordingStore.serverAuthToken = "tok"
+            http.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(200).setBody("""{"id":"srv-9"}"""))
+            http.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(409))
+            val file = storeFile(null, serverId = null, uploaded = true)
+            val controller = controller(file.id)
+            val activity = controller.get()
+            val looper = shadowOf(android.os.Looper.getMainLooper())
+            val deadline = System.currentTimeMillis() + 10_000
+            while (fake.routingCalls.isEmpty() && System.currentTimeMillis() < deadline) {
+                Thread.sleep(20)
+                looper.idle()
+            }
+            assertEquals("srv-9", RecordingStore.allFiles.single().serverId)
+            assertTrue(fake.recordingCalls.isEmpty())
+            // Leave before the first poll: nothing is read while away.
+            controller.pause()
+            looper.idleFor(5, java.util.concurrent.TimeUnit.MINUTES)
+            assertTrue(fake.recordingCalls.isEmpty())
+            // Back: asked at once. The read fails; the watch goes on and the next one lands.
+            fake.recordingFailures = 1
+            controller.resume()
+            looper.idle()
+            assertEquals(1, fake.recordingCalls.size)
+            assertEquals(View.GONE, activity.findViewById<View>(R.id.statusBadge).visibility)
+            looper.idleFor(FileDetailActivity.TRANSCRIPTION_POLL_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            assertEquals(2, fake.recordingCalls.size)
+            assertEquals("Transcribing", activity.findViewById<android.widget.TextView>(R.id.statusBadge).text.toString())
+            assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.transcriptionProgress).visibility)
+            // Finished: the transcript comes through the object the poll returned.
+            fake.rec = serverRecording()
+            fake.transcript = org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson)
+            looper.idleFor(FileDetailActivity.TRANSCRIPTION_POLL_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            assertEquals(3, fake.recordingCalls.size)
+            assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.transcriptText).visibility)
+            assertEquals(View.GONE, activity.findViewById<View>(R.id.statusBadge).visibility)
+            looper.idleFor(5, java.util.concurrent.TimeUnit.MINUTES)
+            assertEquals(3, fake.recordingCalls.size)
+        } finally {
+            http.shutdown()
+        }
+    }
+
+    @Test
+    fun transcriptionPollingPausesWithTheScreenAndAsksAtOnceOnReturn() {
+        val fake = FakeServerSource(serverRecording("pending"), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending)
+        val controller = serverController(fake)
+        val activity = controller.get()
+        val looper = shadowOf(android.os.Looper.getMainLooper())
+        assertEquals("Waiting to transcribe", activity.findViewById<android.widget.TextView>(R.id.statusBadge).text.toString())
+        controller.pause()
+        val before = fake.recordingCalls.size
+        looper.idleFor(5, java.util.concurrent.TimeUnit.MINUTES)
+        assertEquals(before, fake.recordingCalls.size)
+        fake.rec = serverRecording("transcribing", extra = """"stage":"transcribing","progress":0.5""")
+        controller.resume()
+        looper.idle()
+        assertEquals(before + 1, fake.recordingCalls.size)
+        assertEquals("Transcribing · 50%", activity.findViewById<android.widget.TextView>(R.id.statusBadge).text.toString())
+        looper.idleFor(FileDetailActivity.TRANSCRIPTION_POLL_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        assertEquals(before + 2, fake.recordingCalls.size)
+    }
+
+    @Test
+    fun aFinishedRecordingIsNeverPolled() {
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
+        launchServer(fake)
+        val before = fake.recordingCalls.size
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(5, java.util.concurrent.TimeUnit.MINUTES)
+        assertEquals(before, fake.recordingCalls.size)
+    }
+
+    // MARK: - Run automations with instructions
+
+    private fun latestDialog() = org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+
+    @Test
+    fun runWithInstructionsSendsTheTrimmedTextWithItsOwnKey() {
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
+        val activity = launchServer(fake)
+        val menu = android.widget.PopupMenu(activity, activity.findViewById(R.id.moreButton)).also {
+            it.menuInflater.inflate(R.menu.menu_file_detail, it.menu)
+            activity.applyMenuVisibility(it.menu)
+        }.menu
+        assertTrue(menu.findItem(R.id.action_run_automations_with_instructions).isVisible)
+        assertTrue(menu.findItem(R.id.action_run_automations_with_instructions).isEnabled)
+        assertTrue(activity.onMenuAction(R.id.action_run_automations_with_instructions))
+        val dialog = latestDialog()
+        val run = dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)
+        val field = dialog.findViewById<android.widget.EditText>(R.id.instructionsField)!!
+        // Run is off until there is something to send; blanks do not count.
+        assertEquals(false, run.isEnabled)
+        field.setText("   ")
+        assertEquals(false, run.isEnabled)
+        field.setText("  file this as a work meeting  ")
+        assertTrue(run.isEnabled)
+        run.performClick()
+        val looper = shadowOf(android.os.Looper.getMainLooper())
+        looper.idle()
+        assertEquals(listOf("srv-9"), fake.reruns)
+        assertEquals(listOf<String?>("file this as a work meeting"), fake.rerunInstructions)
+        assertEquals(1, fake.rerunKeys.size)
+        assertEquals("Automations queued", ShadowToast.getTextOfLatestToast())
+        // A plain run afterwards is a new intent: its own key, no instructions.
+        assertTrue(activity.onMenuAction(R.id.action_run_automations))
+        looper.idle()
+        assertEquals(listOf<String?>("file this as a work meeting", null), fake.rerunInstructions)
+        assertEquals(2, fake.rerunKeys.toSet().size)
+    }
+
+    @Test
+    fun instructionsAreCappedAtTheServersLimit() {
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
+        val activity = launchServer(fake)
+        assertTrue(activity.onMenuAction(R.id.action_run_automations_with_instructions))
+        val dialog = latestDialog()
+        val field = dialog.findViewById<android.widget.EditText>(R.id.instructionsField)!!
+        field.setText("x".repeat(2500))
+        // The field itself stops at the limit, and the counter shows it.
+        assertEquals(2000, field.text.length)
+        val layout = dialog.findViewById<com.google.android.material.textfield.TextInputLayout>(R.id.instructionsLayout)!!
+        assertTrue(layout.isCounterEnabled)
+        assertEquals(2000, layout.counterMaxLength)
+        dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick()
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals("x".repeat(2000), fake.rerunInstructions.single())
+    }
+
+    @Test
+    fun cancellingTheInstructionsDialogSendsNothing() {
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
+        val activity = launchServer(fake)
+        assertTrue(activity.onMenuAction(R.id.action_run_automations_with_instructions))
+        val dialog = latestDialog()
+        dialog.findViewById<android.widget.EditText>(R.id.instructionsField)!!.setText("never mind")
+        dialog.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).performClick()
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertTrue(fake.reruns.isEmpty())
+        assertEquals(false, dialog.isShowing)
+    }
+
+    @Test
+    fun anAmbiguousFailureReplaysTheSameKeyAndTheSameInstructions() {
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
+        fake.routing = runsOf("""{"runs":[${run(id = "run-1", deliveries = "[" + delivery("d-1", "meetings", "ok", "done", "Old") + "]")}],"deliveries":[]}""")
+        fake.rerunResult = org.plaudbridge.app.net.ApiClient.ActionResult.Error("timeout")
+        val activity = launchServer(fake)
+        val looper = shadowOf(android.os.Looper.getMainLooper())
+        assertTrue(activity.onMenuAction(R.id.action_run_automations_with_instructions))
+        latestDialog().apply {
+            findViewById<android.widget.EditText>(R.id.instructionsField)!!.setText("file as work")
+            getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick()
+        }
+        looper.idle()
+        // Reconciliation reads exhausted with nothing new: the guard is back, the intent pending.
+        looper.idleFor(FileDetailActivity.RERUN_REFRESH_DELAYS_MS[1], java.util.concurrent.TimeUnit.MILLISECONDS)
+        assertEquals(1, fake.reruns.size)
+        // Same instructions again: the same intent, replayed with the same key.
+        assertTrue(activity.onMenuAction(R.id.action_run_automations_with_instructions))
+        latestDialog().apply {
+            findViewById<android.widget.EditText>(R.id.instructionsField)!!.setText("file as work")
+            getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick()
+        }
+        looper.idle()
+        assertEquals(2, fake.reruns.size)
+        assertEquals(fake.rerunKeys[0], fake.rerunKeys[1])
+        assertEquals(listOf<String?>("file as work", "file as work"), fake.rerunInstructions)
+        looper.idleFor(FileDetailActivity.RERUN_REFRESH_DELAYS_MS[1], java.util.concurrent.TimeUnit.MILLISECONDS)
+        // Still unresolved. Different instructions now do NOT start a second request that could
+        // run alongside the first: the earlier intent is replayed as it was, and the user is told.
+        ShadowToast.reset()
+        assertTrue(activity.onMenuAction(R.id.action_run_automations_with_instructions))
+        latestDialog().apply {
+            findViewById<android.widget.EditText>(R.id.instructionsField)!!.setText("file as personal")
+            getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick()
+        }
+        looper.idle()
+        assertEquals(3, fake.reruns.size)
+        assertEquals(fake.rerunKeys[0], fake.rerunKeys[2])
+        assertEquals("file as work", fake.rerunInstructions[2])
+        assertEquals("Retrying the earlier run first. Run again once it has finished.", ShadowToast.getTextOfLatestToast())
+        looper.idleFor(FileDetailActivity.RERUN_REFRESH_DELAYS_MS[1], java.util.concurrent.TimeUnit.MILLISECONDS)
+        // A plain run while it is still unresolved replays it too, instructions included.
+        ShadowToast.reset()
+        assertTrue(activity.onMenuAction(R.id.action_run_automations))
+        looper.idle()
+        assertEquals(4, fake.reruns.size)
+        assertEquals(fake.rerunKeys[0], fake.rerunKeys[3])
+        assertEquals("file as work", fake.rerunInstructions[3])
+        assertEquals("Retrying the earlier run first. Run again once it has finished.", ShadowToast.getTextOfLatestToast())
+        looper.idleFor(FileDetailActivity.RERUN_REFRESH_DELAYS_MS[1], java.util.concurrent.TimeUnit.MILLISECONDS)
+        // The server finally answers for real: the intent is settled, and the next tap is new.
+        fake.rerunResult = org.plaudbridge.app.net.ApiClient.ActionResult.Ok
+        assertTrue(activity.onMenuAction(R.id.action_run_automations))
+        looper.idle()
+        assertEquals(5, fake.reruns.size)
+        assertEquals(fake.rerunKeys[0], fake.rerunKeys[4])
+        assertEquals("Automations queued", ShadowToast.getTextOfLatestToast())
+        assertTrue(activity.onMenuAction(R.id.action_run_automations_with_instructions))
+        latestDialog().apply {
+            findViewById<android.widget.EditText>(R.id.instructionsField)!!.setText("file as personal")
+            getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick()
+        }
+        looper.idle()
+        assertEquals(6, fake.reruns.size)
+        assertEquals(false, fake.rerunKeys[5] == fake.rerunKeys[0])
+        assertEquals("file as personal", fake.rerunInstructions[5])
+    }
+
+    @Test
+    fun destructivePromptsNameTheRecordingAsTheScreenDoes() {
+        // Server-only, silent: the header says "No speech detected", so must the Delete prompt.
+        val fake = FakeServerSource(noSpeechRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(noSpeechTranscript))
+        val serverOnly = launchServer(fake)
+        assertTrue(serverOnly.onMenuAction(R.id.action_delete))
+        var message = latestDialog().findViewById<android.widget.TextView>(android.R.id.message)!!.text.toString()
+        assertTrue(message, message.contains("\"No speech detected\""))
+        assertEquals(false, message.contains("9.mp3"))
+        latestDialog().dismiss()
+        // Paired with a phone copy that has audio: Remove from phone and Delete say the same.
+        RecordingStore.clearAll()
+        configureServer(fake)
+        val file = storeFile(noSpeechTranscript, serverId = "srv-9", localPath = File(context.filesDir, "7.mp3").absolutePath, serverTitle = null)
+        val both = launchBoth(file.id)
+        assertEquals("No speech detected", both.findViewById<android.widget.TextView>(R.id.fileNameLabel).text.toString())
+        assertTrue(both.onMenuAction(R.id.action_remove_from_phone))
+        message = latestDialog().findViewById<android.widget.TextView>(android.R.id.message)!!.text.toString()
+        assertTrue(message, message.contains("\"No speech detected\""))
+        assertEquals(false, message.contains("Untitled Recording"))
+        latestDialog().dismiss()
+        assertTrue(both.onMenuAction(R.id.action_delete))
+        message = latestDialog().findViewById<android.widget.TextView>(android.R.id.message)!!.text.toString()
+        assertTrue(message, message.contains("\"No speech detected\""))
+        assertEquals(false, message.contains("Untitled Recording"))
+    }
+
+    @Test
+    fun onlyOnePollReadIsOnTheWireAndALeaveAbandonsIt() {
+        val fake = FakeServerSource(serverRecording("transcribing"), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending)
+        val controller = serverController(fake)
+        val activity = controller.get()
+        val looper = shadowOf(android.os.Looper.getMainLooper())
+        val before = fake.recordingCalls.size
+        // Hold the first poll's read on the wire.
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        fake.recordingGate = gate
+        looper.idleFor(FileDetailActivity.TRANSCRIPTION_POLL_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        assertEquals(before + 1, fake.recordingCalls.size)
+        // However long it takes, no second read starts behind it, whatever re-renders happen.
+        looper.idleFor(5, java.util.concurrent.TimeUnit.MINUTES)
+        controller.pause().resume() // a pause abandons it; the return asks afresh, once
+        looper.idle()
+        assertEquals(before + 2, fake.recordingCalls.size)
+        looper.idleFor(5, java.util.concurrent.TimeUnit.MINUTES)
+        assertEquals(before + 2, fake.recordingCalls.size)
+        // Both reads come back with "done": only the current one is applied (one transcript load).
+        val transcriptReadsBefore = fake.transcriptCalls.size
+        fake.rec = serverRecording()
+        fake.transcript = org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson)
+        fake.recordingGate = null
+        gate.complete(Unit)
+        looper.idle()
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.transcriptText).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.statusBadge).visibility)
+        assertEquals(transcriptReadsBefore + 1, fake.transcriptCalls.size)
+        looper.idleFor(5, java.util.concurrent.TimeUnit.MINUTES)
+        assertEquals(before + 2, fake.recordingCalls.size)
+    }
+
+    @Test
+    fun aStaleAnswerFromBeforeALeaveCannotOverrideTheCurrentOne() {
+        // The read abandoned on pause would have said "done"; the one the return fires says the
+        // server is transcribing again (a re-transcribe from elsewhere). The stale "done" must
+        // not land afterwards and end the polling.
+        val fake = FakeServerSource(serverRecording("transcribing"), org.plaudbridge.app.net.ApiClient.TranscriptResult.Pending)
+        val controller = serverController(fake)
+        val activity = controller.get()
+        val looper = shadowOf(android.os.Looper.getMainLooper())
+        val staleGate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        fake.recordingGate = staleGate
+        looper.idleFor(FileDetailActivity.TRANSCRIPTION_POLL_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        controller.pause()
+        // The return's read answers at once with "transcribing".
+        fake.recordingGate = null
+        controller.resume()
+        looper.idle()
+        assertEquals("Transcribing", activity.findViewById<android.widget.TextView>(R.id.statusBadge).text.toString())
+        // Now the stale read would answer "done": it was abandoned, so nothing changes.
+        val transcriptReads = fake.transcriptCalls.size
+        fake.rec = serverRecording()
+        fake.transcript = org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson)
+        staleGate.complete(Unit)
+        looper.idle()
+        assertEquals("Transcribing", activity.findViewById<android.widget.TextView>(R.id.statusBadge).text.toString())
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.transcriptText).visibility)
+        assertEquals(transcriptReads, fake.transcriptCalls.size)
+        // Polling is still alive and picks the real finish up on its next tick.
+        val before = fake.recordingCalls.size
+        looper.idleFor(FileDetailActivity.TRANSCRIPTION_POLL_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        assertEquals(before + 1, fake.recordingCalls.size)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.transcriptText).visibility)
+        assertEquals(View.GONE, activity.findViewById<View>(R.id.statusBadge).visibility)
+    }
+
+    @Test
+    fun aRunStartedWithInstructionsShowsThemOnItsCard() {
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptJson))
+        val withInstructions = run(deliveries = "[" + delivery("d-1", "meetings", "ok", "done", "Saved") + "]")
+            .replaceFirst("\"model\":\"claude-acp\",", "\"model\":\"claude-acp\",\"instructions\":\"file this as a work meeting\",")
+        fake.routing = runsOf("""{"runs":[$withInstructions],"deliveries":[]}""")
+        val activity = launchServer(fake)
+        val block = automationsList(activity).getChildAt(0)
+        assertEquals("“Instructions: file this as a work meeting”", textOf(block, R.id.automation_run_instructions))
+        // A plain run carries no such line.
+        fake.routing = runsOf("""{"runs":[${run()}],"deliveries":[]}""")
+        activity.onMenuAction(R.id.action_run_automations)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(FileDetailActivity.RERUN_REFRESH_DELAYS_MS[0], java.util.concurrent.TimeUnit.MILLISECONDS)
+        assertEquals(null, automationsList(activity).getChildAt(0).findViewById<View>(R.id.automation_run_instructions))
     }
 
     @Test

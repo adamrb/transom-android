@@ -72,6 +72,27 @@ data class RecordingItem(
             ?: local?.displayName
             ?: server!!.displayTitle
 
+    /**
+     * [title] is a real name (typed by the user, given by the server's AI, or cached from it),
+     * not one of the stand-ins ("Untitled Recording", the server's file name). Rows without one
+     * may say something more useful instead, see [isNoSpeech].
+     */
+    val hasTitle: Boolean
+        get() = local?.takeIf { it.nameEditedByUser }?.name?.isNotBlank() == true ||
+            !server?.title.isNullOrBlank() ||
+            !local?.serverTitle.isNullOrBlank()
+
+    /**
+     * The server finished with this recording and heard nothing in it: no text, no title, no
+     * summary. The server's object is the word on it when the row has one; without one (offline,
+     * before the first list refresh) the transcript document the phone cached says the same.
+     */
+    val isNoSpeech: Boolean
+        get() = server?.noSpeech ?: ServerRecording.transcriptSaysNoSpeech(local?.transcriptJSON)
+
+    /** The server is still working on the recording (queued or transcribing). */
+    val isTranscribing: Boolean get() = status == Status.TRANSCRIBING
+
     /** Recording start for sorting and day headers: server started_at, else local createdAt. */
     val recordedAt: Long
         get() = server?.startedAt ?: local?.createdAt ?: server?.uploadedAt ?: 0L
@@ -107,7 +128,10 @@ data class RecordingItem(
             }
         }
 
-    /** Text the search box matches against besides the title. */
+    /**
+     * Text the search box matches against besides the title. The [title] here is the real or
+     * stand-in name, never the "No speech detected" wording a row may display instead.
+     */
     val searchText: String
         get() = listOfNotNull(title, server?.textPreview, server?.summary, local?.summaryText)
             .joinToString("\n")

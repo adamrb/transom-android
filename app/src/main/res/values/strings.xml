@@ -80,8 +80,15 @@
     <string name="yesterday">Yesterday</string>
     <string name="status_downloading">Downloading</string>
     <string name="status_uploading">Uploading</string>
-    <string name="status_transcribing">Transcribing…</string>
+    <string name="status_transcribing">Transcribing</string>
+    <!-- Transcribing with a known percentage, e.g. "Transcribing · 42%" -->
+    <string name="status_transcribing_percent_fmt">Transcribing · %1$d%%</string>
+    <string name="status_waiting_to_transcribe">Waiting to transcribe</string>
+    <string name="status_identifying_speakers">Identifying speakers</string>
+    <string name="status_summarizing">Summarizing</string>
     <string name="status_failed">Failed</string>
+    <!-- Row title for a finished recording in which the server heard no speech and that has no title -->
+    <string name="no_speech_title">No speech detected</string>
     <string name="remove_from_phone">Remove from phone</string>
     <string name="remove_from_phone_confirm_fmt">This removes the copy of \"%1$s\" from this phone. Your server keeps its copy, and nothing on the recorder changes.</string>
     <string name="removed_from_phone">Removed from this phone</string>
@@ -89,7 +96,8 @@
     <string name="delete_phone_only_confirm_fmt">This permanently deletes \"%1$s\" from this phone. Nothing on the recorder changes.</string>
 
     <!-- File Detail -->
-    <string name="transcription_pending">Your server is still transcribing this. Check back in a bit.</string>
+    <string name="transcription_pending">Your server is still transcribing this. The transcript will appear here when it is ready.</string>
+    <string name="no_speech_detected">No speech was detected in this recording.</string>
     <string name="transcript_not_on_server">Your server has no record of this recording yet. It may still be uploading.</string>
     <string name="transcript_auth_error">The server rejected the access token. Check it in Settings.</string>
     <string name="transcript_server_error">Could not reach your server. It may be down or unreachable.</string>
@@ -119,7 +127,14 @@
     <string name="automations_show_earlier">Show earlier runs</string>
     <string name="automations_earlier_run_fmt">Earlier run · %1$s</string>
     <string name="run_automations">Run automations</string>
+    <string name="run_automations_with_instructions">Run automations with instructions…</string>
+    <string name="automations_instructions_hint">Tell the automations what to do, e.g. file this as a work meeting</string>
+    <string name="run">Run</string>
+    <!-- Shown on a run card when the run was started by hand with instructions -->
+    <string name="automations_instructions_fmt">“Instructions: %1$s”</string>
     <string name="automations_queued">Automations queued</string>
+    <!-- A tap while an earlier Run automations request is still unresolved: that one is re-sent, not the new one -->
+    <string name="automations_retrying_earlier">Retrying the earlier run first. Run again once it has finished.</string>
     <string name="automations_need_transcript">The recording has no transcript to route yet.</string>
     <string name="automation_retry_queued">Retry queued</string>
     <string name="automation_state_working">Working</string>

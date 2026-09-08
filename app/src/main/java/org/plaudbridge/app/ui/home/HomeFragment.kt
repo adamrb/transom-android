@@ -427,7 +427,7 @@ class HomeFragment : Fragment() {
     private fun createRecordingRow(item: RecordingItem): View {
         val row = LayoutInflater.from(requireContext())
             .inflate(R.layout.item_file_row, binding.recentFilesList, false)
-        row.findViewById<TextView>(R.id.fileNameLabel).text = item.title
+        row.findViewById<TextView>(R.id.fileNameLabel).text = RecordingsAdapter.rowTitle(requireContext(), item)
         row.findViewById<TextView>(R.id.fileMetaLabel).text = RecordingsAdapter.metaLine(requireContext(), item)
         row.setOnClickListener {
             startActivity(FileDetailActivity.intentFor(requireContext(), item))

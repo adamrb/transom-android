@@ -5,6 +5,7 @@
     <item name="automation_run_block" type="id" />
     <item name="automation_run_header" type="id" />
     <item name="automation_run_error" type="id" />
+    <item name="automation_run_instructions" type="id" />
     <item name="automation_no_match" type="id" />
     <item name="automation_route_name" type="id" />
     <item name="automation_route_reason" type="id" />

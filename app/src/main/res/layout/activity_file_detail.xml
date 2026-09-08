@@ -91,6 +91,19 @@
                     android:textSize="13sp" />
             </LinearLayout>
 
+            <!-- Transcription progress (only while the server is working on the recording):
+                 determinate when the server reports how far it is, indeterminate otherwise -->
+            <com.google.android.material.progressindicator.LinearProgressIndicator
+                android:id="@+id/transcriptionProgress"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:visibility="gone"
+                app:indicatorColor="@color/orange"
+                app:trackColor="@color/status_pending_bg"
+                app:trackCornerRadius="2dp"
+                app:trackThickness="3dp" />
+
             <!-- Transcript tab (single-tab row, mirrors iOS) -->
             <LinearLayout
                 android:layout_width="wrap_content"

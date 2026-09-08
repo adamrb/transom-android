@@ -55,6 +55,12 @@ class RecordingsFragment : Fragment() {
     private var merged: List<RecordingItem> = emptyList()
     private var query: String? = null
 
+    /**
+     * The one pending quiet re-read of the server list while a row on screen is still being
+     * transcribed, see [schedulePollIfNeeded]. Cancelled whenever the list leaves the screen.
+     */
+    private var pollJob: Job? = null
+
     private val adapter = RecordingsAdapter(
         onTapped = { item -> startActivity(FileDetailActivity.intentFor(requireContext(), item)) },
         onLongPressed = { item -> showRowActions(item) }
@@ -126,10 +132,15 @@ class RecordingsFragment : Fragment() {
         TitleSyncManager.kick()
     }
 
+    override fun onPause() {
+        super.onPause()
+        cancelPoll()
+    }
+
     /** Tabs are switched with show/hide, which does not touch the lifecycle. */
     override fun onHiddenChanged(hidden: Boolean) {
         super.onHiddenChanged(hidden)
-        if (!hidden && _binding != null) refresh()
+        if (hidden) cancelPoll() else if (_binding != null) refresh()
     }
 
     // MARK: - Data
@@ -141,21 +152,23 @@ class RecordingsFragment : Fragment() {
         adapter.submit(shown)
         binding.emptyLabel.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE
         binding.recordingsRecyclerView.visibility = if (shown.isEmpty()) View.GONE else View.VISIBLE
+        schedulePollIfNeeded()
     }
 
     /**
      * Refresh the server snapshot. The rows stay on screen while the spinner runs, and on
      * failure they stay too, behind a slim error line: a flaky connection should not blank a
-     * list the user was just reading.
+     * list the user was just reading. A [quiet] refresh (the transcription poll) skips the
+     * spinner: a list that flashes every few seconds would draw the eye to nothing.
      */
-    private fun refresh() {
+    private fun refresh(quiet: Boolean = false) {
         if (_binding == null) return
         if (!RecordingStore.isServerConfigured) {
             showError(getString(R.string.library_not_configured))
             return
         }
         refreshJob?.cancel()
-        binding.swipeRefresh.isRefreshing = true
+        if (!quiet) binding.swipeRefresh.isRefreshing = true
         refreshJob = viewLifecycleOwner.lifecycleScope.launch {
             val result = RecordingsRepository.refresh()
             if (_binding == null) return@launch
@@ -165,7 +178,30 @@ class RecordingsFragment : Fragment() {
                 is ApiClient.ListResult.AuthError -> showError(getString(R.string.library_auth_failed))
                 is ApiClient.ListResult.Error -> showError(getString(R.string.library_load_failed))
             }
+            // An unchanged list emits nothing to the observer (and so no render): decide here too.
+            schedulePollIfNeeded()
         }
+    }
+
+    /**
+     * While a row on screen is still being transcribed, re-read the server list every few
+     * seconds so its stage and percentage move without a pull. One pending read at a time, only
+     * while the tab is the one showing and the app is in the foreground, and none once every
+     * shown row has settled: the list then goes quiet until the next visit or pull.
+     */
+    private fun schedulePollIfNeeded() {
+        cancelPoll()
+        if (_binding == null || isHidden || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+        if (!shouldPoll(RecordingsMerger.filter(merged, query))) return
+        pollJob = viewLifecycleOwner.lifecycleScope.launch {
+            kotlinx.coroutines.delay(TRANSCRIPTION_POLL_INTERVAL_MS)
+            refresh(quiet = true)
+        }
+    }
+
+    private fun cancelPoll() {
+        pollJob?.cancel()
+        pollJob = null
     }
 
     private fun showError(message: String) {
@@ -279,7 +315,7 @@ class RecordingsFragment : Fragment() {
         if (item.canRemoveFromPhone) actions += getString(R.string.remove_from_phone) to { confirmRemoveFromPhone(item) }
         actions += getString(R.string.delete) to { confirmDelete(item) }
         AlertDialog.Builder(requireContext())
-            .setTitle(item.title)
+            .setTitle(RecordingsAdapter.rowTitle(requireContext(), item))
             .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
             .show()
     }
@@ -313,7 +349,7 @@ class RecordingsFragment : Fragment() {
     private fun confirmRemoveFromPhone(item: RecordingItem) {
         AlertDialog.Builder(requireContext())
             .setTitle(R.string.remove_from_phone)
-            .setMessage(getString(R.string.remove_from_phone_confirm_fmt, item.title))
+            .setMessage(getString(R.string.remove_from_phone_confirm_fmt, RecordingsAdapter.rowTitle(requireContext(), item)))
             .setPositiveButton(R.string.remove_from_phone) { _, _ ->
                 if (RecordingActions.removeFromPhone(item, syncManager)) toast(getString(R.string.removed_from_phone))
             }
@@ -322,10 +358,12 @@ class RecordingsFragment : Fragment() {
     }
 
     private fun confirmDelete(item: RecordingItem) {
+        // The prompt names the row as the list shows it (see RecordingsAdapter.rowTitle).
+        val shownTitle = RecordingsAdapter.rowTitle(requireContext(), item)
         val message = if (item.serverId != null) {
-            getString(R.string.delete_everywhere_confirm_fmt, item.title)
+            getString(R.string.delete_everywhere_confirm_fmt, shownTitle)
         } else {
-            getString(R.string.delete_phone_only_confirm_fmt, item.title)
+            getString(R.string.delete_phone_only_confirm_fmt, shownTitle)
         }
         AlertDialog.Builder(requireContext())
             .setTitle(R.string.delete)
@@ -361,6 +399,7 @@ class RecordingsFragment : Fragment() {
     override fun onDestroyView() {
         super.onDestroyView()
         refreshJob?.cancel()
+        cancelPoll()
         _binding = null
     }
 
@@ -368,5 +407,11 @@ class RecordingsFragment : Fragment() {
         /** Swapped by tests; production always uses the ApiClient-backed default. */
         @androidx.annotation.VisibleForTesting
         var serverActions: ServerRecordingActions = ApiServerRecordingActions
+
+        /** How often the list is re-read while a shown row is still being transcribed. */
+        const val TRANSCRIPTION_POLL_INTERVAL_MS = 5_000L
+
+        /** The list keeps polling only while a row the user can see is still being transcribed. */
+        fun shouldPoll(shown: List<RecordingItem>): Boolean = shown.any { it.isTranscribing }
     }
 }

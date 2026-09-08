@@ -137,6 +137,18 @@ class RoutingRunTest {
     }
 
     @Test
+    fun instructionsMapWhenPresentAndReadAsAbsentOtherwise() {
+        assertNull(RoutingRun.listFromJson(sample).single().instructions)
+        val given = RoutingRun.fromJson(JSONObject("""{"id":"r","instructions":"  file this as a work meeting  "}"""))
+        assertEquals("file this as a work meeting", given.instructions)
+        assertNull(RoutingRun.fromJson(JSONObject("""{"id":"r","instructions":null}""")).instructions)
+        assertNull(RoutingRun.fromJson(JSONObject("""{"id":"r","instructions":"   "}""")).instructions)
+        // The synthetic run for unclaimed deliveries carries none.
+        val only = RoutingRun.listFromJson("""{"runs":[],"deliveries":[{"id":"x","route_name":"m","status":"ok"}]}""")
+        assertNull(only.single().instructions)
+    }
+
+    @Test
     fun blankErrorAndBlankSummaryReadAsAbsent() {
         val run = RoutingRun.fromJson(
             JSONObject("""{"id":"r","error":"","deliveries":[{"id":"d","route_name":"m","status":"ok","result_status":"","result_summary":"  "}]}""")

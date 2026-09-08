@@ -64,6 +64,68 @@ class ServerRecordingTest {
     }
 
     @Test
+    fun noSpeechProgressAndStageMapWithDefaults() {
+        // Older servers send none of the three.
+        val old = ServerRecording.fromJson(JSONObject(full))
+        assertFalse(old.noSpeech)
+        assertNull(old.progress)
+        assertNull(old.stage)
+        assertNull(old.progressPercent)
+        assertFalse(old.isTranscribing)
+
+        val quiet = ServerRecording.fromJson(JSONObject("""{"id":"q","filename":"q.mp3","status":"done","title":null,"no_speech":true}"""))
+        assertTrue(quiet.noSpeech)
+        assertTrue(quiet.isDone)
+        // Strict boolean: a string is not true.
+        assertFalse(ServerRecording.fromJson(JSONObject("""{"id":"q","filename":"q.mp3","no_speech":"true"}""")).noSpeech)
+        assertFalse(ServerRecording.fromJson(JSONObject("""{"id":"q","filename":"q.mp3","no_speech":null}""")).noSpeech)
+
+        val working = ServerRecording.fromJson(JSONObject("""{"id":"w","filename":"w.mp3","status":"transcribing","stage":"transcribing","progress":0.428}"""))
+        assertTrue(working.isTranscribing)
+        assertEquals("transcribing", working.stage)
+        assertEquals(0.428, working.progress!!, 1e-9)
+        assertEquals(42, working.progressPercent)
+
+        val queued = ServerRecording.fromJson(JSONObject("""{"id":"w","filename":"w.mp3","status":"pending","stage":null,"progress":null}"""))
+        assertTrue(queued.isTranscribing)
+        assertNull(queued.stage)
+        assertNull(queued.progress)
+        assertNull(queued.progressPercent)
+        assertEquals("", ServerRecording.fromJson(JSONObject("""{"id":"w","filename":"w.mp3","stage":""}""")).stage ?: "")
+    }
+
+    @Test
+    fun transcriptDocumentNoSpeechIsReadStrictly() {
+        assertTrue(ServerRecording.transcriptSaysNoSpeech("""{"text":"","segments":[],"no_speech":true}"""))
+        assertFalse(ServerRecording.transcriptSaysNoSpeech("""{"text":"Hello","segments":[]}"""))
+        assertFalse(ServerRecording.transcriptSaysNoSpeech("""{"no_speech":false}"""))
+        assertFalse(ServerRecording.transcriptSaysNoSpeech("""{"no_speech":"true"}"""))
+        assertFalse(ServerRecording.transcriptSaysNoSpeech("""[{"text":"bare array"}]"""))
+        assertFalse(ServerRecording.transcriptSaysNoSpeech("<html>login</html>"))
+        assertFalse(ServerRecording.transcriptSaysNoSpeech(null))
+    }
+
+    @Test
+    fun progressPercentRoundsDownCapsAtNinetyNineAndOnlyAppliesWhileTranscribing() {
+        fun pct(status: String, stage: String?, progress: Double?) = ServerRecording.fromJson(JSONObject(
+            """{"id":"p","filename":"p.mp3","status":"$status","stage":${stage?.let { "\"$it\"" } ?: "null"},"progress":${progress ?: "null"}}"""
+        )).progressPercent
+        assertEquals(0, pct("transcribing", "transcribing", 0.0))
+        assertEquals(0, pct("transcribing", "transcribing", 0.0099))
+        assertEquals(42, pct("transcribing", "transcribing", 0.4299))
+        assertEquals(99, pct("transcribing", "transcribing", 0.999))
+        assertEquals(99, pct("transcribing", "transcribing", 1.0))
+        assertEquals(0, pct("transcribing", "transcribing", -1.0))
+        assertEquals(50, pct("transcribing", null, 0.5)) // no stage from an older server
+        assertNull(pct("transcribing", "diarizing", 1.0))
+        assertNull(pct("transcribing", "summarizing", 1.0))
+        assertNull(pct("transcribing", "queued", 0.0))
+        assertNull(pct("pending", null, 0.5))
+        assertNull(pct("done", "transcribing", 1.0))
+        assertNull(pct("transcribing", "transcribing", null))
+    }
+
+    @Test
     fun displayTitleFallsBackToFilenameForNullOrBlankTitle() {
         val noTitle = ServerRecording.fromJson(JSONObject("""{"id":"a","filename":"a.mp3","title":null}"""))
         assertEquals("a.mp3", noTitle.displayTitle)

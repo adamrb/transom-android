@@ -34,13 +34,37 @@ data class ServerRecording(
     val marks: List<Double>,
     val hasTranscript: Boolean,
     val textPreview: String?,
-    val error: String?
+    val error: String?,
+    /** Transcription finished and found nothing to transcribe: no text, no title, no summary. */
+    val noSpeech: Boolean = false,
+    /** 0..1 while the server is transcribing; null when unknown or not applicable. */
+    val progress: Double? = null,
+    /** One of the STAGE_ constants while the server is working on the recording, else null. */
+    val stage: String? = null
 ) {
     /** Name for lists and headers: the AI/manual title when the server has one, else the file name. */
     val displayTitle: String
         get() = title?.trim()?.takeIf { it.isNotEmpty() } ?: filename
 
     val marksCount: Int get() = marks.size
+
+    /** The server has not finished with this recording yet (queued or being transcribed). */
+    val isTranscribing: Boolean get() = status == STATUS_PENDING || status == STATUS_TRANSCRIBING
+
+    /**
+     * Whole percent to show for the transcribing stage, or null when there is none to show:
+     * only meaningful while the audio is actually being transcribed (queued, speaker
+     * identification and summarizing carry no percentage), rounded down and never 100 while
+     * the work is still going.
+     */
+    val progressPercent: Int?
+        get() {
+            if (status != STATUS_TRANSCRIBING) return null
+            if (stage != null && stage != STAGE_TRANSCRIBING) return null
+            val p = progress ?: return null
+            if (p.isNaN()) return null
+            return Math.floor(p * 100).toInt().coerceIn(0, 99)
+        }
 
     /**
      * Timestamp used for sorting and day grouping. Prefer the recording's own start; recordings
@@ -62,6 +86,21 @@ data class ServerRecording(
         const val STATUS_TRANSCRIBING = "transcribing"
         const val STATUS_FAILED = "failed"
         const val STATUS_STORED = "stored"
+
+        const val STAGE_QUEUED = "queued"
+        const val STAGE_TRANSCRIBING = "transcribing"
+        const val STAGE_DIARIZING = "diarizing"
+        const val STAGE_SUMMARIZING = "summarizing"
+
+        /**
+         * The transcript document (GET /recordings/{id}/transcript, also what the phone caches)
+         * says the server heard nothing: {"no_speech": true}. False for anything else, including
+         * documents from older servers and unparseable text.
+         */
+        fun transcriptSaysNoSpeech(json: String?): Boolean {
+            if (json == null) return false
+            return try { JSONObject(json).opt("no_speech") == true } catch (e: Exception) { false }
+        }
 
         /** Parse one recording object. Throws on a missing/blank id; everything else has a default. */
         fun fromJson(obj: JSONObject): ServerRecording {
@@ -87,7 +126,11 @@ data class ServerRecording(
                 marks = marks,
                 hasTranscript = obj.optBoolean("has_transcript", false),
                 textPreview = obj.optNullableString("text_preview"),
-                error = obj.optNullableString("error")
+                error = obj.optNullableString("error"),
+                // Strict boolean: a string "false" must not read as true.
+                noSpeech = obj.opt("no_speech") == true,
+                progress = obj.optDouble("progress", Double.NaN).takeIf { !it.isNaN() },
+                stage = obj.optNullableString("stage")?.takeIf { it.isNotBlank() }
             )
         }
 

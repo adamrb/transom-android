@@ -205,7 +205,7 @@ class RecordingsMergerTest {
         // Phone still says "not uploaded" (the upload receipt has not landed) but the server has it.
         val item = RecordingItem(local(1), server("srv-1", session = 1, status = "done"))
         assertEquals(RecordingItem.Status.NONE, item.status)
-        assertNull(RecordingsAdapter.statusLabelRes(item.status))
+        assertNull(RecordingsAdapter.statusText(androidx.test.core.app.ApplicationProvider.getApplicationContext(), item))
     }
 
     // MARK: - Order and search

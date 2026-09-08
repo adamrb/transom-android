@@ -100,7 +100,9 @@ data class RoutingRun(
     /** Set when the router itself failed (model error, bad JSON); the routes are then empty. */
     val error: String?,
     val routes: List<MatchedRoute>,
-    val deliveries: List<Delivery>
+    val deliveries: List<Delivery>,
+    /** What the user told the automations to do when starting this run by hand; null otherwise. */
+    val instructions: String? = null
 ) {
     val hasInProgressDelivery: Boolean get() = deliveries.any { it.isInProgress }
 
@@ -134,7 +136,8 @@ data class RoutingRun(
                 model = obj.optStringOrNull("model"),
                 error = obj.optStringOrNull("error")?.takeIf { it.isNotBlank() },
                 routes = routes,
-                deliveries = deliveries
+                deliveries = deliveries,
+                instructions = obj.optStringOrNull("instructions")?.trim()?.takeIf { it.isNotEmpty() }
             )
         }
 

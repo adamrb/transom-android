@@ -13,8 +13,8 @@ android {
         targetSdk 34
         // In-app updates compare the server-hosted APK's version_code against this value:
         // EVERY release uploaded to the server must increment versionCode.
-        versionCode 11
-        versionName "0.4.3"
+        versionCode 12
+        versionName "0.4.4"
         // No build-time secrets: the Plaud user access token is fetched at runtime from your
         // self-hosted plaud-bridge-server. local.properties only needs sdk.dir.
     }

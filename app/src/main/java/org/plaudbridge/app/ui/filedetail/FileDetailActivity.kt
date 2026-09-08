@@ -3,6 +3,7 @@ package org.plaudbridge.app.ui.filedetail
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.DialogInterface
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -17,12 +18,14 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -46,6 +49,7 @@ import org.plaudbridge.app.ui.common.MarkdownRenderer
 import org.plaudbridge.app.ui.recordings.ApiServerRecordingActions
 import org.plaudbridge.app.ui.recordings.RecordingActions
 import org.plaudbridge.app.ui.recordings.RecordingItem
+import org.plaudbridge.app.ui.recordings.RecordingsAdapter
 import org.plaudbridge.app.ui.recordings.ServerRecordingActions
 import java.io.File
 import java.text.SimpleDateFormat
@@ -139,7 +143,8 @@ class FileDetailActivity : AppCompatActivity() {
         suspend fun recording(id: String): ApiClient.RecordingResult
         suspend fun transcript(id: String): ApiClient.TranscriptResult
         suspend fun routing(id: String): ApiClient.RoutingResult
-        suspend fun rerunRouting(id: String, idempotencyKey: String): ApiClient.ActionResult
+        /** [instructions] null for a plain run; otherwise the user's text for the automations. */
+        suspend fun rerunRouting(id: String, idempotencyKey: String, instructions: String?): ApiClient.ActionResult
         suspend fun retryDelivery(deliveryId: String): ApiClient.RetryResult
     }
 
@@ -147,8 +152,8 @@ class FileDetailActivity : AppCompatActivity() {
         override suspend fun recording(id: String) = withContext(Dispatchers.IO) { ApiClient.fetchRecording(id) }
         override suspend fun transcript(id: String) = withContext(Dispatchers.IO) { ApiClient.fetchTranscript(id) }
         override suspend fun routing(id: String) = withContext(Dispatchers.IO) { ApiClient.fetchRouting(id) }
-        override suspend fun rerunRouting(id: String, idempotencyKey: String) =
-            withContext(Dispatchers.IO) { ApiClient.rerunRouting(id, idempotencyKey) }
+        override suspend fun rerunRouting(id: String, idempotencyKey: String, instructions: String?) =
+            withContext(Dispatchers.IO) { ApiClient.rerunRouting(id, idempotencyKey, instructions) }
         override suspend fun retryDelivery(deliveryId: String) = withContext(Dispatchers.IO) { ApiClient.retryDelivery(deliveryId) }
     }
 
@@ -175,13 +180,21 @@ class FileDetailActivity : AppCompatActivity() {
         @VisibleForTesting
         val RERUN_REFRESH_DELAYS_MS = longArrayOf(3_000L, 15_000L)
 
+        /** How often the recording is re-read while the server is still transcribing it. */
+        @VisibleForTesting
+        const val TRANSCRIPTION_POLL_INTERVAL_MS = 5_000L
+
         /** A route's reason is a paragraph; show its opening lines and unfold on tap. */
         private const val REASON_COLLAPSED_LINES = 3
 
         /** Recording ids with a Run automations call on the wire, see [runAutomations]. */
         private val rerunsInFlight = mutableSetOf<String>()
-        /** Idempotency key of the user's pending Run automations intent, per server id. */
-        private val pendingRerunKeys = mutableMapOf<String, String>()
+
+        /** One Run automations intent: its idempotency key and the instructions it carries (null for none). */
+        private data class RerunIntent(val key: String, val instructions: String?)
+
+        /** The user's pending Run automations intent, per server id, see [runAutomations]. */
+        private val pendingReruns = mutableMapOf<String, RerunIntent>()
 
         /**
          * The screen currently showing each server recording, so a rerun that finishes after a
@@ -197,7 +210,7 @@ class FileDetailActivity : AppCompatActivity() {
         @VisibleForTesting
         internal fun resetProcessStateForTests() {
             rerunsInFlight.clear()
-            pendingRerunKeys.clear()
+            pendingReruns.clear()
             liveScreens.clear()
         }
 
@@ -267,8 +280,12 @@ class FileDetailActivity : AppCompatActivity() {
     /** onCreate already loaded everything; only a RETURN to the screen needs a refresh. */
     private var resumedBefore = false
 
+    /** Between onResume and onPause: the only time the transcription poll may run. */
+    private var inForeground = false
+
     override fun onResume() {
         super.onResume()
+        inForeground = true
         // Pick up what changed while we were away (a rename, a transcript stored by the
         // background title sync); the server side re-renders in place after its own writes.
         val file = currentFile
@@ -277,9 +294,14 @@ class FileDetailActivity : AppCompatActivity() {
             if (currentModel != null) render()
         }
         // Agents finish their work while the user is elsewhere; coming back should show it.
-        if (resumedBefore && serverRecordingId != null && RecordingStore.isServerConfigured) refreshRouting()
+        if (resumedBefore && serverRecordingId != null && RecordingStore.isServerConfigured) {
+            refreshRouting()
+            // Likewise a transcription that was running when the user left: ask at once.
+            if (transcriptionInProgress) scheduleTranscriptionPoll(0L)
+        }
         resumedBefore = true
         registerAsLiveScreen()
+        syncTranscriptionPolling()
     }
 
     /** This instance is the one showing [serverRecordingId] now, see [liveScreens]. */
@@ -335,22 +357,37 @@ class FileDetailActivity : AppCompatActivity() {
         val item = currentItem() ?: return
         val file = item.local
         val rec = item.server
-        val transcriptJSON = serverTranscriptJSON ?: file?.transcriptJSON
+        // The server's fresh word that there is no speech overrides any transcript text held here
+        // (the phone's cache, or a document fetched before a re-transcribe): nothing to show.
+        val transcriptJSON = if (rec?.noSpeech == true) null else serverTranscriptJSON ?: file?.transcriptJSON
         val transcriptSummary = transcriptJSON?.let { transcriptExportFields(it).second }
         bindContent(
             DetailModel(
-                title = item.title,
+                title = RecordingsAdapter.rowTitle(this, item),
                 recordedAtMillis = item.recordedAt,
                 durationSeconds = item.durationSeconds,
                 summary = transcriptSummary ?: rec?.summary ?: file?.summaryText,
                 transcriptJSON = transcriptJSON
             )
         )
-        bindStatusBadge(item.status)
+        bindStatusBadge(item)
+        bindTranscriptionProgress(item)
         if (transcriptPlainText == null) bindEmptyState(item)
         bindAudio(file, rec)
         bindAutomations()
+        syncTranscriptionPolling()
     }
+
+    /**
+     * The server heard no speech in this recording. Its recording object is authoritative once
+     * fetched (after a re-transcribe it may contradict what the phone cached, in either
+     * direction); only before that does the transcript document held here (the phone's cache)
+     * stand in. Such a recording has no text to show, copy, export or route; the audio is still
+     * there to listen to.
+     */
+    private val isNoSpeech: Boolean
+        get() = serverRecording?.noSpeech
+            ?: ServerRecording.transcriptSaysNoSpeech(serverTranscriptJSON ?: currentFile?.transcriptJSON)
 
     /**
      * Header, summary, highlights and transcript blocks from a [DetailModel]. Leaves the empty
@@ -399,10 +436,10 @@ class FileDetailActivity : AppCompatActivity() {
      * it. A finished recording wears no badge: "Transcribed" or "Uploaded" would just restate
      * that the transcript below exists.
      */
-    private fun bindStatusBadge(status: RecordingItem.Status) {
-        when (status) {
+    private fun bindStatusBadge(item: RecordingItem) {
+        when (item.status) {
             RecordingItem.Status.TRANSCRIBING ->
-                setStatusBadge(getString(R.string.status_transcribing), R.color.orange, R.drawable.bg_status_pending)
+                setStatusBadge(RecordingsAdapter.transcribingText(this, item.server), R.color.orange, R.drawable.bg_status_pending)
             RecordingItem.Status.FAILED ->
                 setStatusBadge(getString(R.string.status_failed), R.color.red, R.drawable.bg_status_pending)
             else -> binding.statusBadge.visibility = View.GONE
@@ -417,6 +454,144 @@ class FileDetailActivity : AppCompatActivity() {
     }
 
     /**
+     * The bar under the header while the server is working on the recording: determinate when
+     * the server reports how far the transcription is, indeterminate for the stages that carry
+     * no percentage (queued, speaker identification, summarizing) and for older servers. The
+     * indicator refuses to switch to indeterminate while visible, so a mode change hides it first.
+     */
+    private fun bindTranscriptionProgress(item: RecordingItem) {
+        val indicator = binding.transcriptionProgress
+        val rec = item.server
+        if (item.status != RecordingItem.Status.TRANSCRIBING || rec == null) {
+            indicator.visibility = View.GONE
+            return
+        }
+        val percent = rec.progressPercent
+        val wantIndeterminate = percent == null
+        if (indicator.isIndeterminate != wantIndeterminate) {
+            indicator.visibility = View.GONE
+            indicator.isIndeterminate = wantIndeterminate
+        }
+        if (percent != null) indicator.setProgressCompat(percent, indicator.visibility == View.VISIBLE)
+        indicator.visibility = View.VISIBLE
+    }
+
+    // MARK: - Transcription polling
+
+    /** The one pending re-read of the recording while the server is still transcribing it. */
+    private var transcriptionPollRunnable: Runnable? = null
+
+    /**
+     * The server is still working on the recording as far as this screen knows: its recording
+     * object says so, or, before any recording object has arrived (a legacy phone copy whose id
+     * the transcript lookup just resolved), the transcript endpoint answered 409. The latter is a
+     * provisional state that the first recording response replaces.
+     */
+    private val transcriptionInProgress: Boolean
+        get() = serverRecording?.isTranscribing ?: transcriptWasPending
+
+    /**
+     * While the server reports the recording as queued or transcribing, re-read it every few
+     * seconds so the stage and percentage move on their own; once it reports done (or failed)
+     * that very object goes through the usual load path (transcript, automations), and the
+     * polling stops. Only while this screen is in front: leaving cancels the poll, coming back
+     * asks at once. Called from every render, so it is idempotent: one poll pending at a time.
+     */
+    private fun syncTranscriptionPolling() {
+        val wanted = inForeground && transcriptionInProgress &&
+            serverRecordingId != null && RecordingStore.isServerConfigured
+        if (!wanted) {
+            cancelTranscriptionPoll()
+            return
+        }
+        // A read already on the wire schedules the next one itself once it lands.
+        if (transcriptionPollRunnable == null && !transcriptionPollInFlight) scheduleTranscriptionPoll(TRANSCRIPTION_POLL_INTERVAL_MS)
+    }
+
+    private fun scheduleTranscriptionPoll(delayMs: Long) {
+        cancelTranscriptionPoll()
+        val serverId = serverRecordingId ?: return
+        val poll = Runnable {
+            transcriptionPollRunnable = null
+            pollTranscription(serverId)
+        }
+        transcriptionPollRunnable = poll
+        routingHandler.postDelayed(poll, delayMs)
+    }
+
+    /** Drop the pending (not yet fired) poll. A read already on the wire is left to land. */
+    private fun cancelTranscriptionPoll() {
+        transcriptionPollRunnable?.let { routingHandler.removeCallbacks(it) }
+        transcriptionPollRunnable = null
+    }
+
+    /**
+     * Leaving the screen: drop the pending poll AND abandon a read on the wire. Its answer would
+     * otherwise land after the one the return fires, and an older status applied over a newer
+     * one (a stale "transcribing" over "done", or the reverse) is exactly what must not happen.
+     */
+    private fun stopTranscriptionPolling() {
+        cancelTranscriptionPoll()
+        transcriptionPollGeneration++ // whatever is on the wire is stale from here on
+        transcriptionPollJob?.cancel()
+        transcriptionPollJob = null
+        transcriptionPollInFlight = false
+    }
+
+    /** The poll read on the wire, if any; cancelled when the screen leaves, see [stopTranscriptionPolling]. */
+    private var transcriptionPollJob: kotlinx.coroutines.Job? = null
+
+    /** True from the moment a poll read starts until its answer is in hand (or it is abandoned). */
+    private var transcriptionPollInFlight = false
+
+    /**
+     * Bumped for every read started and for every stop: a read whose generation is no longer
+     * the current one is stale and must touch nothing, however and whenever it comes back.
+     */
+    private var transcriptionPollGeneration = 0
+
+    /**
+     * One poll: GET the recording. Still working means re-render (and re-schedule); finished
+     * (done or failed) means this object is the one to show, so it goes straight into the load
+     * path rather than being fetched a second time (a second GET that failed would leave the
+     * badge frozen on the old stage with no poll to move it). One read at a time: a second is
+     * never started while one is on the wire, so answers cannot cross.
+     */
+    private fun pollTranscription(serverId: String) {
+        if (transcriptionPollInFlight) return
+        transcriptionPollInFlight = true
+        val generation = ++transcriptionPollGeneration
+        transcriptionPollJob = lifecycleScope.launch {
+            val result = try {
+                serverSource.recording(serverId)
+            } finally {
+                // Only the current read owns the flag: a stale one winding down after a
+                // pause must not clear it under the read the return started.
+                if (generation == transcriptionPollGeneration) transcriptionPollInFlight = false
+            }
+            // A read abandoned on pause normally never reaches this line (cancelled at the
+            // suspension); should its answer arrive anyway, it is stale and applies nothing.
+            if (generation != transcriptionPollGeneration) return@launch
+            when (result) {
+                is ApiClient.RecordingResult.Ok -> {
+                    if (result.recording.isTranscribing) {
+                        serverRecording = result.recording
+                        serverKnowsRecording = true
+                        transcriptWasPending = true
+                        render()
+                    } else {
+                        onServerRecordingLoaded(result.recording)
+                    }
+                }
+                // A blip must not freeze the badge on a stale stage: ask again next time round.
+                is ApiClient.RecordingResult.Error -> syncTranscriptionPolling()
+                // Repeating the same request cannot change these; the next visit asks again.
+                is ApiClient.RecordingResult.NotFound, is ApiClient.RecordingResult.AuthError -> {}
+            }
+        }
+    }
+
+    /**
      * Why there is no transcript yet, and the one button that can change that. "Check for
      * transcript" appears whenever the server has (or should have) this recording; a recording
      * that has not left the phone or the recorder yet gets an explanation and no button.
@@ -426,13 +601,22 @@ class FileDetailActivity : AppCompatActivity() {
         val file = item.local
         when {
             item.serverId != null || file?.uploaded == true -> {
+                // A finished recording with nothing in it: say so, and offer no transcript
+                // button (there is nothing to check for; Re-transcribe stays in the menu).
+                if (rec?.isTranscribing != true && isNoSpeech) {
+                    showEmptyState(getString(R.string.no_speech_title), getString(R.string.no_speech_detected))
+                    return
+                }
+                // While the server works, the title carries the stage (the badge's wording).
+                val title = if (rec?.isTranscribing == true) RecordingsAdapter.transcribingText(this, rec)
+                    else getString(R.string.transcript)
                 val subtitle = when (rec?.status) {
                     ServerRecording.STATUS_FAILED ->
                         rec.error?.takeIf { it.isNotBlank() } ?: getString(R.string.transcription_failed)
                     ServerRecording.STATUS_STORED -> getString(R.string.transcript_not_started)
                     else -> getString(R.string.transcription_pending)
                 }
-                showEmptyState(getString(R.string.transcript), subtitle, getString(R.string.check_transcript)) {
+                showEmptyState(title, subtitle, getString(R.string.check_transcript)) {
                     checkForTranscript()
                 }
             }
@@ -468,24 +652,33 @@ class FileDetailActivity : AppCompatActivity() {
     private fun loadServerRecording(id: String) {
         lifecycleScope.launch {
             when (val result = serverSource.recording(id)) {
-                is ApiClient.RecordingResult.Ok -> {
-                    serverRecording = result.recording
-                    serverKnowsRecording = true
-                    if (result.recording.status == ServerRecording.STATUS_PENDING ||
-                        result.recording.status == ServerRecording.STATUS_TRANSCRIBING) transcriptWasPending = true
-                    render()
-                    // First read of the automations. A recording uploaded minutes ago may sit in
-                    // the gap between "transcript done" and "router run inserted": wait for the
-                    // run rather than declare that nothing ran.
-                    refreshRouting(awaitRun = routingRuns == null && isRecentUpload(result.recording))
-                    if (transcriptPlainText == null) binding.emptySubtitle.text = getString(R.string.checking_transcript)
-                    loadServerTranscript(result.recording)
-                }
+                is ApiClient.RecordingResult.Ok -> onServerRecordingLoaded(result.recording)
                 is ApiClient.RecordingResult.NotFound -> failServer(getString(R.string.recording_not_on_server))
                 is ApiClient.RecordingResult.AuthError -> failServer(getString(R.string.transcript_auth_error))
                 is ApiClient.RecordingResult.Error -> failServer(getString(R.string.transcript_server_error))
             }
         }
+    }
+
+    /**
+     * A recording object has arrived (open, Check for transcript, a poll that saw the
+     * transcription finish): show it, then load what hangs off it, the automations and the
+     * transcript.
+     */
+    private fun onServerRecordingLoaded(rec: ServerRecording) {
+        serverRecording = rec
+        serverKnowsRecording = true
+        if (rec.isTranscribing) transcriptWasPending = true
+        // The server routes nothing for a recording with no speech: no run is coming, so a wait
+        // for one (started before the silence was known) has nothing to wait for.
+        if (rec.noSpeech) clearRoutingWait()
+        render()
+        // First read of the automations. A recording uploaded minutes ago may sit in the gap
+        // between "transcript done" and "router run inserted": wait for the run rather than
+        // declare that nothing ran. Not for a recording with no speech, which is never routed.
+        refreshRouting(awaitRun = routingRuns == null && isRecentUpload(rec) && !rec.noSpeech)
+        if (transcriptPlainText == null && !rec.noSpeech) binding.emptySubtitle.text = getString(R.string.checking_transcript)
+        loadServerTranscript(rec)
     }
 
     private fun loadServerTranscript(rec: ServerRecording) {
@@ -497,8 +690,10 @@ class FileDetailActivity : AppCompatActivity() {
                     render()
                     // A transcript that just landed means the server's router is about to run
                     // (detached, after transcription); re-read the automations until its run
-                    // shows up and keep polling for the agents.
-                    if (arrived) refreshRouting(awaitRun = true)
+                    // shows up and keep polling for the agents. Not for a recording with no
+                    // speech in it: there is nothing to route, so no run is coming.
+                    if (isNoSpeech) clearRoutingWait()
+                    if (arrived) refreshRouting(awaitRun = !isNoSpeech)
                 }
                 is ApiClient.TranscriptResult.Pending -> {
                     transcriptWasPending = true
@@ -707,6 +902,19 @@ class FileDetailActivity : AppCompatActivity() {
         loadRouting()
     }
 
+    /**
+     * Nothing to wait for after all (the recording turned out to have no speech, which the server
+     * never routes): drop the wait for a run, and the poll it was keeping alive unless an agent
+     * is still working on an earlier run, which the poll is also there to follow.
+     */
+    private fun clearRoutingWait() {
+        routingAwaitingRun = false
+        routingAwaitBaselinePending = false
+        if (routingRuns?.any { it.hasInProgressDelivery } == true) return
+        routingPollRunnable?.let { routingHandler.removeCallbacks(it) }
+        routingPollRunnable = null
+    }
+
     /** Run once the next routing read (and any reload queued behind it) has landed or been skipped. */
     private val routingSettledCallbacks = mutableListOf<() -> Unit>()
 
@@ -803,7 +1011,8 @@ class FileDetailActivity : AppCompatActivity() {
         val runs = routingRuns
         binding.automationsList.removeAllViews()
         val transcribed = serverTranscriptReady || serverRecording?.isDone == true
-        val showEmpty = runs != null && runs.isEmpty() && transcribed && !routingAwaitingRun
+        // A recording with no speech had nothing to route: "No automations ran" would be noise.
+        val showEmpty = runs != null && runs.isEmpty() && transcribed && !routingAwaitingRun && !isNoSpeech
         val showRuns = runs != null && runs.isNotEmpty()
         binding.automationsHeader.visibility = if (showEmpty || showRuns) View.VISIBLE else View.GONE
         binding.automationsEmpty.visibility = if (showEmpty) View.VISIBLE else View.GONE
@@ -833,6 +1042,14 @@ class FileDetailActivity : AppCompatActivity() {
         if (!isLatest) {
             block.addView(mutedText(getString(R.string.automations_earlier_run_fmt, run.createdAt?.let { formatMetaDate(it) } ?: ""))
                 .apply { id = R.id.automation_run_header; setPadding(0, dp(12), 0, 0) })
+        }
+        // What the user told the automations when starting this run by hand.
+        run.instructions?.let { instructions ->
+            block.addView(mutedText(getString(R.string.automations_instructions_fmt, instructions)).apply {
+                id = R.id.automation_run_instructions
+                setTypeface(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.ITALIC)
+                setPadding(0, dp(8), 0, 0)
+            })
         }
         run.error?.let { error ->
             block.addView(android.widget.TextView(this).apply {
@@ -1047,17 +1264,27 @@ class FileDetailActivity : AppCompatActivity() {
      * guard stays until the live screen has re-read the section and can show it; with no screen
      * left to reconcile, it is released, and the next open reads the history fresh anyway.
      */
-    private fun runAutomations(serverId: String) {
+    private fun runAutomations(serverId: String, instructions: String? = null) {
         val history = routingRuns ?: return // not loaded yet; the menu item is disabled then
         if (!rerunsInFlight.add(serverId)) return
         val baselineRunId = history.firstOrNull()?.id
         // One idempotency key per user intent: kept across an ambiguous failure so the next
-        // tap re-sends the same key and the server replays the run it already made instead
-        // of starting a second one; dropped once the server has answered definitively.
-        val idempotencyKey = pendingRerunKeys.getOrPut(serverId) { UUID.randomUUID().toString() }
+        // tap re-sends the same key AND the same instructions, and the server replays the run
+        // it already made instead of starting a second one; dropped once the server has
+        // answered definitively. While an intent is unresolved it is the only thing that may
+        // go on the wire, whatever the user typed this time: the earlier request may still be
+        // running on the server (routing can take minutes), and a second one with other
+        // instructions would run its side effects alongside. The user is told, so the new words
+        // are not silently lost; once the earlier run is settled a fresh tap gets its own key.
+        val pending = pendingReruns[serverId]
+        val intent = pending ?: RerunIntent(UUID.randomUUID().toString(), instructions)
+        if (pending != null && pending.instructions != instructions) {
+            Toast.makeText(this, R.string.automations_retrying_earlier, Toast.LENGTH_LONG).show()
+        }
+        pendingReruns[serverId] = intent
         rerunScope.launch {
             val result = try {
-                serverSource.rerunRouting(serverId, idempotencyKey)
+                serverSource.rerunRouting(serverId, intent.key, intent.instructions)
             } catch (e: Throwable) {
                 rerunsInFlight.remove(serverId)
                 throw e
@@ -1065,16 +1292,40 @@ class FileDetailActivity : AppCompatActivity() {
             // Only companion state and ids from here: this coroutine may outlive the screen that
             // started it by minutes and must not keep that screen (and its views) alive.
             val screen = liveScreens[serverId]
-            if (!isAmbiguousRerunFailure(result)) pendingRerunKeys.remove(serverId)
+            if (!isAmbiguousRerunFailure(result)) pendingReruns.remove(serverId)
             if (screen == null || !isAmbiguousRerunFailure(result)) rerunsInFlight.remove(serverId)
             screen?.onRerunFinished(result, baselineRunId) { runFound ->
                 rerunsInFlight.remove(serverId)
                 // The run the lost response was about has shown up: the intent is spent, so the
                 // next tap is a new one and must not replay it. Not found: keep the key, the
                 // request may still have landed and a replay is the safe outcome.
-                if (runFound) pendingRerunKeys.remove(serverId)
+                if (runFound) pendingReruns.remove(serverId)
             }
         }
+    }
+
+    /**
+     * Menu: run the router with a note from the user ("file this as a work meeting"). A
+     * multi-line field with a counter; Run stays off until something is typed, and the text is
+     * trimmed and cut to what the server accepts before it goes to [runAutomations].
+     */
+    private fun showRunWithInstructionsDialog(serverId: String) {
+        val view = layoutInflater.inflate(R.layout.dialog_run_instructions, null)
+        val field = view.findViewById<EditText>(R.id.instructionsField)
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.run_automations)
+            .setView(view)
+            .setPositiveButton(R.string.run) { _, _ ->
+                val text = field.text.toString().trim().take(ApiClient.ROUTE_INSTRUCTIONS_MAX)
+                if (text.isNotEmpty()) runAutomations(serverId, text)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .create()
+        dialog.show()
+        val run = dialog.getButton(DialogInterface.BUTTON_POSITIVE)
+        run.isEnabled = !field.text.isNullOrBlank()
+        field.doAfterTextChanged { run.isEnabled = !it.isNullOrBlank() }
+        field.requestFocus()
     }
 
     /**
@@ -1222,6 +1473,9 @@ class FileDetailActivity : AppCompatActivity() {
                     transcriptWasPending = true
                     binding.emptySubtitle.text = getString(R.string.transcription_pending)
                     bindAutomations() // a cached transcript on screen no longer counts as routable
+                    // With the id now known, the recording object can be watched until it is
+                    // done (provisionally, on the strength of the 409, see transcriptionInProgress).
+                    syncTranscriptionPolling()
                 }
                 is ApiClient.TranscriptResult.NotFound -> {
                     binding.emptySubtitle.text = getString(R.string.transcript_not_on_server)
@@ -1498,6 +1752,8 @@ class FileDetailActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        inForeground = false
+        stopTranscriptionPolling()
         // Pause playback when leaving the screen
         exoPlayer?.takeIf { it.isPlaying }?.let {
             it.pause()
@@ -1544,13 +1800,18 @@ class FileDetailActivity : AppCompatActivity() {
         menu.findItem(R.id.action_copy_transcript)?.isVisible = transcriptPlainText != null
         menu.findItem(R.id.action_export_markdown)?.isVisible = transcriptPlainText != null
         menu.findItem(R.id.action_retranscribe)?.isVisible = hasServer
-        // The router needs a transcript to read (see serverTranscriptReady) and a server that has
-        // the automations endpoints at all.
+        // The router needs a transcript to read (see serverTranscriptReady; a recording with no
+        // speech has none, whatever the server's transcript endpoint answered) and a server that
+        // has the automations endpoints at all.
         // Disabled until the history has loaded: reconciling an ambiguous rerun compares against
         // the latest run before the tap, which needs that history to be known.
-        menu.findItem(R.id.action_run_automations)?.apply {
-            isVisible = hasServer && serverTranscriptReady && !routingUnsupported
-            isEnabled = serverRecordingId !in rerunsInFlight && routingRuns != null
+        val canRunAutomations = hasServer && serverTranscriptReady && !routingUnsupported && !isNoSpeech
+        val runAutomationsEnabled = serverRecordingId !in rerunsInFlight && routingRuns != null
+        for (id in intArrayOf(R.id.action_run_automations, R.id.action_run_automations_with_instructions)) {
+            menu.findItem(id)?.apply {
+                isVisible = canRunAutomations
+                isEnabled = runAutomationsEnabled
+            }
         }
         menu.findItem(R.id.action_remove_from_phone)?.isVisible = currentItem()?.canRemoveFromPhone == true
         menu.findItem(R.id.action_delete)?.isVisible = true
@@ -1569,6 +1830,7 @@ class FileDetailActivity : AppCompatActivity() {
             R.id.action_export_markdown -> exportMarkdown(model)
             R.id.action_retranscribe -> serverRecordingId?.let { retranscribeOnServer(it) }
             R.id.action_run_automations -> serverRecordingId?.let { runAutomations(it) }
+            R.id.action_run_automations_with_instructions -> serverRecordingId?.let { showRunWithInstructionsDialog(it) }
             R.id.action_remove_from_phone -> confirmRemoveFromPhone(item)
             R.id.action_delete -> confirmDelete(item)
             else -> return false
@@ -1631,7 +1893,7 @@ class FileDetailActivity : AppCompatActivity() {
     private fun confirmRemoveFromPhone(item: RecordingItem) {
         AlertDialog.Builder(this)
             .setTitle(R.string.remove_from_phone)
-            .setMessage(getString(R.string.remove_from_phone_confirm_fmt, item.title))
+            .setMessage(getString(R.string.remove_from_phone_confirm_fmt, RecordingsAdapter.rowTitle(this, item)))
             .setPositiveButton(R.string.remove_from_phone) { _, _ -> removeFromPhone(item) }
             .setNegativeButton(R.string.cancel, null)
             .show()
@@ -1650,10 +1912,11 @@ class FileDetailActivity : AppCompatActivity() {
     }
 
     private fun confirmDelete(item: RecordingItem) {
+        val shownTitle = RecordingsAdapter.rowTitle(this, item)
         val message = if (item.serverId != null) {
-            getString(R.string.delete_everywhere_confirm_fmt, item.title)
+            getString(R.string.delete_everywhere_confirm_fmt, shownTitle)
         } else {
-            getString(R.string.delete_phone_only_confirm_fmt, item.title)
+            getString(R.string.delete_phone_only_confirm_fmt, shownTitle)
         }
         AlertDialog.Builder(this)
             .setTitle(R.string.delete)

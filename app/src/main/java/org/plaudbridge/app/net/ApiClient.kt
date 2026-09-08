@@ -37,6 +37,7 @@ import java.util.concurrent.TimeUnit
  *   GET  /api/v1/recordings/{id}/audio            audio/mpeg with Range support (streamed by ExoPlayer)
  *   GET  /api/v1/recordings/{id}/routing          {"runs": [...], "deliveries": [...]} newest run first
  *   POST /api/v1/recordings/{id}/route            re-run the AI router -> the new run object
+ *                                                  (optional body {"instructions": ...}, Idempotency-Key header)
  *   POST /api/v1/deliveries/{id}/retry            retry a failed delivery (200 / 409 not retryable)
  *   GET  /api/v1/vocabulary                       {"entries": [...], "editor_text": "...", "hotwords": "..."}
  *   PUT  /api/v1/vocabulary                       {"entries": [...]} replaces the list -> {"entries": [...]}
@@ -599,16 +600,24 @@ object ApiClient {
      * timeout rather than the shared 120 s one, which a slow model could exceed while the run
      * still completes.
      */
+    /** Longest instructions text the route endpoint accepts; longer ones are cut rather than rejected. */
+    const val ROUTE_INSTRUCTIONS_MAX = 2000
+
     /**
      * Re-run the router. [idempotencyKey] (per user intent, reused on retry) makes a re-sent
      * request return the run the server already made instead of starting another one with
      * duplicate side effects; the server replays by key and dedupes concurrent duplicates.
+     * [instructions], when given, travel as the JSON body {"instructions": ...} (trimmed, cut to
+     * [ROUTE_INSTRUCTIONS_MAX]); blank instructions mean the same empty-bodied request as before.
      */
-    fun rerunRouting(recordingId: String, idempotencyKey: String? = null): ActionResult {
+    fun rerunRouting(recordingId: String, idempotencyKey: String? = null, instructions: String? = null): ActionResult {
+        val text = instructions?.trim()?.take(ROUTE_INSTRUCTIONS_MAX)?.takeIf { it.isNotEmpty() }
+        val body = if (text == null) ByteArray(0).toRequestBody(null)
+        else JSONObject().put("instructions", text).toString().toRequestBody(jsonType)
         val builder = Request.Builder()
             .url("${baseUrl()}/api/v1/recordings/$recordingId/route")
             .header("Authorization", authHeader())
-            .post(ByteArray(0).toRequestBody(null))
+            .post(body)
         if (!idempotencyKey.isNullOrBlank()) builder.header("Idempotency-Key", idempotencyKey)
         val req = builder.build()
         val patient = client.newBuilder().readTimeout(REROUTE_READ_TIMEOUT_S, TimeUnit.SECONDS).build()
