@@ -607,7 +607,53 @@ class ApiClientTest {
         server.enqueue(MockResponse().setResponseCode(401))
         assertEquals(ApiClient.ActionResult.AuthError(401), ApiClient.rerunRouting("rec-1"))
         server.enqueue(MockResponse().setResponseCode(500))
-        assertEquals(ApiClient.ActionResult.Error("HTTP 500"), ApiClient.rerunRouting("rec-1"))
+        assertEquals(ApiClient.ActionResult.Error("HTTP 500", 500), ApiClient.rerunRouting("rec-1"))
+        // A refusal with a human-readable detail carries it, so screens can show the words.
+        server.enqueue(MockResponse().setResponseCode(409).setBody("""{"detail":"Automations are turned off on the server"}"""))
+        assertEquals(
+            ApiClient.ActionResult.Error("HTTP 409", 409, "Automations are turned off on the server"),
+            ApiClient.rerunRouting("rec-1")
+        )
+    }
+
+    @Test
+    fun detailOfReadsOnlyAStringDetail() {
+        assertEquals("Not found", ApiClient.detailOf("""{"detail":"Not found"}"""))
+        assertEquals(null, ApiClient.detailOf("""{"detail":[{"msg":"field required"}]}"""))
+        assertEquals(null, ApiClient.detailOf("""{"detail":"   "}"""))
+        assertEquals(null, ApiClient.detailOf("<html>502</html>"))
+        assertEquals(null, ApiClient.detailOf(null))
+    }
+
+    // MARK: - Speaker rename
+
+    @Test
+    fun renameSpeakersPatchesTheSpeakersSubresourceWithTheRenamesMap() {
+        val document = """{"text":"Alex: Hello.","segments":[],"paragraphs":[],"speakers":["Alex","Morgan"]}"""
+        server.enqueue(MockResponse().setResponseCode(200).setBody(document))
+        val result = ApiClient.renameSpeakers("rec-1", linkedMapOf("Speaker 1" to "Alex", "Speaker 2" to "Morgan"))
+        assertEquals(ApiClient.TranscriptResult.Ready(document), result)
+        val recorded = server.takeRequest()
+        assertEquals("PATCH", recorded.method)
+        assertEquals("/api/v1/recordings/rec-1/speakers", recorded.path)
+        assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+        assertEquals("""{"renames":{"Speaker 1":"Alex","Speaker 2":"Morgan"}}""", recorded.body.readUtf8())
+    }
+
+    @Test
+    fun renameSpeakersMapsFailures() {
+        // 404: an older server without the endpoint (or a recording that is gone).
+        server.enqueue(MockResponse().setResponseCode(404).setBody("""{"detail":"Not Found"}"""))
+        assertEquals(ApiClient.TranscriptResult.NotFound, ApiClient.renameSpeakers("rec-1", mapOf("Speaker 1" to "Alex")))
+        server.enqueue(MockResponse().setResponseCode(422).setBody("""{"detail":"New name must not be blank"}"""))
+        assertEquals(
+            ApiClient.TranscriptResult.Error("HTTP 422", "New name must not be blank"),
+            ApiClient.renameSpeakers("rec-1", mapOf("Speaker 1" to " "))
+        )
+        server.enqueue(MockResponse().setResponseCode(401))
+        assertEquals(ApiClient.TranscriptResult.AuthError(401), ApiClient.renameSpeakers("rec-1", mapOf("Speaker 1" to "Alex")))
+        RecordingStore.serverBaseUrl = "http://127.0.0.1:1"
+        assertTrue(ApiClient.renameSpeakers("rec-1", mapOf("Speaker 1" to "Alex")) is ApiClient.TranscriptResult.Error)
     }
 
     @Test

@@ -19,6 +19,8 @@
          the background. API 34 requires the per-type permission next to FOREGROUND_SERVICE. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Audio playback keeps going after the detail screen is left (PlaybackService) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- API 33+: the service notification is invisible without this runtime permission -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Restart the service after a reboot / app update -->
@@ -115,6 +117,16 @@
             android:name=".service.DeviceConnectionService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- Recording playback: media3 session service with the system media notification -->
+        <service
+            android:name=".playback.PlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
 
         <!-- Restart the connection service after reboot / app update (system broadcasts only) -->
         <receiver

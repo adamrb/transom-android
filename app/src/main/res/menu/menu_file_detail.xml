@@ -1,32 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- FileDetailActivity's More menu. The activity hides the items that do not apply to the
-     recording on screen: Export Audio and Remove from phone need a phone copy, Re-transcribe
-     and Run automations need a server copy. -->
+<!-- FileDetailActivity's More sheet. The activity hides the items that do not apply to the
+     recording on screen: Export audio and Remove from phone need a phone copy, Re-transcribe
+     and Run automations need a server copy. Copy and Export markdown are pills on the page, not
+     repeated here. Delete is last, behind a divider, in the destructive colour. -->
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:id="@+id/action_export"
-        android:title="@string/export_audio" />
     <item
         android:id="@+id/action_rename"
         android:title="@string/rename" />
-    <item
-        android:id="@+id/action_copy_summary"
-        android:title="@string/copy_summary" />
-    <item
-        android:id="@+id/action_copy_transcript"
-        android:title="@string/copy_transcript" />
-    <item
-        android:id="@+id/action_export_markdown"
-        android:title="@string/export_markdown" />
-    <item
-        android:id="@+id/action_retranscribe"
-        android:title="@string/retranscribe" />
     <item
         android:id="@+id/action_run_automations"
         android:title="@string/run_automations" />
     <item
         android:id="@+id/action_run_automations_with_instructions"
         android:title="@string/run_automations_with_instructions" />
+    <item
+        android:id="@+id/action_retranscribe"
+        android:title="@string/retranscribe" />
+    <item
+        android:id="@+id/action_export"
+        android:title="@string/detail_export_audio" />
     <item
         android:id="@+id/action_remove_from_phone"
         android:title="@string/remove_from_phone" />

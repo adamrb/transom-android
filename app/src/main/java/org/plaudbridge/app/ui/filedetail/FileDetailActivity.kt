@@ -5,27 +5,30 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.DialogInterface
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.Menu
 import android.view.View
+import android.view.WindowManager
 import android.widget.EditText
 import android.widget.PopupMenu
-import android.widget.SeekBar
 import android.widget.Toast
 import androidx.annotation.VisibleForTesting
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
-import androidx.media3.common.MediaItem
-import androidx.media3.datasource.DataSource
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.slider.Slider
+import com.google.android.material.snackbar.Snackbar
+import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,6 +37,7 @@ import kotlinx.coroutines.withContext
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.databinding.ActivityFileDetailBinding
+import org.plaudbridge.app.databinding.ViewFileDetailHeaderBinding
 import org.plaudbridge.app.export.ExportFileName
 import org.plaudbridge.app.export.TranscriptHighlight
 import org.plaudbridge.app.export.TranscriptMarkdown
@@ -45,6 +49,9 @@ import org.plaudbridge.app.models.RecordingFile
 import org.plaudbridge.app.models.RoutingRun
 import org.plaudbridge.app.models.ServerRecording
 import org.plaudbridge.app.net.ApiClient
+import org.plaudbridge.app.playback.ControllerPlayback
+import org.plaudbridge.app.playback.Playback
+import org.plaudbridge.app.playback.PlaybackService
 import org.plaudbridge.app.storage.RecordingStore
 import org.plaudbridge.app.ui.common.MarkdownRenderer
 import org.plaudbridge.app.ui.recordings.ApiServerRecordingActions
@@ -58,7 +65,8 @@ import java.util.*
 
 /**
  * Recording detail page
- * Header (name/date/duration/status) + Summary + Highlights + Automations + Transcript + More Menu
+ * Collapsing header (name/date/duration/status) + Summary + Highlights + Automations + Transcript
+ * (one list item per paragraph) + a player that keeps playing after the screen is left.
  *
  * One screen for one recording, wherever it lives. The intent carries whichever ids are known:
  *  - `file_id`: the phone's [RecordingFile] (offline audio, cached transcript, upload state);
@@ -68,12 +76,24 @@ import java.util.*
  * the Recordings tab draws its rows from, so the header cannot disagree with the list, and
  * rendered through [DetailModel], the handful of fields the content blocks actually use.
  *
+ * The page is a RecyclerView: position 0 is the header block ([header], summary, highlights,
+ * automations, the Transcript section header and the empty state), the rest one paragraph each,
+ * so a two-hour transcript renders as it scrolls. Playback runs in [PlaybackService] and is
+ * driven here through a [Playback]; the paragraph being played is tinted and kept in view until
+ * the reader scrolls away, when a "Return to playback" chip offers the way back.
+ *
  * The only thing written back into RecordingStore is a transcript fetched for a recording the
  * phone already indexes, which is exactly what TitleSyncManager stores in the background.
  */
-class FileDetailActivity : AppCompatActivity() {
+class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsSheet.Host {
 
     private lateinit var binding: ActivityFileDetailBinding
+
+    /** The list's first item: summary, highlights, automations, section header, empty state. */
+    private lateinit var header: ViewFileDetailHeaderBinding
+    private lateinit var adapter: TranscriptAdapter
+    private lateinit var layoutManager: LinearLayoutManager
+    private lateinit var positionStore: TranscriptPositionStore
     private val syncManager get() = (application as PlaudBridgeApp).syncManager
 
     /** The phone's copy, when the phone has one. */
@@ -117,11 +137,6 @@ class FileDetailActivity : AppCompatActivity() {
      */
     private var routingRuns: List<RoutingRun>? = null
 
-    // Audio player (media3 ExoPlayer)
-    private var preparedKey: String? = null
-    private val progressHandler = Handler(Looper.getMainLooper())
-    private var progressRunnable: Runnable? = null
-
     /**
      * The fields the content blocks render. [transcriptJSON] is the server transcript document
      * (text, segments, summary, highlights); the phone caches the same document.
@@ -147,6 +162,8 @@ class FileDetailActivity : AppCompatActivity() {
         /** [instructions] null for a plain run; otherwise the user's text for the automations. */
         suspend fun rerunRouting(id: String, idempotencyKey: String, instructions: String?): ApiClient.ActionResult
         suspend fun retryDelivery(deliveryId: String): ApiClient.RetryResult
+        /** PATCH speakers; answers with the transcript document (contract §2). */
+        suspend fun renameSpeakers(id: String, renames: Map<String, String>): ApiClient.TranscriptResult
     }
 
     private object ApiServerDetailSource : ServerDetailSource, ServerRecordingActions by ApiServerRecordingActions {
@@ -156,6 +173,8 @@ class FileDetailActivity : AppCompatActivity() {
         override suspend fun rerunRouting(id: String, idempotencyKey: String, instructions: String?) =
             withContext(Dispatchers.IO) { ApiClient.rerunRouting(id, idempotencyKey, instructions) }
         override suspend fun retryDelivery(deliveryId: String) = withContext(Dispatchers.IO) { ApiClient.retryDelivery(deliveryId) }
+        override suspend fun renameSpeakers(id: String, renames: Map<String, String>) =
+            withContext(Dispatchers.IO) { ApiClient.renameSpeakers(id, renames) }
     }
 
     companion object {
@@ -165,9 +184,19 @@ class FileDetailActivity : AppCompatActivity() {
         /** Intent extra: the bridge server's recording id. */
         const val EXTRA_SERVER_RECORDING_ID = "server_recording_id"
 
+        /**
+         * Intent action from the playback notification: open whatever is playing. The ids come
+         * from [PlaybackService.nowPlaying] rather than the intent, which is built once.
+         */
+        const val ACTION_NOW_PLAYING = "org.plaudbridge.app.action.NOW_PLAYING"
+
         /** Swapped by tests; production always uses the ApiClient-backed default. */
         @VisibleForTesting
         var serverSource: ServerDetailSource = ApiServerDetailSource
+
+        /** Swapped by tests; production connects to [PlaybackService]. */
+        @VisibleForTesting
+        var playbackFactory: Playback.Factory = ControllerPlayback.FACTORY
 
         /**
          * Delays before re-reading the routing endpoint while a delivery is still in progress:
@@ -181,12 +210,12 @@ class FileDetailActivity : AppCompatActivity() {
         @VisibleForTesting
         val RERUN_REFRESH_DELAYS_MS = longArrayOf(3_000L, 15_000L)
 
-        /** Transcripts at least this long are measured off the main thread before display. */
-        const val PRECOMPUTE_TRANSCRIPT_CHARS = 20_000
+        /** Transcript documents at least this long are parsed off the main thread. */
+        const val PARSE_OFF_MAIN_CHARS = 20_000
 
-        /** Where that measurement runs; tests swap in an inline dispatcher for determinism. */
+        /** Where that parse runs; tests swap in an inline dispatcher for determinism. */
         @VisibleForTesting
-        var transcriptLayoutDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default
+        var transcriptParseDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default
 
         /** How often the recording is re-read while the server is still transcribing it. */
         @VisibleForTesting
@@ -203,7 +232,18 @@ class FileDetailActivity : AppCompatActivity() {
         @VisibleForTesting
         const val PARAGRAPH_FLASH_MS = 1_200L
 
-        private const val SPAN_FLAGS = android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        /** The player's skip buttons: a short hop back to re-hear a phrase, a longer one ahead. */
+        const val SKIP_BACK_MS = 15_000L
+        const val SKIP_FORWARD_MS = 30_000L
+
+        /** The speed chips, in chip order. */
+        val SPEEDS = floatArrayOf(1f, 1.5f, 2f)
+
+        /** How often the clock, slider and now-playing paragraph follow the player while it plays. */
+        private const val PROGRESS_TICK_MS = 250L
+
+        private const val PLAYER_PREFS = "player"
+        private const val PREF_SPEED = "speed"
 
         /** Recording ids with a Run automations call on the wire, see [runAutomations]. */
         private val rerunsInFlight = mutableSetOf<String>()
@@ -222,12 +262,13 @@ class FileDetailActivity : AppCompatActivity() {
 
         /** An answer that leaves open whether the server ran the router anyway (timeout, 5xx, lost response). */
         private fun isAmbiguousRerunFailure(result: ApiClient.ActionResult): Boolean =
-            result is ApiClient.ActionResult.Error && result.message != "HTTP 409"
+            result is ApiClient.ActionResult.Error && result.code != 409
 
         /** Tests share one process: clear the process-wide rerun state between them. */
         @VisibleForTesting
         internal fun resetProcessStateForTests() {
-            transcriptLayoutDispatcher = Dispatchers.Default
+            transcriptParseDispatcher = Dispatchers.Default
+            playbackFactory = ControllerPlayback.FACTORY
             rerunsInFlight.clear()
             pendingReruns.clear()
             liveScreens.clear()
@@ -256,24 +297,48 @@ class FileDetailActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityFileDetailBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        // The layout manager first: inflating a child against the list asks it for layout params.
+        // Focus must not scroll the page: the paragraphs are selectable (so focusable) text, and
+        // a focus change (a dialog closing, a keyboard) would otherwise yank the list to whichever
+        // paragraph the framework hands focus to.
+        layoutManager = object : LinearLayoutManager(this) {
+            override fun onRequestChildFocus(parent: RecyclerView, state: RecyclerView.State, child: View, focused: View?): Boolean = true
+        }
+        binding.transcriptList.layoutManager = layoutManager
+        header = ViewFileDetailHeaderBinding.inflate(layoutInflater, binding.transcriptList, false)
+        positionStore = TranscriptPositionStore(this)
 
-        binding.backButton.setOnClickListener { finish() }
-        binding.moreButton.setOnClickListener { showMoreMenu(it) }
-        binding.copyTranscriptButton.setOnClickListener { copyTranscript() }
-        binding.exportMarkdownButton.setOnClickListener { currentModel?.let { m -> exportMarkdown(m) } }
-        binding.automationsShowEarlier.setOnClickListener {
+        setupList()
+        setupToolbar()
+        setupBottomBar()
+        setupAudioPlayerControls()
+        header.copyTranscriptButton.setOnClickListener { copyTranscript() }
+        header.exportMarkdownButton.setOnClickListener { currentModel?.let { m -> exportMarkdown(m) } }
+        header.copySummaryButton.setOnClickListener { currentModel?.let { m -> copySummary(m) } }
+        header.automationsShowEarlier.setOnClickListener {
             showEarlierRuns = true
             bindAutomations()
         }
-        setupAudioPlayerControls()
+        header.emptyDetailsToggle.setOnClickListener {
+            header.emptyDetails.visibility = if (header.emptyDetails.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        }
 
-        intent.getStringExtra(EXTRA_FILE_ID)?.let { currentFile = findFile(it) }
-        serverRecordingId = intent.getStringExtra(EXTRA_SERVER_RECORDING_ID)
-            ?: currentFile?.serverId?.takeIf { it.isNotBlank() }
+        var fileId = intent.getStringExtra(EXTRA_FILE_ID)
+        var serverId = intent.getStringExtra(EXTRA_SERVER_RECORDING_ID)
+        if (fileId == null && serverId == null && intent.action == ACTION_NOW_PLAYING) {
+            // Opened from the playback notification: show whatever the player holds.
+            PlaybackService.nowPlaying?.let {
+                fileId = it.fileId
+                serverId = it.serverId
+            }
+        }
+        fileId?.let { currentFile = findFile(it) }
+        serverRecordingId = serverId ?: currentFile?.serverId?.takeIf { it.isNotBlank() }
         if (currentFile == null && serverRecordingId == null) {
             finish()
             return
         }
+        playback = playbackFactory.create(this).also { it.addListener(playbackListener) }
 
         val file = currentFile
         if (file != null) {
@@ -284,16 +349,93 @@ class FileDetailActivity : AppCompatActivity() {
             binding.fileDateLabel.text = getString(R.string.checking_transcript)
         }
 
-        val serverId = serverRecordingId
+        val sid = serverRecordingId
         when {
             // Also loads the Automations section once the recording (and so its age) is known.
-            serverId != null && RecordingStore.isServerConfigured -> loadServerRecording(serverId)
+            sid != null && RecordingStore.isServerConfigured -> loadServerRecording(sid)
             // Uploaded before the phone learned the server id (legacy index): resolve it by
             // (device, session) and fetch the transcript the old way. Also when a transcript is
             // already cached: the id is what unlocks the server-side content (automations, the
             // server menu actions), and once stored the next open takes the server path above.
             file != null && file.uploaded -> fetchTranscriptFromServer(file, userInitiated = false)
         }
+    }
+
+    // MARK: - Page structure
+
+    private fun setupList() {
+        adapter = TranscriptAdapter(header.root, onSeek = { seekPlayerTo(it) }, onSpeakerTap = { showRenameSpeakerDialog(it) })
+        binding.transcriptList.adapter = adapter
+        binding.transcriptList.itemAnimator = null // tint changes must not fade the whole row
+        binding.transcriptList.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                if (newState == RecyclerView.SCROLL_STATE_DRAGGING) onUserScrollGesture()
+            }
+        })
+        binding.fastScroller.attach(binding.transcriptList, object : TranscriptFastScroller.Host {
+            override val paragraphCount: Int get() = transcriptParagraphs.size
+            override fun timeLabelAt(paragraphIndex: Int): String? = adapter.rows.getOrNull(paragraphIndex)?.timeLabel
+            override fun scrollToParagraph(paragraphIndex: Int) {
+                binding.appBar.setExpanded(false, false)
+                layoutManager.scrollToPositionWithOffset(adapter.positionOf(paragraphIndex), 0)
+            }
+            override fun onUserScrollGesture() = this@FileDetailActivity.onUserScrollGesture()
+        })
+    }
+
+    private fun setupToolbar() {
+        binding.backButton.setOnClickListener { finish() }
+        binding.moreButton.setOnClickListener { showMoreSheet() }
+        binding.jumpToButton.setOnClickListener { showJumpToSheet() }
+        binding.toolbarTitle.setOnClickListener { scrollToTop() }
+        // The big title fades out as the header collapses; the toolbar title fades in over the
+        // last stretch, so the two are never both readable at once.
+        binding.appBar.addOnOffsetChangedListener { appBar, offset ->
+            val range = appBar.totalScrollRange
+            val collapsed = if (range == 0) 0f else -offset / range.toFloat()
+            binding.toolbarTitle.alpha = ((collapsed - 0.6f) / 0.4f).coerceIn(0f, 1f)
+            binding.headerBlock.alpha = 1f - (collapsed / 0.7f).coerceIn(0f, 1f)
+        }
+    }
+
+    /** The bottom bar (chip + player) changes height as things appear; the list keeps clear of it. */
+    private fun setupBottomBar() {
+        binding.bottomBar.addOnLayoutChangeListener { v, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            val height = bottom - top
+            if (height != oldBottom - oldTop) {
+                val extra = (16 * resources.displayMetrics.density).toInt()
+                binding.transcriptList.setPadding(0, 0, 0, height + extra)
+                binding.fastScroller.setPadding(0, 0, 0, height)
+            }
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(binding.bottomBar) { v, insets ->
+            val bottom = insets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom
+            binding.audioPlayer.setPadding(
+                binding.audioPlayer.paddingLeft, binding.audioPlayer.paddingTop,
+                binding.audioPlayer.paddingRight, (12 * resources.displayMetrics.density).toInt() + bottom
+            )
+            insets
+        }
+    }
+
+    /** Toolbar title tap: back to the header, wherever the reader is. */
+    private fun scrollToTop() {
+        binding.appBar.setExpanded(true, animationsEnabled())
+        layoutManager.scrollToPositionWithOffset(0, 0)
+    }
+
+    private fun showJumpToSheet() {
+        if (transcriptParagraphs.isEmpty()) return
+        if (supportFragmentManager.findFragmentByTag(JumpToSheet.TAG) != null) return
+        JumpToSheet().show(supportFragmentManager, JumpToSheet.TAG)
+    }
+
+    override fun jumpToItems(): List<JumpToItem> =
+        JumpToItems.build(transcriptParagraphs, currentHighlights, currentModel?.durationSeconds ?: 0L)
+
+    override fun onJumpTo(item: JumpToItem) {
+        seekPlayerTo(item.seconds)
+        if (item.paragraphIndex >= 0) revealParagraph(item.paragraphIndex)
     }
 
     /** onCreate already loaded everything; only a RETURN to the screen needs a refresh. */
@@ -321,6 +463,7 @@ class FileDetailActivity : AppCompatActivity() {
         resumedBefore = true
         registerAsLiveScreen()
         syncTranscriptionPolling()
+        syncPlayerUi()
     }
 
     /** This instance is the one showing [serverRecordingId] now, see [liveScreens]. */
@@ -349,23 +492,27 @@ class FileDetailActivity : AppCompatActivity() {
                 runOnUiThread {
                     currentFile = findFile(file.id) ?: file
                     currentModel?.let { bindMetaLine(it.recordedAtMillis, d) }
+                    syncPlayerUi()
                 }
             }
         }
     }
 
-    /** On-screen transcript as plain characters (reader paragraphs); null when nothing parseable. */
+    /** On-screen transcript as plain characters (speaker paragraphs); null when nothing parseable. */
     private var transcriptPlainText: String? = null
 
     /** What Copy transcript puts on the clipboard: speaker paragraphs, no timestamps. */
     private var transcriptCopyText: String? = null
 
-    /** The paragraphs on screen and where each one sits in [ActivityFileDetailBinding.transcriptText]. */
+    /** The paragraphs on screen, one list row each. */
     private var transcriptParagraphs: List<TranscriptParagraph> = emptyList()
-    private var paragraphRanges: List<IntRange> = emptyList()
 
-    /** The brief emphasis a highlight tap puts on its paragraph; cleared by [flashHandler]. */
-    private var paragraphFlash: android.text.style.BackgroundColorSpan? = null
+    /** The document's speaker labels, for the rename dialog. */
+    private var transcriptSpeakers: List<String> = emptyList()
+
+    /** The document's button-press highlights, for the rows and the Jump to sheet. */
+    private var currentHighlights: List<TranscriptHighlight> = emptyList()
+
     private val flashHandler = Handler(Looper.getMainLooper())
 
     /** The merged view of whatever this screen knows; null before anything has loaded. */
@@ -399,10 +546,18 @@ class FileDetailActivity : AppCompatActivity() {
         )
         bindStatusBadge(item)
         bindTranscriptionProgress(item)
-        if (transcriptPlainText == null) bindEmptyState(item)
+        if (transcriptPlainText == null && !transcriptParsePending) bindEmptyState(item)
         bindAudio(file, rec)
         bindAutomations()
         syncTranscriptionPolling()
+        updateToolbarActions()
+    }
+
+    /** The ⋮ and Jump to buttons only when there is something for them to act on. */
+    private fun updateToolbarActions() {
+        binding.moreButton.visibility = if (currentModel != null && currentItem() != null) View.VISIBLE else View.GONE
+        binding.jumpToButton.visibility =
+            if (transcriptParagraphs.isNotEmpty() && jumpToItems().isNotEmpty()) View.VISIBLE else View.GONE
     }
 
     /**
@@ -424,99 +579,172 @@ class FileDetailActivity : AppCompatActivity() {
     private fun bindContent(model: DetailModel) {
         currentModel = model
         binding.fileNameLabel.text = model.title
+        binding.toolbarTitle.text = model.title
         bindMetaLine(model.recordedAtMillis, model.durationSeconds)
 
-        // Summary block (flat, only when a summary exists)
-        val hasSummary = !model.summary.isNullOrBlank()
-        binding.summaryHeader.visibility = if (hasSummary) View.VISIBLE else View.GONE
-        binding.summaryText.visibility = if (hasSummary) View.VISIBLE else View.GONE
-        if (hasSummary) MarkdownRenderer.setMarkdown(binding.summaryText, MarkdownRenderer.withoutSummaryHeading(model.summary!!))
-
         // Highlights: the server's transcript-around-each-button-press rows, above the transcript
-        bindHighlights(model.transcriptJSON?.let { TranscriptHighlight.parse(it) } ?: emptyList())
+        currentHighlights = model.transcriptJSON?.let { TranscriptHighlight.parse(it) } ?: emptyList()
+
+        // Summary block (only when a summary exists). The model's own "Summary" heading goes (the
+        // block is labelled), so does filler for empty sections, and so does its Highlights
+        // section when the Highlights rows below already list the same button presses.
+        val summaryMarkdown = model.summary?.takeIf { it.isNotBlank() }?.let { raw ->
+            var md = MarkdownRenderer.withoutEmptySectionFiller(MarkdownRenderer.withoutSummaryHeading(raw))
+            if (currentHighlights.isNotEmpty()) md = MarkdownRenderer.withoutHighlightsSection(md)
+            md.takeIf { it.isNotBlank() }
+        }
+        val hasSummary = summaryMarkdown != null
+        header.summaryHeaderRow.visibility = if (hasSummary) View.VISIBLE else View.GONE
+        header.summaryText.visibility = if (hasSummary) View.VISIBLE else View.GONE
+        if (summaryMarkdown != null) MarkdownRenderer.setMarkdown(header.summaryText, summaryMarkdown)
+
+        bindHighlights(currentHighlights)
 
         // Transcript: the document's reader paragraphs (or the same grouping derived from its
         // segments), else its flat text; nothing parseable leaves the (caller-defined) empty state
-        clearParagraphFlash()
-        transcriptParagraphs = model.transcriptJSON?.let { TranscriptParagraph.parse(it) } ?: emptyList()
-        val shown: CharSequence? = if (transcriptParagraphs.isNotEmpty()) renderParagraphs(transcriptParagraphs)
-            else model.transcriptJSON?.let { flatTranscriptText(it) }
-        if (transcriptParagraphs.isEmpty()) paragraphRanges = emptyList()
-        transcriptPlainText = shown?.toString()
-        transcriptCopyText = model.transcriptJSON?.let { copyTextFor(it) } ?: transcriptPlainText
-        binding.transcriptActions.visibility = if (transcriptPlainText != null) View.VISIBLE else View.GONE
-        if (shown != null) {
-            showTranscriptText(shown)
-            binding.emptyState.visibility = View.GONE
-        } else {
-            transcriptLayoutJob?.cancel()
-            pendingTranscriptText = null
-            appliedTranscriptText = null
-            binding.transcriptText.visibility = View.GONE
-            binding.emptyState.visibility = View.GONE
-        }
+        bindTranscript(model.transcriptJSON)
     }
 
-    /** Off-main-thread text measurement in flight for a long transcript, see [showTranscriptText]. */
-    private var transcriptLayoutJob: kotlinx.coroutines.Job? = null
+    // MARK: - Transcript
 
-    /** The transcript text the view currently shows / is being measured for, so a re-render with
-     * the same text (a metadata refresh, a poll, a resume) neither hides it nor measures it again. */
-    private var appliedTranscriptText: String? = null
-    private var pendingTranscriptText: String? = null
+    /** A transcript document read into what the list shows. Built off the main thread when long. */
+    private data class ParsedTranscript(
+        val json: String,
+        val paragraphs: List<TranscriptParagraph>,
+        val copyText: String?,
+        val speakers: List<String>
+    )
+
+    /** The document currently on screen, so a re-render with the same one does nothing. */
+    private var parsedTranscript: ParsedTranscript? = null
+    private var transcriptParseJob: kotlinx.coroutines.Job? = null
+    private var pendingParseJson: String? = null
+
+    /** A long document is being read on a background thread; the loading bar shows meanwhile. */
+    private val transcriptParsePending: Boolean get() = transcriptParseJob?.isActive == true
 
     /**
-     * Put the transcript on screen. A short one is set directly. A long one (a two-hour recording
-     * is ~150k characters) would hold the main thread for over a second measuring text, so the
-     * header, summary and highlights would all wait on it; instead its measurement runs on a
-     * background thread ([PrecomputedTextCompat]) and the text lands a moment later, already
-     * measured. The result is only used if the view's text metrics have not changed meanwhile.
+     * Put the document's paragraphs in the list. A short document is parsed inline. A long one
+     * (a two-hour recording is a megabyte of JSON) is parsed on a background thread with the
+     * loading bar showing, so the header, summary and highlights never wait on it; the same
+     * document offered again (a metadata refresh, a poll, a resume) is not parsed twice.
      */
-    private fun showTranscriptText(shown: CharSequence) {
-        val view = binding.transcriptText
-        val key = shown.toString()
-        if (shown.length < PRECOMPUTE_TRANSCRIPT_CHARS) {
-            transcriptLayoutJob?.cancel()
-            pendingTranscriptText = null
-            view.text = shown
-            appliedTranscriptText = key
-            view.visibility = View.VISIBLE
+    private fun bindTranscript(json: String?) {
+        if (json == null) {
+            transcriptParseJob?.cancel()
+            pendingParseJson = null
+            showTranscriptLoading(false)
+            applyTranscript(null)
             return
         }
-        // Same text already on screen, or already being measured: nothing to redo. (The spans
-        // rebuilt by renderParagraphs sit at the same offsets, so the shown text stays valid.)
-        if (key == appliedTranscriptText && view.visibility == View.VISIBLE) return
-        if (key == pendingTranscriptText && transcriptLayoutJob?.isActive == true) return
-        transcriptLayoutJob?.cancel()
-        pendingTranscriptText = key
-        val params = androidx.core.widget.TextViewCompat.getTextMetricsParams(view)
-        view.visibility = View.GONE
-        transcriptLayoutJob = lifecycleScope.launch {
-            val precomputed = try {
-                withContext(transcriptLayoutDispatcher) { androidx.core.text.PrecomputedTextCompat.create(shown, params) }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                org.plaudbridge.app.common.AppLog.w("FileDetail", "transcript precompute failed, laying out inline", e)
-                null
-            }
-            val applied = precomputed != null &&
-                androidx.core.widget.TextViewCompat.getTextMetricsParams(view).equalsWithoutTextDirection(params) &&
-                try {
-                    androidx.core.widget.TextViewCompat.setPrecomputedText(view, precomputed)
-                    true
-                } catch (e: IllegalArgumentException) {
-                    // The view's metrics moved under us (or the platform disagrees about
-                    // equality): a plain set still shows the transcript, just measured inline.
-                    org.plaudbridge.app.common.AppLog.w("FileDetail", "precomputed transcript rejected, laying out inline", e)
-                    false
-                }
-            if (!applied) view.text = shown
-            appliedTranscriptText = key
-            pendingTranscriptText = null
-            view.visibility = View.VISIBLE
+        if (parsedTranscript?.json == json) {
+            applyTranscriptState()
+            return
+        }
+        if (json == pendingParseJson && transcriptParsePending) return
+        transcriptParseJob?.cancel()
+        if (json.length < PARSE_OFF_MAIN_CHARS) {
+            pendingParseJson = null
+            applyTranscript(parseTranscript(json))
+            return
+        }
+        pendingParseJson = json
+        showTranscriptLoading(true)
+        transcriptParseJob = lifecycleScope.launch {
+            val parsed = withContext(transcriptParseDispatcher) { parseTranscript(json) }
+            pendingParseJson = null
+            applyTranscript(parsed)
+            // What the rest of the page shows depends on whether there is a transcript.
+            currentItem()?.let { if (transcriptPlainText == null) bindEmptyState(it) }
+            bindAutomations()
+            updateToolbarActions()
         }
     }
+
+    /** Pure: the document's paragraphs (server layout, derived grouping, or its flat text as paragraphs). */
+    private fun parseTranscript(json: String): ParsedTranscript {
+        val parsed = TranscriptParagraph.parse(json) ?: emptyList()
+        val paragraphs = if (parsed.isNotEmpty()) parsed else flatTranscriptText(json)
+            ?.split("\n\n")?.map { it.trim() }?.filter { it.isNotEmpty() }
+            ?.map { TranscriptParagraph(null, it, null, null) } ?: emptyList()
+        return ParsedTranscript(
+            json = json,
+            paragraphs = paragraphs,
+            copyText = copyTextFor(json) ?: TranscriptParagraph.plain(paragraphs).takeIf { paragraphs.isNotEmpty() },
+            speakers = TranscriptParagraph.speakersOf(json, paragraphs)
+        )
+    }
+
+    private fun applyTranscript(parsed: ParsedTranscript?) {
+        showTranscriptLoading(false)
+        parsedTranscript = parsed
+        transcriptParagraphs = parsed?.paragraphs ?: emptyList()
+        transcriptSpeakers = parsed?.speakers ?: emptyList()
+        transcriptPlainText = if (transcriptParagraphs.isNotEmpty()) TranscriptParagraph.plain(transcriptParagraphs) else null
+        transcriptCopyText = parsed?.copyText ?: transcriptPlainText
+        flashHandler.removeCallbacksAndMessages(null)
+        adapter.submit(TranscriptRows.build(transcriptParagraphs))
+        if (transcriptParagraphs.isNotEmpty()) {
+            header.emptyState.visibility = View.GONE
+            restorePositionIfAny()
+        }
+        applyTranscriptState()
+    }
+
+    // Test seams: the list's rows and a bound paragraph view, without a laid-out RecyclerView.
+
+    @VisibleForTesting
+    internal fun transcriptRowsForTests(): List<TranscriptRow> = adapter.rows
+
+    @VisibleForTesting
+    internal fun bindParagraphForTests(index: Int): View {
+        val holder = adapter.createViewHolder(binding.transcriptList, TranscriptAdapter.TYPE_PARAGRAPH)
+        adapter.bindViewHolder(holder, adapter.positionOf(index))
+        return holder.itemView
+    }
+
+    @VisibleForTesting
+    internal fun nowPlayingIndexForTests(): Int = adapter.nowPlayingIndex
+
+    @VisibleForTesting
+    internal fun flashIndexForTests(): Int = adapter.flashIndex
+
+    @VisibleForTesting
+    internal fun followPlaybackForTests(): Boolean = followPlayback
+
+    @VisibleForTesting
+    internal fun simulateUserScrollForTests() = onUserScrollGesture()
+
+    /** Everything on the page that hangs off "is there a transcript": actions, section header, rename, scroller. */
+    private fun applyTranscriptState() {
+        val has = transcriptParagraphs.isNotEmpty()
+        header.transcriptActions.visibility = if (has) View.VISIBLE else View.GONE
+        header.transcriptSectionHeader.visibility = if (has) View.VISIBLE else View.GONE
+        adapter.speakerRenameEnabled = has && canRenameSpeakers
+        binding.fastScroller.refresh()
+    }
+
+    /**
+     * Speaker labels are renamable when the server holds the transcript (a rename is a server
+     * write that comes back as the re-rendered document) and is not busy replacing it.
+     */
+    private val canRenameSpeakers: Boolean
+        get() = serverRecordingId != null && RecordingStore.isServerConfigured && !transcriptWasPending && isServerTranscriptShown
+
+    /** The paragraphs on screen came from the server in this view (not only the phone's cache). */
+    private val isServerTranscriptShown: Boolean get() = serverTranscriptJSON != null && parsedTranscript?.json == serverTranscriptJSON
+
+    private fun showTranscriptLoading(loading: Boolean) {
+        header.transcriptLoading.visibility = if (loading) View.VISIBLE else View.GONE
+        if (loading) header.emptyState.visibility = View.GONE
+    }
+
+    /**
+     * A document with no segments at all but a flat `text` (one "Speaker N: ..." line per turn):
+     * shown as blank-line-separated paragraphs. Null when there is nothing to show.
+     */
+    private fun flatTranscriptText(json: String): String? =
+        transcriptExportFields(json).first?.let { TranscriptMarkdown.plainParagraphs(it) }?.takeIf { it.isNotBlank() }
 
     /** Meta line "MMM d, yyyy · HH:mm · Xm Ys" (mirrors iOS). */
     private fun bindMetaLine(recordedAtMillis: Long, durationSeconds: Long) {
@@ -697,22 +925,23 @@ class FileDetailActivity : AppCompatActivity() {
         val file = item.local
         when {
             item.serverId != null || file?.uploaded == true -> {
-                // A finished recording with nothing in it: say so, and offer no transcript
-                // button (there is nothing to check for; Re-transcribe stays in the menu).
+                // A finished recording with nothing in it: one line, and no transcript button
+                // (there is nothing to check for; Re-transcribe stays in the menu).
                 if (rec?.isTranscribing != true && isNoSpeech) {
-                    showEmptyState(getString(R.string.no_speech_title), getString(R.string.no_speech_detected))
+                    showEmptyState(getString(R.string.detail_no_speech_line), null, icon = R.drawable.ic_mic_off)
                     return
                 }
                 // While the server works, the title carries the stage (the badge's wording).
                 val title = if (rec?.isTranscribing == true) RecordingsAdapter.transcribingText(this, rec)
                     else getString(R.string.transcript)
                 val subtitle = when (rec?.status) {
-                    ServerRecording.STATUS_FAILED ->
-                        rec.error?.takeIf { it.isNotBlank() } ?: getString(R.string.transcription_failed)
+                    // The server's own sentence about what went wrong; the raw text behind Details.
+                    ServerRecording.STATUS_FAILED -> rec.error ?: getString(R.string.transcription_failed)
                     ServerRecording.STATUS_STORED -> getString(R.string.transcript_not_started)
                     else -> getString(R.string.transcription_pending)
                 }
-                showEmptyState(title, subtitle, getString(R.string.check_transcript)) {
+                val details = if (rec?.status == ServerRecording.STATUS_FAILED) rec.errorDetail else null
+                showEmptyState(title, subtitle, getString(R.string.check_transcript), details = details) {
                     checkForTranscript()
                 }
             }
@@ -722,19 +951,30 @@ class FileDetailActivity : AppCompatActivity() {
         }
     }
 
-    /** Centered empty state under the Transcript tab; [buttonText] null hides the button. */
-    private fun showEmptyState(title: String, subtitle: String, buttonText: String? = null, onButton: (() -> Unit)? = null) {
-        binding.transcriptText.visibility = View.GONE
-        binding.emptyState.visibility = View.VISIBLE
-        binding.emptyTitle.text = title
-        binding.emptySubtitle.text = subtitle
+    /**
+     * Centered empty state where the transcript would start; [buttonText] null hides the button,
+     * [details] (the raw failure text) sits behind a "Details" disclosure when given.
+     */
+    private fun showEmptyState(
+        title: String, subtitle: String?, buttonText: String? = null,
+        icon: Int = R.drawable.ic_files, details: String? = null, onButton: (() -> Unit)? = null
+    ) {
+        header.transcriptLoading.visibility = View.GONE
+        header.emptyState.visibility = View.VISIBLE
+        header.emptyIcon.setImageResource(icon)
+        header.emptyTitle.text = title
+        header.emptySubtitle.text = subtitle
+        header.emptySubtitle.visibility = if (subtitle.isNullOrBlank()) View.GONE else View.VISIBLE
+        header.emptyDetails.text = details
+        header.emptyDetails.visibility = View.GONE
+        header.emptyDetailsToggle.visibility = if (details.isNullOrBlank()) View.GONE else View.VISIBLE
         if (buttonText != null) {
-            binding.generateButton.visibility = View.VISIBLE
-            binding.generateButton.text = buttonText
-            binding.generateButton.isEnabled = true
-            binding.generateButton.setOnClickListener { onButton?.invoke() }
+            header.generateButton.visibility = View.VISIBLE
+            header.generateButton.text = buttonText
+            header.generateButton.isEnabled = true
+            header.generateButton.setOnClickListener { onButton?.invoke() }
         } else {
-            binding.generateButton.visibility = View.GONE
+            header.generateButton.visibility = View.GONE
         }
     }
 
@@ -773,13 +1013,19 @@ class FileDetailActivity : AppCompatActivity() {
         // between "transcript done" and "router run inserted": wait for the run rather than
         // declare that nothing ran. Not for a recording with no speech, which is never routed.
         refreshRouting(awaitRun = routingRuns == null && isRecentUpload(rec) && !rec.noSpeech)
-        if (transcriptPlainText == null && !rec.noSpeech) binding.emptySubtitle.text = getString(R.string.checking_transcript)
+        // Nothing on screen yet and a finished transcript on its way: the loading bar, not the
+        // empty state's wording, is the honest picture until it lands.
+        if (transcriptPlainText == null && !rec.noSpeech) {
+            if (rec.isDone) showTranscriptLoading(true) else header.emptySubtitle.text = getString(R.string.checking_transcript)
+        }
         loadServerTranscript(rec)
     }
 
     private fun loadServerTranscript(rec: ServerRecording) {
         lifecycleScope.launch {
-            when (val outcome = serverSource.transcript(rec.id)) {
+            val outcome = serverSource.transcript(rec.id)
+            if (transcriptPlainText == null) showTranscriptLoading(false)
+            when (outcome) {
                 is ApiClient.TranscriptResult.Ready -> {
                     val arrived = transcriptArrived()
                     storeServerTranscript(outcome.rawJson)
@@ -837,8 +1083,9 @@ class FileDetailActivity : AppCompatActivity() {
      * resolved from (device, session).
      */
     private fun checkForTranscript() {
-        binding.generateButton.isEnabled = false
-        binding.emptySubtitle.text = getString(R.string.checking_transcript)
+        header.generateButton.isEnabled = false
+        header.emptySubtitle.text = getString(R.string.checking_transcript)
+        header.emptySubtitle.visibility = View.VISIBLE
         val serverId = serverRecordingId
         val file = currentFile
         when {
@@ -853,22 +1100,27 @@ class FileDetailActivity : AppCompatActivity() {
      * yet, the header is cleared and the message is the page.
      */
     private fun failServer(message: String) {
-        binding.generateButton.isEnabled = true
+        header.generateButton.isEnabled = true
+        showTranscriptLoading(false)
         if (currentItem() == null) {
             binding.fileDateLabel.text = ""
             showEmptyState(getString(R.string.transcript), message, getString(R.string.check_transcript)) {
                 checkForTranscript()
             }
         } else if (transcriptPlainText == null) {
-            binding.emptySubtitle.text = message
+            header.emptyState.visibility = View.VISIBLE
+            header.emptySubtitle.text = message
+            header.emptySubtitle.visibility = View.VISIBLE
         }
+        updateToolbarActions()
     }
 
+    /** What to tell the user about a failed server action: the server's sentence, else a generic line. */
     private fun actionErrorMessage(result: ApiClient.ActionResult): String = when (result) {
         is ApiClient.ActionResult.Ok -> ""
         is ApiClient.ActionResult.NotFound -> getString(R.string.recording_not_on_server)
         is ApiClient.ActionResult.AuthError -> getString(R.string.transcript_auth_error)
-        is ApiClient.ActionResult.Error -> getString(R.string.server_request_failed_fmt, result.message)
+        is ApiClient.ActionResult.Error -> result.detail ?: getString(R.string.detail_request_failed)
     }
 
     // MARK: - Highlights
@@ -876,16 +1128,16 @@ class FileDetailActivity : AppCompatActivity() {
     /**
      * One row per highlight: "★ m:ss" in the accent color, then the text (or the server's
      * no-speech placeholder). Rows are plain TextViews built here rather than a RecyclerView
-     * because the list is short (one per button press) and lives inside the page's ScrollView.
+     * because the list is short (one per button press) and lives inside the page's header block.
      * Tapping a row seeks the player to the highlight's start (when there is a player) and
      * scrolls the page to the transcript paragraph holding the bookmark, so a highlight is an
      * easy jump into the text.
      */
     private fun bindHighlights(highlights: List<TranscriptHighlight>) {
-        binding.highlightsList.removeAllViews()
+        header.highlightsList.removeAllViews()
         val visible = highlights.isNotEmpty()
-        binding.highlightsHeader.visibility = if (visible) View.VISIBLE else View.GONE
-        binding.highlightsList.visibility = if (visible) View.VISIBLE else View.GONE
+        header.highlightsHeader.visibility = if (visible) View.VISIBLE else View.GONE
+        header.highlightsList.visibility = if (visible) View.VISIBLE else View.GONE
         if (!visible) return
         val accent = ContextCompat.getColor(this, R.color.highlight_accent)
         val density = resources.displayMetrics.density
@@ -908,92 +1160,23 @@ class FileDetailActivity : AppCompatActivity() {
                 typeface = android.graphics.Typeface.SANS_SERIF
                 setLineSpacing(4 * density, 1f)
                 setPadding(0, (8 * density).toInt(), 0, (8 * density).toInt())
+                background = ContextCompat.getDrawable(this@FileDetailActivity, selectableBackgroundRes())
                 tag = h
-                contentDescription = "Highlight at ${TranscriptMarkdown.formatTimestamp(h.at)}"
+                contentDescription = getString(R.string.detail_seek_to_fmt, TranscriptMarkdown.formatTimestamp(h.at))
                 setOnClickListener {
                     seekPlayerTo(h.start)
                     revealParagraphForHighlight(index, h)
                 }
             }
-            binding.highlightsList.addView(row)
+            header.highlightsList.addView(row)
         }
     }
 
-    /** Jump playback to [seconds] from the start; no player, no action. */
-    private fun seekPlayerTo(seconds: Double) {
-        val p = exoPlayer ?: return
-        val duration = p.duration.coerceAtLeast(0)
-        val target = (seconds * 1000).toLong().coerceIn(0, if (duration > 0) duration else Long.MAX_VALUE)
-        p.seekTo(target)
-        binding.currentTimeLabel.text = formatClock(target)
-        binding.progressSlider.progress = if (duration > 0) (target * 1000 / duration).toInt() else 0
+    private fun selectableBackgroundRes(): Int {
+        val out = android.util.TypedValue()
+        theme.resolveAttribute(android.R.attr.selectableItemBackground, out, true)
+        return out.resourceId
     }
-
-    // MARK: - Transcript paragraphs
-
-    /**
-     * The transcript as prose: one block per [TranscriptParagraph], a small secondary speaker
-     * label above the text whenever the speaker changes (none at all for an undiarized
-     * transcript), no clock times. A paragraph holding a bookmark opens with the Highlights
-     * rows' orange star and carries a [BookmarkBarSpan] down its left edge. Every paragraph is
-     * a [android.text.style.ClickableSpan] that seeks the player to its start, the same jump the
-     * Highlights rows make. One TextView with spans rather than one view per paragraph: a
-     * two-hour recording has a few hundred paragraphs, and a single layout pass handles that.
-     */
-    private fun renderParagraphs(paragraphs: List<TranscriptParagraph>): CharSequence {
-        val accent = ContextCompat.getColor(this, R.color.highlight_accent)
-        val labelColor = ContextCompat.getColor(this, R.color.gray7)
-        val density = resources.displayMetrics.density
-        val builder = android.text.SpannableStringBuilder()
-        val ranges = ArrayList<IntRange>(paragraphs.size)
-        var previousSpeaker: String? = null
-        for ((i, p) in paragraphs.withIndex()) {
-            if (i > 0) builder.append("\n\n")
-            val paragraphStart = builder.length
-            if (p.speaker != null && p.speaker != previousSpeaker) {
-                val labelStart = builder.length
-                builder.append(p.speaker).append('\n')
-                val labelEnd = labelStart + p.speaker.length
-                builder.setSpan(android.text.style.RelativeSizeSpan(0.85f), labelStart, labelEnd, SPAN_FLAGS)
-                builder.setSpan(android.text.style.ForegroundColorSpan(labelColor), labelStart, labelEnd, SPAN_FLAGS)
-                builder.setSpan(android.text.style.TypefaceSpan("sans-serif-medium"), labelStart, labelEnd, SPAN_FLAGS)
-            }
-            previousSpeaker = p.speaker
-            if (p.isBookmarked) {
-                val starStart = builder.length
-                builder.append(BOOKMARK_STAR)
-                builder.setSpan(android.text.style.ForegroundColorSpan(accent), starStart, builder.length, SPAN_FLAGS)
-                builder.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), starStart, builder.length, SPAN_FLAGS)
-            }
-            builder.append(p.text)
-            val paragraphEnd = builder.length
-            if (p.isBookmarked) {
-                builder.setSpan(
-                    BookmarkBarSpan(accent, (3 * density).toInt().coerceAtLeast(1), (12 * density).toInt()),
-                    paragraphStart, paragraphEnd, SPAN_FLAGS
-                )
-            }
-            val start = p.start
-            if (start != null) {
-                builder.setSpan(object : android.text.style.ClickableSpan() {
-                    override fun onClick(widget: View) = seekPlayerTo(start)
-                    override fun updateDrawState(ds: android.text.TextPaint) { /* plain text, not a link */ }
-                }, paragraphStart, paragraphEnd, SPAN_FLAGS)
-            }
-            ranges += paragraphStart until paragraphEnd
-        }
-        paragraphRanges = ranges
-        binding.transcriptText.movementMethod = android.text.method.LinkMovementMethod.getInstance()
-        binding.transcriptText.highlightColor = android.graphics.Color.TRANSPARENT
-        return builder
-    }
-
-    /**
-     * A document with no segments at all but a flat `text` (one "Speaker N: ..." line per turn):
-     * shown as blank-line-separated paragraphs. Null when there is nothing to show.
-     */
-    private fun flatTranscriptText(json: String): String? =
-        transcriptExportFields(json).first?.let { TranscriptMarkdown.plainParagraphs(it) }?.takeIf { it.isNotBlank() }
 
     /**
      * Scroll the page so the paragraph holding highlight [index] sits near the top and give it a
@@ -1004,43 +1187,58 @@ class FileDetailActivity : AppCompatActivity() {
         val paragraphs = transcriptParagraphs
         if (paragraphs.isEmpty()) return
         val position = paragraphs.indexOfFirst { index in it.bookmarks }.takeIf { it >= 0 }
-            ?: paragraphs.indexOfFirst { it.start != null && it.end != null && it.start <= h.at && h.at <= it.end }.takeIf { it >= 0 }
-            ?: paragraphs.indexOfFirst { it.start != null && it.start >= h.at }.takeIf { it >= 0 }
+            ?: JumpToItems.paragraphIndexAt(paragraphs, h.at).takeIf { it >= 0 }
             ?: paragraphs.lastIndex
         revealParagraph(position)
     }
 
-    private fun revealParagraph(position: Int) {
-        val range = paragraphRanges.getOrNull(position) ?: return
-        val text = binding.transcriptText
-        // A long transcript still being measured (or one the view has not caught up with) has
-        // no matching text to scroll or flash; the tap has still seeked the player.
-        if (text.visibility != View.VISIBLE || transcriptLayoutJob?.isActive == true) return
-        if (range.last >= text.text.length) return
-        val layout = text.layout ?: return
-        val line = layout.getLineForOffset(range.first)
-        val y = text.top + text.totalPaddingTop + layout.getLineTop(line) - (16 * resources.displayMetrics.density).toInt()
-        val scroll = binding.contentScroll
-        if (animationsEnabled()) scroll.smoothScrollTo(0, y.coerceAtLeast(0)) else scroll.scrollTo(0, y.coerceAtLeast(0))
-
-        clearParagraphFlash()
-        val spannable = text.text as? android.text.Spannable ?: return
-        val flash = android.text.style.BackgroundColorSpan(ContextCompat.getColor(this, R.color.highlight_flash))
-        spannable.setSpan(flash, range.first, range.last + 1, SPAN_FLAGS)
-        paragraphFlash = flash
-        flashHandler.postDelayed({ clearParagraphFlash() }, PARAGRAPH_FLASH_MS)
-    }
-
-    private fun clearParagraphFlash() {
+    /** Put paragraph [index] at the top of the viewport (header collapsed) and tint it for a moment. */
+    private fun revealParagraph(index: Int) {
+        if (index !in adapter.rows.indices) return
+        binding.appBar.setExpanded(false, false)
+        layoutManager.scrollToPositionWithOffset(adapter.positionOf(index), (16 * resources.displayMetrics.density).toInt())
         flashHandler.removeCallbacksAndMessages(null)
-        val flash = paragraphFlash ?: return
-        paragraphFlash = null
-        (binding.transcriptText.text as? android.text.Spannable)?.removeSpan(flash)
+        adapter.setFlash(index)
+        flashHandler.postDelayed({ adapter.setFlash(-1) }, PARAGRAPH_FLASH_MS)
     }
 
     /** False under the system's "Remove animations" setting (and in tests), where a jump beats a glide. */
     private fun animationsEnabled(): Boolean =
         android.provider.Settings.Global.getFloat(contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
+
+    // MARK: - Reading position
+
+    /** Restored once per screen, when the first paragraphs land. */
+    private var positionRestored = false
+
+    private fun positionKey(): String? = positionStore.keyFor(serverRecordingId, currentFile?.id)
+
+    private fun restorePositionIfAny() {
+        if (positionRestored) return
+        positionRestored = true
+        val key = positionKey() ?: return
+        val position = positionStore.load(key) ?: return
+        if (position.paragraphIndex !in adapter.rows.indices) return
+        binding.appBar.setExpanded(false, false)
+        layoutManager.scrollToPositionWithOffset(adapter.positionOf(position.paragraphIndex), -position.offsetPx)
+    }
+
+    /** Remember where the reader is: the first visible paragraph and how far it is scrolled past the top. */
+    @VisibleForTesting
+    internal fun savePosition() {
+        val key = positionKey() ?: return
+        if (adapter.rows.isEmpty()) return
+        val first = layoutManager.findFirstVisibleItemPosition()
+        if (first == RecyclerView.NO_POSITION) return
+        val paragraphIndex = adapter.paragraphIndexOf(first)
+        if (paragraphIndex < 0) {
+            positionStore.save(key, null) // the header is in view: back at the top
+            return
+        }
+        val child = layoutManager.findViewByPosition(first)
+        val offset = (child?.let { binding.transcriptList.paddingTop - it.top } ?: 0).coerceAtLeast(0)
+        positionStore.save(key, TranscriptPositionStore.Position(paragraphIndex, offset))
+    }
 
     // MARK: - Automations
 
@@ -1222,27 +1420,27 @@ class FileDetailActivity : AppCompatActivity() {
      */
     private fun bindAutomations() {
         val runs = routingRuns
-        binding.automationsList.removeAllViews()
+        header.automationsList.removeAllViews()
         val transcribed = serverTranscriptReady || serverRecording?.isDone == true
         // A recording with no speech had nothing to route: "No automations ran" would be noise.
         val showEmpty = runs != null && runs.isEmpty() && transcribed && !routingAwaitingRun && !isNoSpeech
         val showRuns = runs != null && runs.isNotEmpty()
-        binding.automationsHeader.visibility = if (showEmpty || showRuns) View.VISIBLE else View.GONE
-        binding.automationsEmpty.visibility = if (showEmpty) View.VISIBLE else View.GONE
-        binding.automationsList.visibility = if (showRuns) View.VISIBLE else View.GONE
+        header.automationsHeader.visibility = if (showEmpty || showRuns) View.VISIBLE else View.GONE
+        header.automationsEmpty.visibility = if (showEmpty) View.VISIBLE else View.GONE
+        header.automationsList.visibility = if (showRuns) View.VISIBLE else View.GONE
         if (runs == null || !showRuns) {
-            binding.automationsShowEarlier.visibility = View.GONE
+            header.automationsShowEarlier.visibility = View.GONE
             return
         }
         val shown = if (showEarlierRuns) runs else runs.take(1)
-        shown.forEachIndexed { index, run -> binding.automationsList.addView(buildRunBlock(run, isLatest = index == 0)) }
-        binding.automationsShowEarlier.visibility = if (runs.size > 1 && !showEarlierRuns) View.VISIBLE else View.GONE
+        shown.forEachIndexed { index, run -> header.automationsList.addView(buildRunBlock(run, isLatest = index == 0)) }
+        header.automationsShowEarlier.visibility = if (runs.size > 1 && !showEarlierRuns) View.VISIBLE else View.GONE
     }
 
     /**
      * One router run: the matched routes with their reasons and delivery outcomes, or the reason
      * nothing happened (router error, or no route matched). Plain views built here rather than a
-     * RecyclerView for the same reason as the highlights: a handful of rows inside a ScrollView.
+     * RecyclerView for the same reason as the highlights: a handful of rows inside the header.
      */
     private fun buildRunBlock(run: RoutingRun, isLatest: Boolean): View {
         val density = resources.displayMetrics.density
@@ -1325,13 +1523,15 @@ class FileDetailActivity : AppCompatActivity() {
     }
 
     /**
-     * "[state pill] outcome · time" plus a Retry pill when it failed. The agent's own report
-     * (result_status) speaks first; only without one does the hand-off status stand in.
+     * One delivery: the agent's report when there is one ("Saved to Meetings/Note.md"), a chip
+     * only while it is still working or when it failed, the time underneath, and a Retry pill
+     * when the server allows one. The agent's own report (result_status) speaks first; only
+     * without one does the hand-off status stand in.
      */
     private fun buildDeliveryRow(d: Delivery): View {
         val density = resources.displayMetrics.density
         fun dp(v: Int) = (v * density).toInt()
-        val (pillText, pillColor, pillBg, detail) = deliveryPresentation(d)
+        val presentation = deliveryPresentation(d)
         val row = android.widget.LinearLayout(this).apply {
             id = R.id.automation_delivery_row
             orientation = android.widget.LinearLayout.HORIZONTAL
@@ -1339,33 +1539,37 @@ class FileDetailActivity : AppCompatActivity() {
             setPadding(0, dp(6), 0, dp(2))
             tag = d
         }
-        row.addView(android.widget.TextView(this).apply {
-            id = R.id.automation_delivery_pill
-            text = pillText
-            setTextColor(ContextCompat.getColor(this@FileDetailActivity, pillColor))
-            setBackgroundResource(pillBg)
-            textSize = 11f
-            typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
-            setPadding(dp(8), dp(2), dp(8), dp(2))
-            includeFontPadding = false
-        }, android.widget.LinearLayout.LayoutParams(
-            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(2); marginEnd = dp(8) })
+        presentation.chip?.let { chipText ->
+            row.addView(android.widget.TextView(this).apply {
+                id = R.id.automation_delivery_pill
+                text = chipText
+                setTextColor(ContextCompat.getColor(this@FileDetailActivity, presentation.chipColor))
+                setBackgroundResource(presentation.chipBackground)
+                textSize = 11f
+                typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+                setPadding(dp(8), dp(2), dp(8), dp(2))
+                includeFontPadding = false
+            }, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(2); marginEnd = dp(8) })
+        }
         val textColumn = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
-            addView(android.widget.TextView(this@FileDetailActivity).apply {
-                id = R.id.automation_delivery_text
-                text = detail
-                setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.dark_gray))
-                textSize = 13f
-                typeface = android.graphics.Typeface.SANS_SERIF
-            })
+            presentation.detail?.let { detail ->
+                addView(android.widget.TextView(this@FileDetailActivity).apply {
+                    id = R.id.automation_delivery_text
+                    text = detail
+                    setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.dark_gray))
+                    textSize = 13f
+                    typeface = android.graphics.Typeface.SANS_SERIF
+                })
+            }
             d.effectiveAt?.let { at ->
                 addView(mutedText(formatMetaDate(at)).apply {
                     id = R.id.automation_delivery_time
                     textSize = 12f
-                    setPadding(0, dp(2), 0, 0)
+                    setPadding(0, if (presentation.detail != null) dp(2) else 0, 0, 0)
                 })
             }
         }
@@ -1388,45 +1592,38 @@ class FileDetailActivity : AppCompatActivity() {
         return row
     }
 
-    /** (pill label, pill text color, pill background, detail text) for one delivery. */
-    private data class DeliveryPresentation(val pill: String, val color: Int, val background: Int, val detail: String)
+    /**
+     * How one delivery reads: [chip] only while in flight or failed (null otherwise), [detail]
+     * the outcome in words (the agent's summary alone when there is one), or null when the chip
+     * says it all.
+     */
+    private data class DeliveryPresentation(val chip: String?, val chipColor: Int, val chipBackground: Int, val detail: String?)
 
     private fun deliveryPresentation(d: Delivery): DeliveryPresentation = when (d.resultStatus) {
         Delivery.RESULT_QUEUED -> DeliveryPresentation(
-            getString(R.string.automation_state_working), R.color.orange, R.drawable.bg_status_pending,
-            getString(R.string.automation_working_text)
+            getString(R.string.automation_state_working), R.color.orange, R.drawable.bg_status_pending, null
         )
-        Delivery.RESULT_DONE -> DeliveryPresentation(
-            getString(R.string.automation_state_done), R.color.green, R.drawable.bg_status_synced,
-            d.resultSummary ?: getString(R.string.automation_state_done)
-        )
+        Delivery.RESULT_DONE -> DeliveryPresentation(null, 0, 0, d.resultSummary ?: getString(R.string.automation_state_done))
         Delivery.RESULT_FAILED -> DeliveryPresentation(
             getString(R.string.automation_state_failed), R.color.red, R.drawable.bg_status_pending,
-            d.resultSummary ?: d.lastError ?: getString(R.string.automation_failed_text)
+            d.resultSummary ?: d.lastError
         )
         // The job was accepted but never reported back within the server's deadline: neither
-        // good nor bad news, so the neutral pill; Retry is offered because the server allows it.
-        Delivery.RESULT_UNKNOWN -> DeliveryPresentation(
-            getString(R.string.automation_state_no_report), R.color.gray7, R.drawable.bg_status_neutral,
-            getString(R.string.automation_no_report_text)
-        )
+        // good nor bad news; Retry is offered because the server allows it.
+        Delivery.RESULT_UNKNOWN -> DeliveryPresentation(null, 0, 0, getString(R.string.automation_no_report_text))
         else -> when (d.status) {
             Delivery.STATUS_FAILED -> DeliveryPresentation(
-                getString(R.string.automation_state_failed), R.color.red, R.drawable.bg_status_pending,
-                d.lastError ?: getString(R.string.automation_failed_text)
+                getString(R.string.automation_state_failed), R.color.red, R.drawable.bg_status_pending, d.lastError
             )
             Delivery.STATUS_PENDING -> DeliveryPresentation(
-                getString(R.string.automation_state_pending), R.color.orange, R.drawable.bg_status_pending,
-                getString(R.string.automation_pending_text)
+                getString(R.string.detail_delivery_waiting), R.color.orange, R.drawable.bg_status_pending, null
             )
             // "ok" without a report: a webhook was handed to something that has not (or will
             // not) report back; a markdown or decision-only action ran to completion right there.
-            else -> if (d.actionType == Delivery.ACTION_WEBHOOK) DeliveryPresentation(
-                getString(R.string.automation_state_handed_off), R.color.gray7, R.drawable.bg_status_neutral,
-                getString(R.string.automation_handed_off_text)
-            ) else DeliveryPresentation(
-                getString(R.string.automation_state_done), R.color.green, R.drawable.bg_status_synced,
-                getString(R.string.automation_state_done)
+            else -> DeliveryPresentation(
+                null, 0, 0,
+                if (d.actionType == Delivery.ACTION_WEBHOOK) getString(R.string.automation_handed_off_text)
+                else getString(R.string.automation_state_done)
             )
         }
     }
@@ -1443,7 +1640,7 @@ class FileDetailActivity : AppCompatActivity() {
         lifecycleScope.launch {
             when (val result = serverSource.retryDelivery(d.id)) {
                 is ApiClient.RetryResult.Ok -> {
-                    Toast.makeText(this@FileDetailActivity, R.string.automation_retry_queued, Toast.LENGTH_SHORT).show()
+                    snack(getString(R.string.automation_retry_queued))
                     refreshRouting()
                 }
                 // The delivery moved on without us (retried elsewhere, or it succeeded after
@@ -1452,7 +1649,7 @@ class FileDetailActivity : AppCompatActivity() {
                 is ApiClient.RetryResult.NotFound -> showAlert(getString(R.string.automations), getString(R.string.recording_not_on_server))
                 is ApiClient.RetryResult.AuthError -> showAlert(getString(R.string.automations), getString(R.string.transcript_auth_error))
                 is ApiClient.RetryResult.Error -> {
-                    showAlert(getString(R.string.automations), getString(R.string.server_request_failed_fmt, result.message))
+                    showAlert(getString(R.string.automations), result.detail ?: getString(R.string.detail_request_failed))
                     // A lost response may hide a retry the server did run: show its state.
                     refreshRouting()
                 }
@@ -1492,7 +1689,7 @@ class FileDetailActivity : AppCompatActivity() {
         val pending = pendingReruns[serverId]
         val intent = pending ?: RerunIntent(UUID.randomUUID().toString(), instructions)
         if (pending != null && pending.instructions != instructions) {
-            Toast.makeText(this, R.string.automations_retrying_earlier, Toast.LENGTH_LONG).show()
+            snack(getString(R.string.automations_retrying_earlier), Snackbar.LENGTH_LONG)
         }
         pendingReruns[serverId] = intent
         rerunScope.launch {
@@ -1555,7 +1752,7 @@ class FileDetailActivity : AppCompatActivity() {
         }
         when (result) {
             is ApiClient.ActionResult.Ok -> {
-                Toast.makeText(this, R.string.automations_queued, Toast.LENGTH_SHORT).show()
+                snack(getString(R.string.automations_queued))
                 for (delay in RERUN_REFRESH_DELAYS_MS) routingHandler.postDelayed({ refreshRouting() }, delay)
             }
             is ApiClient.ActionResult.Error -> {
@@ -1563,7 +1760,7 @@ class FileDetailActivity : AppCompatActivity() {
                 // transcript can vanish under a re-transcribe between the two).
                 showAlert(
                     getString(R.string.automations),
-                    if (result.message == "HTTP 409") getString(R.string.automations_need_transcript) else actionErrorMessage(result)
+                    if (result.code == 409) result.detail ?: getString(R.string.automations_need_transcript) else actionErrorMessage(result)
                 )
                 if (isAmbiguousRerunFailure(result)) reconcileRerun(baselineRunId, onReconciled)
             }
@@ -1604,11 +1801,18 @@ class FileDetailActivity : AppCompatActivity() {
     }
 
     private fun showAlert(title: String, message: String) {
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle(title)
             .setMessage(message)
             .setPositiveButton(android.R.string.ok, null)
             .show()
+    }
+
+    /** A short confirmation, above the player when there is one. */
+    private fun snack(text: CharSequence, duration: Int = Snackbar.LENGTH_SHORT) {
+        val snackbar = Snackbar.make(binding.coordinator, text, duration)
+        if (binding.audioPlayer.visibility == View.VISIBLE) snackbar.anchorView = binding.bottomBar
+        snackbar.show()
     }
 
     // MARK: - Transcript for a phone copy without a server id
@@ -1628,8 +1832,9 @@ class FileDetailActivity : AppCompatActivity() {
             transcriptChecked = true
         }
         if (!RecordingStore.isServerConfigured) return
-        binding.generateButton.isEnabled = false
-        binding.emptySubtitle.text = getString(R.string.checking_transcript)
+        header.generateButton.isEnabled = false
+        header.emptySubtitle.text = getString(R.string.checking_transcript)
+        header.emptySubtitle.visibility = View.VISIBLE
 
         lifecycleScope.launch {
             var foundByLookup = false
@@ -1666,7 +1871,7 @@ class FileDetailActivity : AppCompatActivity() {
 
             if (RecordingStore.serverConfigGeneration != configGen) {
                 // Answered by a server the app no longer talks to: show nothing from it.
-                binding.generateButton.isEnabled = true
+                header.generateButton.isEnabled = true
                 return@launch
             }
             // The lookup may have stored a server id; from here on the server path owns it.
@@ -1674,7 +1879,7 @@ class FileDetailActivity : AppCompatActivity() {
             if (serverRecordingId == null) serverRecordingId = currentFile?.serverId?.takeIf { it.isNotBlank() }
             if (foundByLookup) serverKnowsRecording = true
             registerAsLiveScreen()
-            binding.generateButton.isEnabled = true
+            header.generateButton.isEnabled = true
             when (outcome) {
                 is ApiClient.TranscriptResult.Ready -> {
                     val arrived = transcriptArrived()
@@ -1684,22 +1889,22 @@ class FileDetailActivity : AppCompatActivity() {
                 }
                 is ApiClient.TranscriptResult.Pending -> {
                     transcriptWasPending = true
-                    binding.emptySubtitle.text = getString(R.string.transcription_pending)
+                    header.emptySubtitle.text = getString(R.string.transcription_pending)
                     bindAutomations() // a cached transcript on screen no longer counts as routable
                     // With the id now known, the recording object can be watched until it is
                     // done (provisionally, on the strength of the 409, see transcriptionInProgress).
                     syncTranscriptionPolling()
                 }
                 is ApiClient.TranscriptResult.NotFound -> {
-                    binding.emptySubtitle.text = getString(R.string.transcript_not_on_server)
+                    header.emptySubtitle.text = getString(R.string.transcript_not_on_server)
                     if (userInitiated) showTranscriptAlert(getString(R.string.transcript_not_on_server))
                 }
                 is ApiClient.TranscriptResult.AuthError -> {
-                    binding.emptySubtitle.text = getString(R.string.transcript_auth_error)
+                    header.emptySubtitle.text = getString(R.string.transcript_auth_error)
                     if (userInitiated) showTranscriptAlert(getString(R.string.transcript_auth_error))
                 }
                 is ApiClient.TranscriptResult.Error -> {
-                    binding.emptySubtitle.text = getString(R.string.transcript_server_error)
+                    header.emptySubtitle.text = getString(R.string.transcript_server_error)
                     if (userInitiated) showTranscriptAlert(getString(R.string.transcript_server_error))
                 }
             }
@@ -1707,6 +1912,7 @@ class FileDetailActivity : AppCompatActivity() {
             // transcript answer was (a cached transcript is on screen when it is Pending or Error).
             // Skipped when the Ready branch above already started one.
             if (serverRecordingId != null && routingRuns == null && !routingLoading) refreshRouting()
+            updateToolbarActions()
         }
     }
 
@@ -1725,28 +1931,78 @@ class FileDetailActivity : AppCompatActivity() {
         }.trim()
     }
 
-    // MARK: - Audio Player
+    // MARK: - Audio player
 
-    // Media3 ExoPlayer: OEM MediaPlayerNative frequently fails on Ogg/Opus (the sync/export
-    // format); ExoPlayer's own extractor + platform decoder handles it reliably.
-    private var exoPlayer: ExoPlayer? = null
+    /** The screen's handle on the app's one player (in [PlaybackService]); null before onCreate binds it. */
+    private var playback: Playback? = null
+
+    /** What this screen wants played; null when the recording has no audio the phone can reach. */
+    private var boundItem: Playback.Item? = null
+
+    /** The slider is under the reader's finger: the ticker must not move it. */
+    private var scrubbing = false
+
+    /** Auto-scroll keeps the paragraph being played in view until the reader scrolls away. */
+    private var followPlayback = true
+
+    private val progressHandler = Handler(Looper.getMainLooper())
+    private var progressRunnable: Runnable? = null
+
+    private val playbackListener = object : Playback.Listener {
+        override fun onPlaybackChanged() {
+            maybeLoadItem()
+            syncPlayerUi()
+        }
+    }
+
+    private val playerPrefs get() = getSharedPreferences(PLAYER_PREFS, Context.MODE_PRIVATE)
+
+    /** The speed the reader last chose, kept across recordings. */
+    private var preferredSpeed: Float
+        get() = playerPrefs.getFloat(PREF_SPEED, 1f).takeIf { s -> SPEEDS.any { it == s } } ?: 1f
+        set(value) = playerPrefs.edit().putFloat(PREF_SPEED, value).apply()
 
     private fun setupAudioPlayerControls() {
         binding.playPauseButton.setOnClickListener { togglePlayPause() }
-        binding.rewindButton.setOnClickListener { seekBy(-5_000) }
-        binding.forwardButton.setOnClickListener { seekBy(5_000) }
-        binding.progressSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (fromUser) {
-                    val p = exoPlayer ?: return
-                    val target = (progress / 1000f * p.duration).toLong().coerceAtLeast(0)
-                    p.seekTo(target)
-                    binding.currentTimeLabel.text = formatClock(target)
-                }
+        binding.rewindButton.setOnClickListener { seekBy(-SKIP_BACK_MS) }
+        binding.forwardButton.setOnClickListener { seekBy(SKIP_FORWARD_MS) }
+        binding.progressSlider.setLabelFormatter { formatClock(it.toLong()) }
+        binding.progressSlider.addOnChangeListener { _, value, fromUser ->
+            if (fromUser) binding.currentTimeLabel.text = formatClock(value.toLong())
+        }
+        binding.progressSlider.addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
+            override fun onStartTrackingTouch(slider: Slider) {
+                scrubbing = true
             }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(slider: Slider) {
+                scrubbing = false
+                seekPlayerToMs(slider.value.toLong())
+            }
         })
+        binding.speedChips.setOnCheckedStateChangeListener { _, checkedIds ->
+            val speed = speedForChip(checkedIds.firstOrNull() ?: return@setOnCheckedStateChangeListener)
+            preferredSpeed = speed
+            if (playbackIsOurs) playback?.setSpeed(speed)
+        }
+        syncSpeedChips(preferredSpeed)
+        binding.returnToPlayback.setOnClickListener { resumeFollow() }
+    }
+
+    private fun speedForChip(chipId: Int): Float = when (chipId) {
+        R.id.speed1_5x -> 1.5f
+        R.id.speed2x -> 2f
+        else -> 1f
+    }
+
+    private fun chipForSpeed(speed: Float): Int = when {
+        speed >= 2f -> R.id.speed2x
+        speed >= 1.5f -> R.id.speed1_5x
+        else -> R.id.speed1x
+    }
+
+    private fun syncSpeedChips(speed: Float) {
+        val id = chipForSpeed(speed)
+        if (binding.speedChips.checkedChipId != id) binding.speedChips.check(id)
     }
 
     /**
@@ -1754,168 +2010,247 @@ class FileDetailActivity : AppCompatActivity() {
      * once the server copy is known, else no player.
      */
     private fun bindAudio(file: RecordingFile?, rec: ServerRecording?) {
+        val model = currentModel
         val path = file?.localPath
-        if (path != null && File(path).exists()) {
-            bindLocalAudioPlayer(path)
-            return
+        val subtitle = model?.let { formatMetaDate(it.recordedAtMillis) }
+        val item = when {
+            path != null && File(path).exists() -> {
+                // Self-heal legacy files exported with the SDK's corrupt OpusTags header
+                if (path.endsWith(".opus", ignoreCase = true)) org.plaudbridge.app.common.OpusRepair.repairIfNeeded(path)
+                Playback.Item(path, android.net.Uri.fromFile(File(path)), model?.title ?: "", subtitle, file?.id, rec?.id ?: serverRecordingId)
+            }
+            rec != null -> try {
+                val url = ApiClient.recordingAudioUrl(rec.id)
+                Playback.Item(url, android.net.Uri.parse(url), model?.title ?: "", subtitle, file?.id, rec.id)
+            } catch (e: IllegalStateException) {
+                null
+            }
+            else -> null
         }
-        if (rec != null) {
-            bindServerAudioPlayer(rec)
-            return
+        val previous = boundItem
+        boundItem = item
+        // The same recording from a different source (its phone copy was just removed, so the
+        // server stream takes over): a player still on the old source must not keep playing it
+        // behind a card that says otherwise. Hand it the new source, or stop it when there is none.
+        val p = playback
+        if (p != null && previous != null && previous.mediaId != item?.mediaId && p.currentMediaId == previous.mediaId) {
+            if (item != null) p.setItem(item) else p.pause()
         }
-        binding.audioPlayer.visibility = View.GONE
-        releasePlayer()
-    }
-
-    private fun bindLocalAudioPlayer(path: String) {
-        // Self-heal legacy files exported with the SDK's corrupt OpusTags header
-        if (path.endsWith(".opus", ignoreCase = true)) {
-            org.plaudbridge.app.common.OpusRepair.repairIfNeeded(path)
-        }
-        preparePlayer(key = path, mediaItem = MediaItem.fromUri(android.net.Uri.fromFile(File(path))), httpFactory = null)
-    }
-
-    private fun bindServerAudioPlayer(rec: ServerRecording) {
-        val url = try { ApiClient.recordingAudioUrl(rec.id) } catch (e: IllegalStateException) {
+        if (item == null) {
             binding.audioPlayer.visibility = View.GONE
-            releasePlayer()
+            stopProgressTicks()
+            updateReturnChip()
             return
         }
-        val factory = DefaultHttpDataSource.Factory()
-            .setDefaultRequestProperties(mapOf("Authorization" to ApiClient.authHeader()))
-        preparePlayer(key = url, mediaItem = MediaItem.fromUri(url), httpFactory = factory)
+        binding.audioPlayer.visibility = View.VISIBLE
+        maybeLoadItem()
+        // A rename (or a title that arrived after the first bind) reaches the notification too.
+        if (p != null && p.isConnected && p.currentMediaId == item.mediaId) p.setItem(item)
+        syncPlayerUi()
     }
 
     /**
-     * Build and prepare the player for [mediaItem] unless the same [key] is already prepared
-     * (avoids re-preparing on every onResume / re-bind). [httpFactory] is only set for server
-     * streams; local files use the default file source.
+     * Give the player this recording when it holds nothing yet, so the duration is known before
+     * the first tap. When it is busy with ANOTHER recording (left playing from a previous screen)
+     * that one keeps going until the reader presses play here, see [ensureItemLoaded].
      */
-    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-    private fun preparePlayer(key: String, mediaItem: MediaItem, httpFactory: DataSource.Factory?) {
-        binding.audioPlayer.visibility = View.VISIBLE
-        if (preparedKey == key && exoPlayer != null) return
+    private fun maybeLoadItem() {
+        val p = playback ?: return
+        val item = boundItem ?: return
+        if (!p.isConnected) return
+        if (p.currentMediaId == null) p.setItem(item)
+    }
 
-        releasePlayer()
-        val player = try {
-            ExoPlayer.Builder(this).apply {
-                if (httpFactory != null) {
-                    setMediaSourceFactory(DefaultMediaSourceFactory(this@FileDetailActivity).setDataSourceFactory(httpFactory))
-                }
-            }.build()
-        } catch (e: Exception) {
-            // No usable player on this device (or JVM); the page still works without playback.
-            org.plaudbridge.app.common.AppLog.w("FileDetail", "ExoPlayer unavailable", e)
+    /** Before play or seek: this recording must be the one in the player. */
+    private fun ensureItemLoaded() {
+        val p = playback ?: return
+        val item = boundItem ?: return
+        if (p.currentMediaId != item.mediaId || p.hasError) p.setItem(item)
+    }
+
+    /** The player holds this screen's recording (rather than nothing, or another recording). */
+    private val playbackIsOurs: Boolean
+        get() {
+            val id = boundItem?.mediaId ?: return false
+            return playback?.currentMediaId == id
+        }
+
+    /** The length to show: the player's once it knows, else what the server or the phone recorded. */
+    private fun knownDurationMs(): Long {
+        val p = playback
+        if (p != null && playbackIsOurs && p.durationMs > 0) return p.durationMs
+        return (currentModel?.durationSeconds ?: 0L) * 1000L
+    }
+
+    /** Everything the player card shows, from the player's state. */
+    private fun syncPlayerUi() {
+        val p = playback
+        val item = boundItem ?: return
+        if (p != null && p.hasError && p.currentMediaId == item.mediaId) {
+            // The player refused this recording: no controls that cannot work.
             binding.audioPlayer.visibility = View.GONE
+            stopProgressTicks()
+            updateReturnChip()
             return
         }
-        exoPlayer = player
-        // Remember the key now, not at STATE_READY: a second bind of the same recording (the
-        // server path renders once for the header and again when the transcript lands) must not
-        // tear down a player that is still buffering. onPlayerError releases and clears it.
-        preparedKey = key
-        player.addListener(object : androidx.media3.common.Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                when (state) {
-                    androidx.media3.common.Player.STATE_READY -> {
-                        binding.totalTimeLabel.text = formatClock(player.duration.coerceAtLeast(0))
-                    }
-                    androidx.media3.common.Player.STATE_ENDED -> {
-                        stopProgressUpdates()
-                        binding.playPauseButton.setImageResource(R.drawable.ic_play_arrow)
-                        player.pause()
-                        player.seekTo(0)
-                        binding.progressSlider.progress = 0
-                        binding.currentTimeLabel.text = formatClock(0)
-                    }
-                    else -> {}
-                }
-            }
-            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                org.plaudbridge.app.common.AppLog.w("FileDetail", "ExoPlayer error: ${error.errorCodeName}")
-                binding.audioPlayer.visibility = View.GONE
-                releasePlayer()
-            }
-        })
-        player.setMediaItem(mediaItem)
-        player.prepare()
-        binding.currentTimeLabel.text = formatClock(0)
-        binding.progressSlider.progress = 0
+        binding.audioPlayer.visibility = View.VISIBLE
+        val ours = playbackIsOurs
+        val playing = ours && p?.isPlaying == true
+        val position = if (ours) p?.positionMs ?: 0L else 0L
+        binding.playPauseButton.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play_arrow)
+        binding.totalTimeLabel.text = formatClock(knownDurationMs())
+        if (!scrubbing) binding.currentTimeLabel.text = formatClock(position)
+        updateSlider(position, knownDurationMs())
+        syncSpeedChips(if (ours && p != null) p.speed else preferredSpeed)
+        updateNowPlaying(position, playing)
+        if (playing && inForeground) startProgressTicks() else stopProgressTicks()
+        updateReturnChip()
+    }
+
+    private fun updateSlider(positionMs: Long, durationMs: Long) {
+        val slider = binding.progressSlider
+        val to = if (durationMs > 0) durationMs.toFloat() else 1f
+        if (slider.valueTo != to) {
+            if (slider.value > to) slider.value = 0f
+            slider.valueTo = to
+        }
+        if (!scrubbing) slider.value = positionMs.toFloat().coerceIn(0f, to)
     }
 
     private fun togglePlayPause() {
-        val p = exoPlayer ?: return
-        if (p.isPlaying) {
+        val p = playback ?: return
+        if (boundItem == null) return
+        if (playbackIsOurs && p.isPlaying) {
             p.pause()
-            stopProgressUpdates()
-            binding.playPauseButton.setImageResource(R.drawable.ic_play_arrow)
         } else {
+            ensureItemLoaded()
+            p.setSpeed(preferredSpeed)
             p.play()
-            startProgressUpdates()
-            binding.playPauseButton.setImageResource(R.drawable.ic_pause)
+            followPlayback = true
         }
+        syncPlayerUi()
     }
 
-    private fun seekBy(deltaMs: Int) {
-        val p = exoPlayer ?: return
-        val duration = p.duration.coerceAtLeast(0)
-        val target = (p.currentPosition + deltaMs).coerceIn(0, duration)
+    private fun seekBy(deltaMs: Long) {
+        val p = playback ?: return
+        if (boundItem == null) return
+        val current = if (playbackIsOurs) p.positionMs else 0L
+        seekPlayerToMs(current + deltaMs)
+    }
+
+    /** Jump playback to [seconds] from the start; no player, no action. */
+    private fun seekPlayerTo(seconds: Double) = seekPlayerToMs((seconds * 1000).toLong())
+
+    private fun seekPlayerToMs(ms: Long) {
+        val p = playback ?: return
+        if (boundItem == null) return
+        val duration = knownDurationMs()
+        val target = ms.coerceIn(0L, if (duration > 0) duration else Long.MAX_VALUE)
+        ensureItemLoaded()
         p.seekTo(target)
         binding.currentTimeLabel.text = formatClock(target)
-        binding.progressSlider.progress = if (duration > 0) (target * 1000 / duration).toInt() else 0
+        updateSlider(target, duration)
+        updateNowPlaying(target, p.isPlaying)
     }
 
-    private fun startProgressUpdates() {
-        stopProgressUpdates()
-        progressRunnable = object : Runnable {
+    private fun startProgressTicks() {
+        if (progressRunnable != null) return
+        val tick = object : Runnable {
             override fun run() {
-                val p = exoPlayer ?: return
-                if (p.isPlaying) {
-                    val duration = p.duration.coerceAtLeast(0)
-                    binding.currentTimeLabel.text = formatClock(p.currentPosition)
-                    binding.progressSlider.progress =
-                        if (duration > 0) (p.currentPosition * 1000 / duration).toInt() else 0
+                val p = playback
+                if (p == null || !playbackIsOurs || !p.isPlaying) {
+                    progressRunnable = null
+                    syncPlayerUi()
+                    return
                 }
-                progressHandler.postDelayed(this, 200)
+                val position = p.positionMs
+                if (!scrubbing) {
+                    binding.currentTimeLabel.text = formatClock(position)
+                    updateSlider(position, knownDurationMs())
+                }
+                updateNowPlaying(position, true)
+                progressHandler.postDelayed(this, PROGRESS_TICK_MS)
             }
         }
-        progressHandler.post(progressRunnable!!)
+        progressRunnable = tick
+        progressHandler.post(tick)
     }
 
-    private fun stopProgressUpdates() {
+    private fun stopProgressTicks() {
         progressRunnable?.let { progressHandler.removeCallbacks(it) }
         progressRunnable = null
     }
 
-    private fun releasePlayer() {
-        stopProgressUpdates()
-        exoPlayer?.release()
-        exoPlayer = null
-        preparedKey = null
+    /**
+     * "m:ss", or "h:mm:ss" throughout once the recording is an hour or longer, so the two clock
+     * labels keep one width while the numbers move.
+     */
+    private fun formatClock(ms: Long): String {
+        val s = (ms / 1000).coerceAtLeast(0)
+        return if (knownDurationMs() >= 3_600_000L) String.format(Locale.US, "%d:%02d:%02d", s / 3600, s % 3600 / 60, s % 60)
+        else TranscriptMarkdown.formatTimestamp(s.toDouble())
     }
 
-    private fun formatClock(ms: Long): String {
-        val total = (ms / 1000).toInt().coerceAtLeast(0)
-        return String.format("%02d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
+    // MARK: - Now playing
+
+    /**
+     * Tint the paragraph the playhead is in and, while following, keep it in view. Nothing is
+     * tinted before playback has started (position 0, not playing).
+     */
+    private fun updateNowPlaying(positionMs: Long, playing: Boolean) {
+        val index = if (playbackIsOurs && (playing || positionMs > 0)) TranscriptRows.nowPlayingIndex(transcriptParagraphs, positionMs / 1000.0) else -1
+        if (index == adapter.nowPlayingIndex) return
+        adapter.setNowPlaying(index)
+        if (playing && followPlayback && index >= 0) ensureParagraphVisible(index)
+    }
+
+    /** Scroll only when the paragraph is not already fully on screen; land it in the upper third. */
+    private fun ensureParagraphVisible(index: Int) {
+        val position = adapter.positionOf(index)
+        val first = layoutManager.findFirstCompletelyVisibleItemPosition()
+        val last = layoutManager.findLastCompletelyVisibleItemPosition()
+        if (first != RecyclerView.NO_POSITION && position in first..last) return
+        binding.appBar.setExpanded(false, animationsEnabled())
+        val viewport = binding.transcriptList.height - binding.transcriptList.paddingBottom
+        layoutManager.scrollToPositionWithOffset(position, (viewport / 3).coerceAtLeast(0))
+    }
+
+    /** The reader took over the scrolling: stop following until asked to return. */
+    private fun onUserScrollGesture() {
+        if (!followPlayback) return
+        followPlayback = false
+        updateReturnChip()
+    }
+
+    private fun resumeFollow() {
+        followPlayback = true
+        adapter.nowPlayingIndex.takeIf { it >= 0 }?.let { ensureParagraphVisible(it) }
+        updateReturnChip()
+    }
+
+    /** The chip offers the way back only while something is playing and the reader has wandered. */
+    private fun updateReturnChip() {
+        val show = playbackIsOurs && playback?.isPlaying == true && !followPlayback && transcriptParagraphs.isNotEmpty()
+        binding.returnToPlayback.visibility = if (show) View.VISIBLE else View.GONE
     }
 
     override fun onPause() {
         super.onPause()
         inForeground = false
         stopTranscriptionPolling()
-        // Pause playback when leaving the screen
-        exoPlayer?.takeIf { it.isPlaying }?.let {
-            it.pause()
-            stopProgressUpdates()
-            binding.playPauseButton.setImageResource(R.drawable.ic_play_arrow)
-        }
+        savePosition()
+        // Playback goes on in the service; only the screen's clock stops ticking.
+        stopProgressTicks()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        releasePlayer()
+        stopProgressTicks()
+        playback?.release()
+        playback = null
         routingHandler.removeCallbacksAndMessages(null)
         flashHandler.removeCallbacksAndMessages(null)
+        transcriptParseJob?.cancel()
         // Reads in flight die with the scope; whoever waited on them must not wait forever
         // (a rerun guard held for reconciliation would otherwise pin Run automations off).
         drainRoutingSettledCallbacks()
@@ -1924,15 +2259,22 @@ class FileDetailActivity : AppCompatActivity() {
         serverRecordingId?.let { if (liveScreens[it] === this) liveScreens.remove(it) }
     }
 
-    // MARK: - More Menu
+    // MARK: - More sheet
 
-    private fun showMoreMenu(anchor: View) {
+    private fun showMoreSheet() {
         if (currentModel == null || currentItem() == null) return
-        val popup = PopupMenu(this, anchor)
+        if (supportFragmentManager.findFragmentByTag(MoreActionsSheet.TAG) != null) return
+        MoreActionsSheet().show(supportFragmentManager, MoreActionsSheet.TAG)
+    }
+
+    override fun moreSheetTitle(): String? = currentModel?.title
+
+    override fun buildMoreMenu(): Menu? {
+        if (currentModel == null || currentItem() == null) return null
+        val popup = PopupMenu(this, binding.moreButton)
         popup.menuInflater.inflate(R.menu.menu_file_detail, popup.menu)
         applyMenuVisibility(popup.menu)
-        popup.setOnMenuItemClickListener { item -> onMenuAction(item.itemId) }
-        popup.show()
+        return popup.menu
     }
 
     /**
@@ -1941,14 +2283,11 @@ class FileDetailActivity : AppCompatActivity() {
      * actions need a server copy.
      */
     @VisibleForTesting
-    internal fun applyMenuVisibility(menu: android.view.Menu) {
-        val model = currentModel ?: return
+    internal fun applyMenuVisibility(menu: Menu) {
+        currentModel ?: return
         val hasAudio = currentFile?.isSynced == true
         val hasServer = serverRecordingId != null
         menu.findItem(R.id.action_export)?.isVisible = hasAudio
-        menu.findItem(R.id.action_copy_summary)?.isVisible = model.summary != null
-        menu.findItem(R.id.action_copy_transcript)?.isVisible = transcriptPlainText != null
-        menu.findItem(R.id.action_export_markdown)?.isVisible = transcriptPlainText != null
         menu.findItem(R.id.action_retranscribe)?.isVisible = hasServer
         // The router needs a transcript to read (see serverTranscriptReady; a recording with no
         // speech has none, whatever the server's transcript endpoint answered) and a server that
@@ -1967,17 +2306,14 @@ class FileDetailActivity : AppCompatActivity() {
         menu.findItem(R.id.action_delete)?.isVisible = true
     }
 
-    /** Menu dispatch, separate from the PopupMenu so tests can drive it. */
+    /** Menu dispatch, separate from the sheet so tests can drive it. */
     @VisibleForTesting
-    internal fun onMenuAction(itemId: Int): Boolean {
-        val model = currentModel ?: return false
+    override fun onMenuAction(itemId: Int): Boolean {
+        currentModel ?: return false
         val item = currentItem() ?: return false
         when (itemId) {
             R.id.action_export -> currentFile?.let { exportAudio(it) }
             R.id.action_rename -> showRenameDialog(item)
-            R.id.action_copy_summary -> copySummary(model)
-            R.id.action_copy_transcript -> copyTranscript()
-            R.id.action_export_markdown -> exportMarkdown(model)
             R.id.action_retranscribe -> serverRecordingId?.let { retranscribeOnServer(it) }
             R.id.action_run_automations -> serverRecordingId?.let { runAutomations(it) }
             R.id.action_run_automations_with_instructions -> serverRecordingId?.let { showRunWithInstructionsDialog(it) }
@@ -1989,41 +2325,64 @@ class FileDetailActivity : AppCompatActivity() {
     }
 
     private fun retranscribeOnServer(serverId: String) {
-        binding.generateButton.isEnabled = false
+        header.generateButton.isEnabled = false
         lifecycleScope.launch {
             when (val result = RecordingActions.retranscribe(serverId, serverSource)) {
                 is ApiClient.ActionResult.Ok -> {
-                    Toast.makeText(this@FileDetailActivity, R.string.retranscribe_queued, Toast.LENGTH_SHORT).show()
+                    snack(getString(R.string.retranscribe_queued))
                     transcriptWasPending = true
                     loadServerRecording(serverId)
                 }
                 else -> {
-                    binding.generateButton.isEnabled = true
+                    header.generateButton.isEnabled = true
                     showTranscriptAlert(actionErrorMessage(result))
                 }
             }
         }
     }
 
-    private fun showRenameDialog(item: RecordingItem) {
-        val editText = EditText(this).apply {
-            setText(item.title)
-            selectAll()
-            setPadding(48, 32, 48, 32)
-        }
-        AlertDialog.Builder(this)
-            .setTitle(R.string.rename)
-            .setView(editText)
-            .setPositiveButton(R.string.confirm) { _, _ ->
-                val newName = editText.text.toString().trim()
-                if (newName.isEmpty()) {
-                    Toast.makeText(this, R.string.title_required, Toast.LENGTH_SHORT).show()
-                } else {
-                    rename(item, newName)
-                }
-            }
+    /** A one-line text dialog (rename the recording, rename a speaker): outlined field, Save / Cancel. */
+    private fun showTextDialog(
+        title: String, hint: String, initial: String, emptyError: String,
+        onTextChanged: ((String, TextInputLayout) -> Unit)? = null, onSave: (String) -> Unit
+    ) {
+        val view = layoutInflater.inflate(R.layout.dialog_text_field, null)
+        val layout = view.findViewById<TextInputLayout>(R.id.textFieldLayout)
+        val field = view.findViewById<EditText>(R.id.textField)
+        layout.hint = hint
+        field.setText(initial)
+        field.selectAll()
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setView(view)
+            .setPositiveButton(R.string.detail_save, null)
             .setNegativeButton(R.string.cancel, null)
-            .show()
+            .create()
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        dialog.show()
+        dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener {
+            val text = field.text.toString().trim()
+            if (text.isEmpty()) {
+                layout.error = emptyError
+            } else {
+                dialog.dismiss()
+                onSave(text)
+            }
+        }
+        field.doAfterTextChanged {
+            layout.error = null
+            onTextChanged?.invoke(it.toString().trim(), layout)
+        }
+        field.requestFocus()
+    }
+
+    private fun showRenameDialog(item: RecordingItem) {
+        showTextDialog(
+            title = getString(R.string.detail_rename_title),
+            hint = getString(R.string.detail_rename_hint),
+            initial = item.title,
+            emptyError = getString(R.string.detail_title_required)
+        ) { newName -> if (newName != item.title) rename(item, newName) }
     }
 
     /** Server PATCH when the recording is there (mirrored into the phone copy), else a local rename. */
@@ -2040,8 +2399,48 @@ class FileDetailActivity : AppCompatActivity() {
         }
     }
 
+    // MARK: - Speaker rename
+
+    /**
+     * Tap on a speaker label: rename that speaker throughout the transcript. The server rewrites
+     * the document and answers with it (contract §2); a name another speaker already has merges
+     * the two, which the field's helper line says before Save.
+     */
+    private fun showRenameSpeakerDialog(speaker: String) {
+        val serverId = serverRecordingId ?: return
+        val others = transcriptSpeakers.filter { it != speaker }
+        showTextDialog(
+            title = getString(R.string.detail_rename_speaker_title_fmt, speaker),
+            hint = getString(R.string.detail_rename_speaker_hint),
+            initial = speaker,
+            emptyError = getString(R.string.detail_name_required),
+            onTextChanged = { text, layout ->
+                layout.helperText = others.firstOrNull { it.equals(text, ignoreCase = true) }
+                    ?.let { getString(R.string.detail_rename_speaker_merge_fmt, it) }
+            }
+        ) { newName -> if (newName != speaker) renameSpeaker(serverId, speaker, newName) }
+    }
+
+    private fun renameSpeaker(serverId: String, from: String, to: String) {
+        lifecycleScope.launch {
+            when (val result = serverSource.renameSpeakers(serverId, mapOf(from to to))) {
+                is ApiClient.TranscriptResult.Ready -> {
+                    storeServerTranscript(result.rawJson)
+                    render()
+                    snack(getString(R.string.detail_speaker_renamed))
+                }
+                // The endpoint is missing: a server from before speaker renames (or the
+                // recording is gone, which the next refresh will say in its own words).
+                is ApiClient.TranscriptResult.NotFound -> snack(getString(R.string.detail_server_needs_update))
+                is ApiClient.TranscriptResult.AuthError -> snack(getString(R.string.transcript_auth_error))
+                is ApiClient.TranscriptResult.Error -> snack(result.detail ?: getString(R.string.detail_request_failed))
+                is ApiClient.TranscriptResult.Pending -> snack(getString(R.string.detail_request_failed))
+            }
+        }
+    }
+
     private fun confirmRemoveFromPhone(item: RecordingItem) {
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle(R.string.remove_from_phone)
             .setMessage(getString(R.string.remove_from_phone_confirm_fmt, RecordingsAdapter.rowTitle(this, item)))
             .setPositiveButton(R.string.remove_from_phone) { _, _ -> removeFromPhone(item) }
@@ -2056,9 +2455,14 @@ class FileDetailActivity : AppCompatActivity() {
      */
     private fun removeFromPhone(item: RecordingItem) {
         if (!RecordingActions.removeFromPhone(item, syncManager)) return
-        Toast.makeText(this, R.string.removed_from_phone, Toast.LENGTH_SHORT).show()
         currentFile = currentFile?.let { findFile(it.id) }
-        if (serverRecording != null) render() else finish()
+        if (serverRecording != null) {
+            render()
+            snack(getString(R.string.removed_from_phone))
+        } else {
+            Toast.makeText(this, R.string.removed_from_phone, Toast.LENGTH_SHORT).show()
+            finish()
+        }
     }
 
     private fun confirmDelete(item: RecordingItem) {
@@ -2068,12 +2472,13 @@ class FileDetailActivity : AppCompatActivity() {
         } else {
             getString(R.string.delete_phone_only_confirm_fmt, shownTitle)
         }
-        AlertDialog.Builder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.delete)
             .setMessage(message)
             .setPositiveButton(R.string.delete) { _, _ -> delete(item) }
             .setNegativeButton(R.string.cancel, null)
             .show()
+        dialog.getButton(DialogInterface.BUTTON_POSITIVE)?.setTextColor(ContextCompat.getColor(this, R.color.red))
     }
 
     /** Server first (when it has the recording), then the phone copy; see [RecordingActions.delete]. */
@@ -2081,7 +2486,10 @@ class FileDetailActivity : AppCompatActivity() {
         lifecycleScope.launch {
             when (val result = RecordingActions.delete(item, serverSource, syncManager)) {
                 is ApiClient.ActionResult.Ok -> {
+                    // A toast, not a snackbar: the screen closes right after and the list
+                    // behind it is where the confirmation must be readable.
                     Toast.makeText(this@FileDetailActivity, R.string.recording_deleted, Toast.LENGTH_SHORT).show()
+                    if (playbackIsOurs) playback?.pause()
                     finish() // the lists refresh on resume
                 }
                 else -> showTranscriptAlert(actionErrorMessage(result))
@@ -2103,33 +2511,38 @@ class FileDetailActivity : AppCompatActivity() {
                         putExtra(Intent.EXTRA_STREAM, uri)
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     }
-                    startActivity(Intent.createChooser(shareIntent, getString(R.string.export_audio)))
+                    startActivity(Intent.createChooser(shareIntent, getString(R.string.detail_export_audio)))
                 }
                 result.onFailure {
-                    // Alert instead of toast (mirrors iOS "Export Failed")
-                    AlertDialog.Builder(this)
-                        .setTitle("Export Failed")
-                        .setMessage(it.message ?: "Could not export this recording.")
-                        .setPositiveButton(android.R.string.ok, null)
-                        .show()
+                    org.plaudbridge.app.common.AppLog.w("FileDetail", "audio export failed", it)
+                    showAlert(getString(R.string.detail_export_failed), getString(R.string.detail_export_failed_body))
                 }
             }
         }
     }
 
-    private fun copySummary(model: DetailModel) {
-        // Silent copy (no toast, mirrors iOS convention)
+    /**
+     * Copy [text] and confirm. Android 13+ shows its own clipboard chip for every copy, so a
+     * confirmation of our own would double up there; older versions get a snackbar.
+     */
+    private fun copyToClipboard(label: String, text: String, confirmation: String) {
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("Summary", model.summary))
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) snack(confirmation)
+    }
+
+    private fun copySummary(model: DetailModel) {
+        val summary = model.summary ?: return
+        copyToClipboard("Summary", summary, getString(R.string.detail_summary_copied))
     }
 
     /**
-     * Copies the transcript as speaker paragraphs (no timestamps, no stars) and confirms with a
-     * toast: the same paragraphs as on screen, in the server's `paragraphs_plain` layout.
+     * Copies the transcript as speaker paragraphs (no timestamps, no stars): the same paragraphs
+     * as on screen, in the server's `paragraphs_plain` layout.
      */
     private fun copyTranscript() {
         val text = transcriptCopyText ?: transcriptPlainText ?: return
-        TranscriptShare.copyToClipboard(this, text)
+        copyToClipboard("Transcript", text, getString(R.string.transcript_copied))
     }
 
     /**
@@ -2179,11 +2592,7 @@ class FileDetailActivity : AppCompatActivity() {
             TranscriptShare.share(this, ExportFileName.sanitize(model.title), model.title, markdown)
         } catch (e: Exception) {
             org.plaudbridge.app.common.AppLog.w("FileDetail", "markdown export failed", e)
-            AlertDialog.Builder(this)
-                .setTitle("Export Failed")
-                .setMessage(e.message ?: "Could not export this transcript.")
-                .setPositiveButton(android.R.string.ok, null)
-                .show()
+            showAlert(getString(R.string.detail_export_failed), getString(R.string.detail_export_failed_body))
         }
     }
 

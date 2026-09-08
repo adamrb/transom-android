@@ -45,6 +45,18 @@ class ServerRecordingTest {
     }
 
     @Test
+    fun errorIsAUserSentenceAndTheRawTextSitsInErrorDetail() {
+        val r = ServerRecording.fromJson(JSONObject("""{"id":"x","status":"failed",
+            "error":"Transcription failed.","error_detail":"RuntimeError: CUDA out of memory"}"""))
+        assertEquals("Transcription failed.", r.error)
+        assertEquals("RuntimeError: CUDA out of memory", r.errorDetail)
+        // Blank strings read as absent, so the screen never shows an empty line or an empty disclosure.
+        val blank = ServerRecording.fromJson(JSONObject("""{"id":"x","status":"failed","error":"","error_detail":"  "}"""))
+        assertNull(blank.error)
+        assertNull(blank.errorDetail)
+    }
+
+    @Test
     fun nullsBecomeKotlinNullsAndDefaults() {
         val r = ServerRecording.fromJson(JSONObject("""{"id":"x","filename":"f.mp3","status":"stored",
             "title":null,"summary":null,"started_at":null,"uploaded_at":"2026-01-02T03:04:05",
@@ -57,6 +69,7 @@ class ServerRecordingTest {
         assertEquals(0, r.marksCount)
         assertFalse(r.hasTranscript)
         assertEquals("boom", r.error)
+        assertNull(r.errorDetail)
         assertEquals(0.0, r.durationS, 0.0)
         // No start time: the upload time anchors sorting and grouping.
         assertEquals(r.uploadedAt, r.recordedAt)

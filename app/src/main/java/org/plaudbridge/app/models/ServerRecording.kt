@@ -34,9 +34,12 @@ data class ServerRecording(
     val marks: List<Double>,
     val hasTranscript: Boolean,
     val textPreview: String?,
+    /** A user sentence saying what went wrong ("Transcription failed."), or null. */
     val error: String?,
     /** Transcription finished and found nothing to transcribe: no text, no title, no summary. */
     val noSpeech: Boolean = false,
+    /** The raw failure text behind [error] (an exception string); shown only behind a disclosure. */
+    val errorDetail: String? = null,
     /** 0..1 while the server is transcribing; null when unknown or not applicable. */
     val progress: Double? = null,
     /** One of the STAGE_ constants while the server is working on the recording, else null. */
@@ -126,9 +129,10 @@ data class ServerRecording(
                 marks = marks,
                 hasTranscript = obj.optBoolean("has_transcript", false),
                 textPreview = obj.optNullableString("text_preview"),
-                error = obj.optNullableString("error"),
+                error = obj.optNullableString("error")?.takeIf { it.isNotBlank() },
                 // Strict boolean: a string "false" must not read as true.
                 noSpeech = obj.opt("no_speech") == true,
+                errorDetail = obj.optNullableString("error_detail")?.takeIf { it.isNotBlank() },
                 progress = obj.optDouble("progress", Double.NaN).takeIf { !it.isNaN() },
                 stage = obj.optNullableString("stage")?.takeIf { it.isNotBlank() }
             )

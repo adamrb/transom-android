@@ -57,6 +57,43 @@ class MarkdownRendererTest {
     }
 
     @Test
+    fun headingsNeverOutrankTheScreensSectionHeaders() {
+        // Summary body is 14sp under a 15sp section header: 14 * 1.07 < 15.
+        assertTrue(MarkdownRenderer.HEADING_MULTIPLIERS.all { it * 14f < 15f })
+        assertEquals(6, MarkdownRenderer.HEADING_MULTIPLIERS.size)
+    }
+
+    @Test
+    fun dropsTheHighlightsSectionWhateverItsShape() {
+        // A heading: through to the next heading of the same or a higher level.
+        assertEquals(
+            "Body\n\n## Action items\n\n- Do it",
+            MarkdownRenderer.withoutHighlightsSection("Body\n\n## Highlights\n\n- One\n- Two\n\n## Action items\n\n- Do it")
+        )
+        // A heading followed only by lower-level headings takes them along, and ends at the text's end.
+        assertEquals("Body", MarkdownRenderer.withoutHighlightsSection("Body\n\n# Highlights\n\n### At 0:06\n\nWords"))
+        // A bold-only label: through to the next bold label or heading.
+        assertEquals("Body\n\n**Next:**\n\nMore", MarkdownRenderer.withoutHighlightsSection("Body\n\n**Highlights:**\n\n- One\n\n**Next:**\n\nMore"))
+        // A plain "Highlights:" line over a list: the label and the list go, the prose after stays.
+        assertEquals(
+            "Body\n\nClosing thought.",
+            MarkdownRenderer.withoutHighlightsSection("Body\n\nHighlights:\n\n- At 0:06: One\n- At 0:14: Two\n\nClosing thought.")
+        )
+        // A plain label with no list under it is left alone (it is prose, not a section).
+        assertEquals("Highlights:\nare what we live for.", MarkdownRenderer.withoutHighlightsSection("Highlights:\nare what we live for."))
+        // No such section: unchanged.
+        assertEquals("## Key points\n\nBody", MarkdownRenderer.withoutHighlightsSection("## Key points\n\nBody"))
+        assertEquals("The highlights of the year.", MarkdownRenderer.withoutHighlightsSection("The highlights of the year."))
+    }
+
+    @Test
+    fun dropsFillerForEmptySections() {
+        assertEquals("Body", MarkdownRenderer.withoutEmptySectionFiller("Body\n\nNo action items."))
+        assertEquals("Body\n\nMore", MarkdownRenderer.withoutEmptySectionFiller("Body\n\n**No action items**\n\nMore"))
+        assertEquals("No action items were discussed at length.", MarkdownRenderer.withoutEmptySectionFiller("No action items were discussed at length."))
+    }
+
+    @Test
     fun plainTextComesBackUnchanged() {
         assertEquals("A greeting.", MarkdownRenderer.render(context, "A greeting.\n").toString())
     }
