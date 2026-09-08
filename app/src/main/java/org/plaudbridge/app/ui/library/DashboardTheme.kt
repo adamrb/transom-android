@@ -4,12 +4,11 @@ import androidx.appcompat.app.AppCompatDelegate
 
 /**
  * The `theme` value handed to the embedded web dashboard so it renders in step with the app
- * ("light", "dark" or "system").
+ * ("light", "dark" or "system", CONTRACTS §8).
  *
- * The app's own theme is light-only today ([org.plaudbridge.app.R.style.Theme_PlaudBridge] is not
- * a DayNight theme), so the dashboard must not follow the system on its own: the page would go
- * dark inside a light app. Once the app gets a DayNight theme, pass [appFollowsSystem] = true and
- * the system setting flows through.
+ * The app's theme is DayNight and the Appearance setting drives [AppCompatDelegate]'s default
+ * night mode: a forced Light or Dark is passed through as such, and "System" is passed as
+ * `system` so the page follows the OS exactly as the app does.
  */
 object DashboardTheme {
 
@@ -17,7 +16,7 @@ object DashboardTheme {
     const val DARK = "dark"
     const val SYSTEM = "system"
 
-    fun current(appFollowsSystem: Boolean = false): String =
+    fun current(appFollowsSystem: Boolean = true): String =
         forNightMode(AppCompatDelegate.getDefaultNightMode(), appFollowsSystem)
 
     fun forNightMode(nightMode: Int, appFollowsSystem: Boolean): String = when (nightMode) {

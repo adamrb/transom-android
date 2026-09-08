@@ -1,35 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Light palette. values-night/colors.xml overrides every pb_* entry. Layouts, drawables and
+     code do not reference these directly: they go through the theme attributes in themes.xml
+     (colorSurface, colorOnSurfaceVariant, pbColorTextBody, ...), so a view never has to know
+     which palette is active. Every text colour here reads at 4.5:1 or better on the surfaces it
+     is used on (ratios in the comments are against #FFFFFF / #F9F9F9). -->
 <resources>
-    <!-- Theme colors -->
-    <color name="bg_primary">#F9F9F9</color>
-    <color name="text_primary">#1F1F1F</color>
-    <color name="text_secondary">#A3A3A3</color>
-    <color name="separator">#EBEBEB</color>
-    <color name="green">#6CAE85</color>
-    <color name="red">#FF503F</color>
-    <color name="light_gray">#D6D6D6</color>
-    <color name="dark_gray">#3D3D3D</color>
-    <color name="gray5">#858585</color>
-    <color name="gray7">#7A7A7A</color>
-    <color name="gray_ad">#ADADAD</color>
+    <color name="pb_background">#F9F9F9</color>
+    <color name="pb_surface">#FFFFFF</color>
+    <!-- Neutral pills, the time chip, progress tracks -->
+    <color name="pb_surface_variant">#EFEFEF</color>
+    <!-- Headings, primary labels: 16.5:1 -->
+    <color name="pb_on_surface">#1F1F1F</color>
+    <!-- Body copy: 10.9:1 -->
+    <color name="pb_text_body">#3D3D3D</color>
+    <!-- Secondary text, unselected tab, icons: 5.9:1 / 5.6:1 -->
+    <color name="pb_on_surface_variant">#646464</color>
+    <!-- Button and pill outlines -->
+    <color name="pb_outline">#C6C6C6</color>
+    <color name="pb_divider">#EBEBEB</color>
+    <!-- Filled buttons, toggles, the play button, slider -->
+    <color name="pb_primary">#1F1F1F</color>
+    <color name="pb_on_primary">#FFFFFF</color>
+    <!-- Failed, Delete, low battery: 5.1:1 -->
+    <color name="pb_error">#C93B2F</color>
+    <!-- Connected, healthy battery, server reachable: 5.2:1 -->
+    <color name="pb_success">#357A50</color>
+    <!-- In-flight status words, highlight star and bar: 5.3:1 -->
+    <color name="pb_warning">#9E5C00</color>
+    <!-- Selected tab / now-playing paragraph wash: #3D3D3D at 12% -->
+    <color name="pb_selection_tint">#1F3D3D3D</color>
+    <!-- Brief wash behind the paragraph a highlight jumps to: orange at 20% -->
+    <color name="pb_highlight_flash">#33FF9500</color>
+    <!-- Pill background behind in-flight and failed status words: orange at 10% -->
+    <color name="pb_status_pending_bg">#1AFF9500</color>
 
-    <!-- Functional colors -->
+    <!-- Kept under their old names for the tests that compare resolved colours; same values as
+         the pb_* entries they alias. -->
+    <color name="red">@color/pb_error</color>
+    <color name="highlight_accent">@color/pb_warning</color>
+    <color name="highlight_flash">@color/pb_highlight_flash</color>
+
+    <!-- Constant in both palettes: surfaces that are always dark (the Recording screen, the
+         record card on Home) or always light (the record button on that screen). -->
     <color name="white">#FFFFFF</color>
     <color name="black">#000000</color>
+    <color name="recording_dark_bg">#1A1A1A</color>
+    <!-- Text on the always-dark record card: 4.6:1 on black -->
+    <color name="on_dark_card_secondary">#8F8F8F</color>
     <color name="scan_ring_light">#99C1E8FE</color><!-- #C1E8FE 60% -->
     <color name="scan_arc_dark">#B34B90B8</color><!-- #4B90B8 70% -->
-    <color name="recording_dark_bg">#1A1A1A</color>
-    <color name="sync_dash_border">#CCCCCC</color>
-    <color name="recording_banner_fill">#1AFF503F</color><!-- red 10% -->
-    <color name="recording_banner_stroke">#4DFF503F</color><!-- red 30% -->
-    <color name="status_synced_bg">#1A6CAE85</color><!-- green 10% -->
-    <color name="status_pending_bg">#1AFF9500</color><!-- orange 10% -->
-    <color name="tab_selected_bg">#1F3D3D3D</color><!-- #3D3D3D @ 12% (iOS) -->
-    <color name="tab_unselected">#7A7A7A</color>
-    <color name="gray_medium">#7A7A7A</color>
-    <color name="tab_bar_white">#E6FFFFFF</color><!-- white 90%: closest flat approximation of iOS blur+white70% (RenderEffect needs API31+) --><!-- white 70% -->
-    <color name="orange">#FF9500</color>
-    <color name="highlight_accent">#FF9500</color><!-- star + timestamp of a button-press highlight -->
-    <color name="highlight_flash">#33FF9500</color><!-- accent 20%: brief emphasis of the paragraph a highlight jumps to -->
+    <color name="recording_banner_fill">#1AFF503F</color><!-- coral 10% -->
+    <color name="recording_banner_stroke">#4DFF503F</color><!-- coral 30% -->
     <color name="ic_launcher_background">#1F1F1F</color>
 </resources>

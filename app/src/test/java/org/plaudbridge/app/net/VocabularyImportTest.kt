@@ -17,7 +17,8 @@ import org.robolectric.RobolectricTestRunner
 
 /**
  * The vault import: request shape of POST /api/v1/vocabulary/import (the body the server's own
- * contrib script sends), result mapping, and the gazetteer parser ported from that script.
+ * contrib script sends) and result mapping in ApiClient.importVocabulary, and the gazetteer
+ * parser ported from that script.
  */
 @RunWith(RobolectricTestRunner::class)
 class VocabularyImportTest {
@@ -52,7 +53,7 @@ class VocabularyImportTest {
                     {"term":"Morgan","aliases":[],"source":"obsidian"}],"added":2}"""
             )
         )
-        val result = VocabularyImport.importEntries(entries)
+        val result = ApiClient.importVocabulary(entries)
 
         val recorded = server.takeRequest()
         assertEquals("POST", recorded.method)
@@ -67,7 +68,7 @@ class VocabularyImportTest {
         assertEquals("obsidian", sent.getJSONObject(0).getString("source"))
         assertEquals(10_000, sent.getJSONObject(0).getInt("weight"))
 
-        val ok = result as VocabularyImport.Result.Ok
+        val ok = result as ApiClient.VocabularyImportResult.Ok
         assertEquals(2, ok.added)
         assertEquals(listOf("Dana Whitlock", "Morgan"), ok.entries.map { it.term })
     }
@@ -81,17 +82,17 @@ class VocabularyImportTest {
     @Test
     fun mapsServerAnswersToTypedResults() {
         server.enqueue(MockResponse().setResponseCode(404))
-        assertEquals(VocabularyImport.Result.Unsupported, VocabularyImport.importEntries(entries))
+        assertEquals(ApiClient.VocabularyImportResult.Unsupported, ApiClient.importVocabulary(entries))
 
         server.enqueue(MockResponse().setResponseCode(401))
-        assertEquals(VocabularyImport.Result.AuthError(401), VocabularyImport.importEntries(entries))
+        assertEquals(ApiClient.VocabularyImportResult.AuthError(401), ApiClient.importVocabulary(entries))
 
         server.enqueue(MockResponse().setResponseCode(422).setBody("""{"detail":"too many entries"}"""))
-        val rejected = VocabularyImport.importEntries(entries) as VocabularyImport.Result.Error
+        val rejected = ApiClient.importVocabulary(entries) as ApiClient.VocabularyImportResult.Error
         assertEquals("Too many entries.", rejected.detail)
 
         server.enqueue(MockResponse().setResponseCode(500).setBody("boom"))
-        val failed = VocabularyImport.importEntries(entries) as VocabularyImport.Result.Error
+        val failed = ApiClient.importVocabulary(entries) as ApiClient.VocabularyImportResult.Error
         assertEquals("HTTP 500", failed.message)
         assertEquals(null, failed.detail)
     }
@@ -99,7 +100,7 @@ class VocabularyImportTest {
     @Test
     fun connectionFailureIsAnErrorNotAnException() {
         server.shutdown()
-        assertTrue(VocabularyImport.importEntries(entries) is VocabularyImport.Result.Error)
+        assertTrue(ApiClient.importVocabulary(entries) is ApiClient.VocabularyImportResult.Error)
     }
 
     // MARK: - Gazetteer parsing

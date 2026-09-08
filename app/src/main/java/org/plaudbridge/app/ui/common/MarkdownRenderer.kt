@@ -9,16 +9,23 @@ import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.ext.tasklist.TaskListPlugin
+import com.google.android.material.R as MaterialR
 import io.noties.markwon.linkify.LinkifyPlugin
+import org.plaudbridge.app.R
 
 /**
  * Renders the server's AI summaries, which arrive as CommonMark (headings, bold, bullet and
- * numbered lists, the odd table), into styled text. One Markwon instance per process; it is
- * cheap to keep and expensive to build.
+ * numbered lists, the odd table), into styled text. One Markwon instance per palette (its link,
+ * rule and table colours are resolved from the theme when it is built); it is cheap to keep and
+ * expensive to build, and rebuilt only when the caller's theme resolves to other colours.
  */
 object MarkdownRenderer {
     @Volatile
     private var markwon: Markwon? = null
+
+    /** The text colour the cached instance was built for; a different one means a new palette. */
+    @Volatile
+    private var markwonTextColor: Int? = null
 
     /**
      * Heading sizes relative to the body text. A summary sits under a 15sp section header on the
@@ -28,25 +35,49 @@ object MarkdownRenderer {
      */
     val HEADING_MULTIPLIERS = floatArrayOf(1.07f, 1f, 1f, 1f, 1f, 1f)
 
-    private fun markwon(context: Context): Markwon =
-        markwon ?: synchronized(this) {
-            markwon ?: Markwon.builder(context.applicationContext)
-                .usePlugin(object : AbstractMarkwonPlugin() {
-                    // Summaries sit inside an already-labelled block: headings barely larger
-                    // than body text and no rule under them, not document-sized titles.
-                    override fun configureTheme(builder: MarkwonTheme.Builder) {
-                        builder
-                            .headingBreakHeight(0)
-                            .headingTextSizeMultipliers(HEADING_MULTIPLIERS)
-                    }
-                })
-                .usePlugin(StrikethroughPlugin.create())
-                .usePlugin(TablePlugin.create(context.applicationContext))
-                .usePlugin(TaskListPlugin.create(context.applicationContext))
-                .usePlugin(LinkifyPlugin.create())
-                .build()
-                .also { markwon = it }
+    private fun markwon(context: Context): Markwon {
+        val textColor = context.themeColor(R.attr.pbColorTextBody)
+        markwon?.takeIf { markwonTextColor == textColor }?.let { return it }
+        return synchronized(this) {
+            markwon?.takeIf { markwonTextColor == textColor } ?: build(context, textColor).also {
+                markwon = it
+                markwonTextColor = textColor
+            }
         }
+    }
+
+    /**
+     * Built against the caller's (themed) context, not the application's: the table plugin and
+     * the theme read colours from it, and only an activity context knows the active palette.
+     */
+    private fun build(context: Context, textColor: Int): Markwon {
+        val link = context.themeColor(MaterialR.attr.colorOnSurface)
+        val muted = context.themeColor(MaterialR.attr.colorOutline)
+        val codeBackground = context.themeColor(MaterialR.attr.colorSurfaceVariant)
+        return Markwon.builder(context)
+            .usePlugin(object : AbstractMarkwonPlugin() {
+                // Summaries sit inside an already-labelled block: headings barely larger
+                // than body text and no rule under them, not document-sized titles.
+                override fun configureTheme(builder: MarkwonTheme.Builder) {
+                    builder
+                        .headingBreakHeight(0)
+                        .headingTextSizeMultipliers(HEADING_MULTIPLIERS)
+                        .linkColor(link)
+                        .blockQuoteColor(muted)
+                        .thematicBreakColor(muted)
+                        .listItemColor(textColor)
+                        .codeBackgroundColor(codeBackground)
+                        .codeBlockBackgroundColor(codeBackground)
+                        .codeTextColor(textColor)
+                        .codeBlockTextColor(textColor)
+                }
+            })
+            .usePlugin(StrikethroughPlugin.create())
+            .usePlugin(TablePlugin.create { t -> t.tableBorderColor(muted).tableHeaderRowBackgroundColor(codeBackground).tableEvenRowBackgroundColor(0) })
+            .usePlugin(TaskListPlugin.create(textColor, textColor, context.themeColor(MaterialR.attr.colorSurface)))
+            .usePlugin(LinkifyPlugin.create())
+            .build()
+    }
 
     private val summaryHeading = Regex("""\A\s*(?:#{1,6}\s*|\*\*)?summary\s*:?\s*(?:\*\*)?\s*:?\s*(?:\n|\z)""", RegexOption.IGNORE_CASE)
 

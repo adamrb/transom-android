@@ -4,7 +4,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_primary"
+    android:background="?android:attr/colorBackground"
     android:orientation="vertical">
 
     <!-- Toolbar, same shape as the file detail screen -->
@@ -14,14 +14,11 @@
 
         <ImageButton
             android:id="@+id/backButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            style="@style/Widget.PlaudBridge.IconButton"
             android:layout_gravity="start|center_vertical"
             android:layout_marginStart="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/cd_back"
-            android:src="@drawable/ic_chevron_left"
-            android:tint="@color/text_primary" />
+            android:src="@drawable/ic_chevron_left" />
 
         <TextView
             android:id="@+id/titleLabel"
@@ -30,7 +27,7 @@
             android:layout_gravity="center"
             android:fontFamily="sans-serif-medium"
             android:text="@string/web_dashboard"
-            android:textColor="@color/text_primary"
+            android:textColor="?attr/colorOnSurface"
             android:textSize="16sp" />
     </FrameLayout>
 
@@ -69,24 +66,19 @@
                 android:fontFamily="sans-serif"
                 android:gravity="center"
                 android:text="@string/library_load_failed"
-                android:textColor="@color/text_secondary"
+                android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="14sp" />
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/retryButton"
+                style="@style/Widget.PlaudBridge.Button.Outlined"
                 android:layout_width="wrap_content"
                 android:layout_height="44dp"
                 android:layout_marginTop="16dp"
-                android:background="@drawable/bg_secondary_button"
-                app:backgroundTint="@null"
-                android:fontFamily="sans-serif"
                 android:minWidth="140dp"
                 android:paddingStart="24dp"
                 android:paddingEnd="24dp"
-                android:text="@string/retry"
-                android:textAllCaps="false"
-                android:textColor="@color/text_primary"
-                android:textSize="15sp" />
+                android:text="@string/retry" />
         </LinearLayout>
     </FrameLayout>
 

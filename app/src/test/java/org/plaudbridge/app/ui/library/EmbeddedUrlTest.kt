@@ -34,11 +34,18 @@ class EmbeddedUrlTest {
     }
 
     @Test
-    fun dashboardThemeFollowsTheAppNotTheSystemWhileTheAppIsLightOnly() {
+    fun dashboardThemeFollowsTheAppsAppearanceSetting() {
         assertEquals(DashboardTheme.LIGHT, DashboardTheme.forNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM, appFollowsSystem = false))
         assertEquals(DashboardTheme.SYSTEM, DashboardTheme.forNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM, appFollowsSystem = true))
         assertEquals(DashboardTheme.DARK, DashboardTheme.forNightMode(AppCompatDelegate.MODE_NIGHT_YES, appFollowsSystem = false))
         assertEquals(DashboardTheme.LIGHT, DashboardTheme.forNightMode(AppCompatDelegate.MODE_NIGHT_NO, appFollowsSystem = true))
-        assertEquals(DashboardTheme.LIGHT, DashboardTheme.current())
+        // The app is DayNight and defaults to following the system, so the page does too
+        assertEquals(DashboardTheme.SYSTEM, DashboardTheme.current())
+        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+        try {
+            assertEquals(DashboardTheme.DARK, DashboardTheme.current())
+        } finally {
+            AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+        }
     }
 }

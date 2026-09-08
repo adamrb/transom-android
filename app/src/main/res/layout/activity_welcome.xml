@@ -4,13 +4,15 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/white">
+    android:background="?attr/colorSurface">
 
-    <!-- Background image, same as iOS welcome_bg, scaleToFill -->
+    <!-- Background image, same as iOS welcome_bg, scaleToFill; faded on the dark palette so the
+         light artwork does not fight the text -->
     <ImageView
         android:id="@+id/backgroundImageView"
         android:layout_width="0dp"
         android:layout_height="0dp"
+        android:alpha="@dimen/pb_welcome_art_alpha"
         android:contentDescription="@null"
         android:scaleType="centerCrop"
         android:src="@drawable/welcome_bg"
@@ -37,7 +39,7 @@
             android:layout_gravity="center"
             android:contentDescription="@null"
             android:src="@drawable/ic_device"
-            android:tint="@color/text_primary" />
+            app:tint="?attr/colorOnSurface" />
     </FrameLayout>
 
     <!-- App name, 34dp below the logo -->
@@ -48,26 +50,22 @@
         android:layout_marginTop="34dp"
         android:fontFamily="sans-serif-light"
         android:text="@string/welcome_app_name"
-        android:textColor="@color/text_primary"
+        android:textColor="?attr/colorOnSurface"
         android:textSize="36sp"
         app:layout_constraintTop_toBottomOf="@id/logoContainer"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
     <!-- "Get started" button, above the skip entry -->
-    <Button
+    <com.google.android.material.button.MaterialButton
         android:id="@+id/getStartedButton"
+        style="@style/Widget.PlaudBridge.Button"
         android:layout_width="0dp"
         android:layout_height="48dp"
         android:layout_marginStart="24dp"
         android:layout_marginEnd="24dp"
         android:layout_marginBottom="8dp"
-        android:background="@drawable/bg_secondary_button"
-        app:backgroundTint="@null"
-        android:fontFamily="sans-serif"
         android:text="@string/get_started"
-        android:textAllCaps="false"
-        android:textColor="@color/text_primary"
         android:textSize="16sp"
         app:layout_constraintBottom_toTopOf="@+id/skipButton"
         app:layout_constraintStart_toStartOf="parent"
@@ -79,12 +77,13 @@
         android:layout_width="wrap_content"
         android:layout_height="40dp"
         android:layout_marginBottom="16dp"
+        android:background="?attr/selectableItemBackground"
         android:fontFamily="sans-serif"
         android:gravity="center"
         android:paddingStart="16dp"
         android:paddingEnd="16dp"
         android:text="@string/connect_later"
-        android:textColor="@color/text_secondary"
+        android:textColor="?attr/colorOnSurfaceVariant"
         android:textSize="14sp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"

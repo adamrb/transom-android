@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_primary"
+    android:background="?android:attr/colorBackground"
     android:orientation="vertical">
 
     <!-- Toolbar: back + title -->
@@ -13,14 +13,11 @@
 
         <ImageButton
             android:id="@+id/backButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            style="@style/Widget.PlaudBridge.IconButton"
             android:layout_gravity="start|center_vertical"
             android:layout_marginStart="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/cd_back"
-            android:src="@drawable/ic_chevron_left"
-            android:tint="@color/text_primary" />
+            android:src="@drawable/ic_chevron_left" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -29,7 +26,7 @@
             android:fontFamily="sans-serif-medium"
             android:id="@+id/panelTitle"
             android:text="@string/device"
-            android:textColor="@color/text_primary"
+            android:textColor="?attr/colorOnSurface"
             android:textSize="16sp" />
     </FrameLayout>
 
@@ -68,7 +65,7 @@
                         android:layout_centerVertical="true"
                         android:fontFamily="sans-serif"
                         android:text="@string/device_name"
-                        android:textColor="@color/text_primary"
+                        android:textColor="?attr/colorOnSurface"
                         android:textSize="14sp" />
 
                     <TextView
@@ -78,14 +75,14 @@
                         android:layout_alignParentEnd="true"
                         android:layout_centerVertical="true"
                         android:fontFamily="sans-serif"
-                        android:textColor="@color/gray_medium"
+                        android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="14sp" />
                 </RelativeLayout>
 
                 <View
                     android:layout_width="match_parent"
                     android:layout_height="1dp"
-                    android:background="@color/separator" />
+                    android:background="?attr/pbColorDivider" />
 
                 <!-- SN row -->
                 <RelativeLayout
@@ -101,7 +98,7 @@
                         android:layout_centerVertical="true"
                         android:fontFamily="sans-serif"
                         android:text="@string/serial_number"
-                        android:textColor="@color/text_primary"
+                        android:textColor="?attr/colorOnSurface"
                         android:textSize="14sp" />
 
                     <TextView
@@ -111,14 +108,14 @@
                         android:layout_alignParentEnd="true"
                         android:layout_centerVertical="true"
                         android:fontFamily="sans-serif"
-                        android:textColor="@color/gray_medium"
+                        android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="14sp" />
                 </RelativeLayout>
 
                 <View
                     android:layout_width="match_parent"
                     android:layout_height="1dp"
-                    android:background="@color/separator" />
+                    android:background="?attr/pbColorDivider" />
 
                 <!-- Firmware row -->
                 <RelativeLayout
@@ -134,7 +131,7 @@
                         android:layout_centerVertical="true"
                         android:fontFamily="sans-serif"
                         android:text="@string/firmware"
-                        android:textColor="@color/text_primary"
+                        android:textColor="?attr/colorOnSurface"
                         android:textSize="14sp" />
 
                     <LinearLayout
@@ -150,25 +147,19 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:fontFamily="sans-serif"
-                            android:textColor="@color/gray_medium"
+                            android:textColor="?attr/colorOnSurfaceVariant"
                             android:textSize="14sp" />
 
-                        <Button
+                        <com.google.android.material.button.MaterialButton
                             android:id="@+id/firmwareUpdateButton"
+                            style="@style/Widget.PlaudBridge.Button.Small"
                             android:layout_width="wrap_content"
                             android:layout_height="28dp"
                             android:layout_marginStart="8dp"
-                            android:background="@drawable/bg_primary_button"
-                            android:insetTop="0dp"
-                            android:insetBottom="0dp"
-                            app:backgroundTint="@null"
-                            android:fontFamily="sans-serif"
-                            android:minWidth="0dp"
+                            android:minHeight="28dp"
                             android:paddingStart="12dp"
                             android:paddingEnd="12dp"
                             android:text="@string/update"
-                            android:textAllCaps="false"
-                            android:textColor="@color/white"
                             android:textSize="12sp"
                             android:visibility="gone" />
                     </LinearLayout>
@@ -204,7 +195,7 @@
                             android:layout_height="wrap_content"
                             android:fontFamily="sans-serif"
                             android:text="@string/disconnect_device"
-                            android:textColor="@color/text_primary"
+                            android:textColor="?attr/colorOnSurface"
                             android:textSize="14sp" />
 
                         <TextView
@@ -213,31 +204,25 @@
                             android:layout_marginTop="2dp"
                             android:fontFamily="sans-serif"
                             android:text="@string/disconnect_subtitle"
-                            android:textColor="@color/text_secondary"
+                            android:textColor="?attr/colorOnSurfaceVariant"
                             android:textSize="13sp" />
                     </LinearLayout>
 
-                    <TextView
+                    <com.google.android.material.button.MaterialButton
                         android:id="@+id/disconnectButton"
+                        style="@style/Widget.PlaudBridge.Button.Outlined.Small"
                         android:layout_width="wrap_content"
                         android:layout_height="32dp"
                         android:layout_marginStart="8dp"
-                        android:background="@drawable/bg_pill_outline_gray"
-                        android:fontFamily="sans-serif"
-                        android:gravity="center"
-                        android:paddingStart="16dp"
-                        android:paddingEnd="16dp"
-                        android:text="@string/disconnect"
-                        android:textColor="@color/text_primary"
-                        android:textSize="13sp" />
+                        android:text="@string/disconnect" />
                 </LinearLayout>
 
                 <View
                     android:layout_width="match_parent"
                     android:layout_height="1dp"
-                    android:background="@color/separator" />
+                    android:background="?attr/pbColorDivider" />
 
-                <!-- Unpair: black title (red lives on the button, mirrors iOS) -->
+                <!-- Unpair: plain title (red lives on the button, mirrors iOS) -->
                 <LinearLayout
                     android:id="@+id/unpairRow"
                     android:layout_width="match_parent"
@@ -258,7 +243,7 @@
                             android:layout_height="wrap_content"
                             android:fontFamily="sans-serif"
                             android:text="@string/unpair_device"
-                            android:textColor="@color/text_primary"
+                            android:textColor="?attr/colorOnSurface"
                             android:textSize="14sp" />
 
                         <TextView
@@ -267,22 +252,18 @@
                             android:layout_marginTop="2dp"
                             android:fontFamily="sans-serif"
                             android:text="@string/unpair_subtitle"
-                            android:textColor="@color/text_secondary"
+                            android:textColor="?attr/colorOnSurfaceVariant"
                             android:textSize="13sp" />
                     </LinearLayout>
 
-                    <TextView
+                    <com.google.android.material.button.MaterialButton
                         android:id="@+id/unpairButton"
+                        style="@style/Widget.PlaudBridge.Button.Outlined.Destructive"
                         android:layout_width="wrap_content"
                         android:layout_height="32dp"
                         android:layout_marginStart="8dp"
-                        android:background="@drawable/bg_pill_outline_red"
-                        android:fontFamily="sans-serif"
-                        android:gravity="center"
-                        android:paddingStart="16dp"
-                        android:paddingEnd="16dp"
+                        android:minHeight="32dp"
                         android:text="@string/unpair"
-                        android:textColor="@color/red"
                         android:textSize="13sp" />
                 </LinearLayout>
             </LinearLayout>

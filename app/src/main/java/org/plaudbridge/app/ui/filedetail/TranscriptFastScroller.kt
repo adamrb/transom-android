@@ -8,9 +8,9 @@ import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
-import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
-import org.plaudbridge.app.R
+import com.google.android.material.R as MaterialR
+import org.plaudbridge.app.ui.common.themeColor
 import kotlin.math.roundToInt
 
 /**
@@ -47,11 +47,11 @@ class TranscriptFastScroller @JvmOverloads constructor(
     private val bubblePadding = 14 * density
     private val bubbleGap = 12 * density
 
-    private val thumbPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ContextCompat.getColor(context, R.color.gray_ad) }
-    private val thumbActivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ContextCompat.getColor(context, R.color.dark_gray) }
-    private val bubblePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ContextCompat.getColor(context, R.color.dark_gray) }
+    private val thumbPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = context.themeColor(MaterialR.attr.colorOnSurfaceVariant) }
+    private val thumbActivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = context.themeColor(MaterialR.attr.colorPrimary) }
+    private val bubblePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = context.themeColor(MaterialR.attr.colorPrimary) }
     private val bubbleTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = ContextCompat.getColor(context, R.color.white)
+        color = context.themeColor(MaterialR.attr.colorOnPrimary)
         textSize = 14 * resources.displayMetrics.scaledDensity
         typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
     }

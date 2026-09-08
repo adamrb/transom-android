@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Styles for the Recordings row-actions sheet (branch ux/android-list). Kept out of themes.xml,
-     which a later theming phase owns. -->
+<!-- Styles for the row-action bottom sheets (Recordings row ⋮ and the detail screen's More). -->
 <resources>
     <style name="RecordingActionRow">
         <item name="android:layout_width">match_parent</item>
@@ -17,7 +16,7 @@
     <style name="RecordingActionIcon">
         <item name="android:layout_width">24dp</item>
         <item name="android:layout_height">24dp</item>
-        <item name="tint">@color/dark_gray</item>
+        <item name="tint">?attr/pbColorTextBody</item>
     </style>
 
     <style name="RecordingActionLabel">
@@ -25,7 +24,7 @@
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_marginStart">16dp</item>
         <item name="android:fontFamily">sans-serif</item>
-        <item name="android:textColor">@color/dark_gray</item>
+        <item name="android:textColor">?attr/pbColorTextBody</item>
         <item name="android:textSize">16sp</item>
     </style>
 </resources>

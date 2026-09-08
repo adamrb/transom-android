@@ -138,10 +138,8 @@
     <string name="transcript">Transcript</string>
     <string name="highlights">Highlights</string>
     <string name="highlight_no_speech">(no speech near this mark)</string>
-    <string name="export_audio">Export audio</string>
     <string name="rename">Rename</string>
-    <string name="copy_summary">Copy summary</string>
-    <string name="copy_transcript">Copy transcript</string>
+    <!-- Title of the share chooser for a markdown export (TranscriptShare) -->
     <string name="export_markdown">Export markdown</string>
     <string name="action_copy_transcript">Copy transcript</string>
     <string name="action_export_markdown">Export markdown</string>
@@ -209,6 +207,11 @@
     <string name="battery_optimization_unavailable">Couldn\'t open battery settings on this phone</string>
     <string name="delete_after_upload">Delete after upload</string>
     <string name="delete_after_upload_subtitle">Remove recordings from your recorder once your server confirms the upload</string>
+    <!-- Appearance row: light or dark palette, or whatever the phone is set to -->
+    <string name="appearance">Appearance</string>
+    <string name="appearance_system">Same as the phone</string>
+    <string name="appearance_light">Light</string>
+    <string name="appearance_dark">Dark</string>
     <string name="sdk_logs_desc">Share a log file when something isn\'t working</string>
     <string name="export_logs">Export</string>
     <string name="export_failed">No logs to share yet</string>
@@ -223,7 +226,6 @@
     <string name="wifi_opening_hotspot">Turning on the recorder\'s Wi-Fi…</string>
     <string name="wifi_connecting">Connecting to the recorder\'s Wi-Fi…\nTap Join if Android asks</string>
     <string name="wifi_starting_transfer">Starting transfer…</string>
-    <string name="connection_failed_fmt">Couldn\'t connect to the recorder.\n%1$s</string>
 
     <!-- Server setup (onboarding + settings) -->
     <string name="server_setup_title">Connect your server</string>
@@ -259,8 +261,6 @@
     <string name="retranscribe">Re-transcribe</string>
     <string name="retranscribe_queued">Transcription queued</string>
     <string name="recording_deleted">Recording deleted</string>
-    <!-- %1$s should be the server's own explanation (its "detail"), never a status code -->
-    <string name="server_request_failed_fmt">Your server couldn\'t do that right now. %1$s</string>
     <string name="recording_not_on_server">This recording is no longer on the server.</string>
     <string name="transcription_failed">Transcription failed on your server.</string>
     <string name="transcript_not_started">This recording has not been transcribed.</string>

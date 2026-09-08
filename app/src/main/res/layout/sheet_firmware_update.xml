@@ -16,7 +16,7 @@
         android:layout_height="wrap_content"
         android:fontFamily="sans-serif-light"
         android:text="@string/firmware_update"
-        android:textColor="@color/black"
+        android:textColor="?attr/colorOnSurface"
         android:textSize="24sp" />
 
     <!-- Percentage (left) + status (right) -->
@@ -32,7 +32,7 @@
             android:layout_alignParentStart="true"
             android:fontFamily="sans-serif-light"
             android:text="0%"
-            android:textColor="@color/black"
+            android:textColor="?attr/colorOnSurface"
             android:textSize="44sp" />
 
         <TextView
@@ -44,7 +44,7 @@
             android:layout_marginBottom="6dp"
             android:fontFamily="sans-serif"
             android:text="@string/preparing"
-            android:textColor="@color/gray5"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="14sp" />
     </RelativeLayout>
 
@@ -62,7 +62,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="40dp"
         android:fontFamily="sans-serif"
-        android:textColor="@color/gray5"
+        android:textColor="?attr/colorOnSurfaceVariant"
         android:textSize="14sp" />
 
     <TextView
@@ -71,7 +71,7 @@
         android:layout_marginTop="16dp"
         android:fontFamily="sans-serif"
         android:text="@string/firmware_update_notes"
-        android:textColor="@color/gray5"
+        android:textColor="?attr/colorOnSurfaceVariant"
         android:textSize="14sp" />
 
 </LinearLayout>

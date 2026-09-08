@@ -23,6 +23,7 @@ import org.plaudbridge.app.R
 import org.plaudbridge.app.common.AppLog
 import org.plaudbridge.app.databinding.ActivityWebDashboardBinding
 import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.ui.common.themeColor
 import java.io.ByteArrayInputStream
 
 /**
@@ -98,6 +99,9 @@ class WebDashboardActivity : AppCompatActivity() {
             if (requestedTab() == TAB_AUTOMATIONS) R.string.automations else R.string.web_dashboard
         )
 
+        // The page paints the app's palette itself (?theme=); until it does, the WebView shows the
+        // window colour rather than a white flash on the dark palette.
+        binding.webView.setBackgroundColor(themeColor(android.R.attr.colorBackground))
         binding.webView.settings.apply {
             javaScriptEnabled = true          // the dashboard is an SPA
             domStorageEnabled = true          // it keeps the token in localStorage
@@ -186,7 +190,8 @@ class WebDashboardActivity : AppCompatActivity() {
         showWeb()
         // ?embedded=1 tells the dashboard it is inside the app: it hides the brand,
         // "Connect a phone" and "Sign out" (which would log this WebView out). ?tab opens that
-        // tab and hides the tab switcher; ?theme keeps the page in step with the app's theme.
+        // tab and hides the tab switcher; ?theme keeps the page in step with the app's palette
+        // (light, dark, or system when the app itself follows the system).
         binding.webView.loadUrl(embeddedUrl(url, requestedTab(), DashboardTheme.current()))
     }
 

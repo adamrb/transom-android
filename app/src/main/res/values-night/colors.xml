@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark palette (see values/colors.xml for what each entry is for). Ratios are against the
+     surface #1E1E1E / the window #121212. -->
+<resources>
+    <color name="pb_background">#121212</color>
+    <color name="pb_surface">#1E1E1E</color>
+    <color name="pb_surface_variant">#2C2C2C</color>
+    <!-- 14.1:1 -->
+    <color name="pb_on_surface">#ECECEC</color>
+    <!-- 11.5:1 -->
+    <color name="pb_text_body">#D6D6D6</color>
+    <!-- 7.7:1 / 8.6:1 -->
+    <color name="pb_on_surface_variant">#B0B0B0</color>
+    <color name="pb_outline">#5A5A5A</color>
+    <color name="pb_divider">#2E2E2E</color>
+    <color name="pb_primary">#E8E8E8</color>
+    <color name="pb_on_primary">#1A1A1A</color>
+    <!-- 6.0:1 -->
+    <color name="pb_error">#FF6B5E</color>
+    <!-- 8.4:1 -->
+    <color name="pb_success">#7FC79A</color>
+    <!-- 9.6:1 -->
+    <color name="pb_warning">#FFB74D</color>
+    <!-- White at 12% -->
+    <color name="pb_selection_tint">#1FFFFFFF</color>
+    <color name="pb_highlight_flash">#33FFB74D</color>
+    <color name="pb_status_pending_bg">#26FFB74D</color>
+</resources>

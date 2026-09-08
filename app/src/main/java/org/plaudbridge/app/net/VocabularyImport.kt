@@ -1,91 +1,20 @@
 package org.plaudbridge.app.net
 
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
-import org.plaudbridge.app.common.AppLog
-import org.plaudbridge.app.common.ServerErrorText
 import org.plaudbridge.app.models.VocabEntry
-import java.util.concurrent.TimeUnit
 
 /**
  * "Import from your vault" for the custom vocabulary: parse the Obsidian names gazetteer the
- * phone's vault copy holds (`Life/_names.md`) and MERGE it into the server's list with
- * `POST /api/v1/vocabulary/import {"entries": [...]}` (the endpoint the server's own
- * `contrib/vocab_from_obsidian.py` uses). A merge never removes anything: existing terms and
- * aliases stay, new ones are added, and the response is the merged list plus how many were new.
- *
- * Kept out of [ApiClient] only so the vocabulary screen's work does not collide with the file
- * detail work happening there; the request/response handling mirrors ApiClient's style.
+ * phone's vault copy holds (`Life/_names.md`) into entries for [ApiClient.importVocabulary],
+ * which MERGES them into the server's list. A port of the server's own
+ * `contrib/vocab_from_obsidian.py` so both paths produce the same entries.
  */
 object VocabularyImport {
-
-    private const val TAG = "VocabularyImport"
 
     /** Weight the vault script gives gazetteer names so they outrank other imported hotwords. */
     const val GAZETTEER_WEIGHT = 10_000
 
     /** Largest file the picker is allowed to hand us; the gazetteer is a few hundred lines. */
     const val MAX_FILE_BYTES = 2L * 1024 * 1024
-
-    private val client: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .build()
-    }
-
-    private val jsonType = "application/json".toMediaType()
-
-    /** Typed result of the import. Never throws once the server is configured. */
-    sealed class Result {
-        /** The server's merged list and how many entries were new. */
-        data class Ok(val entries: List<VocabEntry>, val added: Int) : Result()
-        /** 404: the server predates the vocabulary feature. */
-        object Unsupported : Result()
-        data class AuthError(val code: Int) : Result()
-        /** [message] is already a user sentence (the server's `detail` when it sent one). */
-        data class Error(val message: String, val detail: String? = null) : Result()
-    }
-
-    /** POST /api/v1/vocabulary/import: merge [entries] into the server's list. */
-    fun importEntries(entries: List<VocabEntry>): Result {
-        val body = JSONObject().put("entries", VocabEntry.listToJson(entries)).toString().toRequestBody(jsonType)
-        val req = Request.Builder()
-            .url("${ApiClient.baseUrl()}/api/v1/vocabulary/import")
-            .header("Authorization", ApiClient.authHeader())
-            .post(body)
-            .build()
-        return try {
-            client.newCall(req).execute().use { resp ->
-                val text = resp.body?.string() ?: ""
-                when {
-                    resp.code == 404 -> Result.Unsupported
-                    resp.code == 401 || resp.code == 403 -> Result.AuthError(resp.code)
-                    !resp.isSuccessful -> {
-                        AppLog.w(TAG, "import failed: HTTP ${resp.code} (${text.length} bytes)")
-                        Result.Error("HTTP ${resp.code}", ServerErrorText.detailFrom(text))
-                    }
-                    else -> try {
-                        val json = JSONObject(text)
-                        Result.Ok(
-                            VocabEntry.listFromJson(json.optJSONArray("entries")),
-                            json.optInt("added", 0)
-                        )
-                    } catch (e: Exception) {
-                        Result.Error("import response is not valid JSON")
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            AppLog.w(TAG, "import request failed", e)
-            Result.Error(e.message ?: "network error")
-        }
-    }
 
     // MARK: - Gazetteer parsing (port of contrib/vocab_from_obsidian.py parse_gazetteer)
 

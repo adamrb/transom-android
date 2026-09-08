@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Theme attributes the Material set has no name for. Layouts, drawables and code reference these
+     (and the standard colorSurface / colorOnSurface / colorOnSurfaceVariant / colorOutline /
+     colorPrimary / colorError) instead of colour resources, so one theme serves light and dark. -->
+<resources>
+    <!-- Body copy: transcript paragraphs, summaries, row titles. Darker than secondary text,
+         lighter than headings. -->
+    <attr name="pbColorTextBody" format="color|reference" />
+    <!-- Hairline separators between rows and under cards. Not a text colour. -->
+    <attr name="pbColorDivider" format="color|reference" />
+    <!-- Good news: connected dot, healthy battery, "server reachable". Passes 4.5:1 as text. -->
+    <attr name="pbColorSuccess" format="color|reference" />
+    <!-- Something in flight: status words, the transcription progress bar. Passes 4.5:1 as text. -->
+    <attr name="pbColorWarning" format="color|reference" />
+    <!-- Recorder button-press highlights: the star, the timestamp, the bar beside a paragraph. -->
+    <attr name="pbColorHighlightAccent" format="color|reference" />
+    <!-- Translucent wash behind the paragraph a highlight jumps to. -->
+    <attr name="pbColorHighlightFlash" format="color|reference" />
+    <!-- Translucent wash for the selected tab and the paragraph being played. -->
+    <attr name="pbColorSelectionTint" format="color|reference" />
+</resources>

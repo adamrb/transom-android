@@ -9,10 +9,10 @@ import android.text.style.StyleSpan
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 import org.plaudbridge.app.R
 import org.plaudbridge.app.databinding.ItemTranscriptParagraphBinding
+import org.plaudbridge.app.ui.common.themeColor
 
 /**
  * The detail page as a list: position 0 is the page's header block (summary, highlights,
@@ -97,9 +97,9 @@ class TranscriptAdapter(
     private class HeaderHolder(view: View) : RecyclerView.ViewHolder(view)
 
     inner class ParagraphHolder(private val b: ItemTranscriptParagraphBinding) : RecyclerView.ViewHolder(b.root) {
-        private val accent = ContextCompat.getColor(b.root.context, R.color.highlight_accent)
-        private val nowPlayingTint = ContextCompat.getColor(b.root.context, R.color.tab_selected_bg)
-        private val flashTint = ContextCompat.getColor(b.root.context, R.color.highlight_flash)
+        private val accent = b.root.themeColor(R.attr.pbColorHighlightAccent)
+        private val nowPlayingTint = b.root.themeColor(R.attr.pbColorSelectionTint)
+        private val flashTint = b.root.themeColor(R.attr.pbColorHighlightFlash)
 
         fun bind(row: TranscriptRow, nowPlaying: Boolean, flash: Boolean, renameEnabled: Boolean) {
             val speaker = row.speaker

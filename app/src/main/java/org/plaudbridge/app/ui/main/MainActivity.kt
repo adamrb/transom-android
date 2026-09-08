@@ -16,6 +16,7 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.R as MaterialR
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.Dispatchers
@@ -32,8 +33,10 @@ import org.plaudbridge.app.net.UpdateManager
 import org.plaudbridge.app.service.DeviceConnectionService
 import org.plaudbridge.app.storage.RecordingStore
 import org.plaudbridge.app.ui.common.AppManagers
+import org.plaudbridge.app.ui.common.ContentWidth
 import org.plaudbridge.app.ui.common.SnackbarHost
 import org.plaudbridge.app.ui.common.SyncFeedback
+import org.plaudbridge.app.ui.common.themeColor
 import org.plaudbridge.app.ui.home.HomeFragment
 import org.plaudbridge.app.ui.onboarding.ScanningActivity
 import org.plaudbridge.app.ui.onboarding.WelcomeActivity
@@ -254,6 +257,8 @@ class MainActivity : AppCompatActivity(), SnackbarHost {
             v.setPadding(v.paddingLeft, v.paddingTop, v.paddingRight, basePadding + bottom)
             insets
         }
+        // Wide screens: the three tabs stay a hand's width apart instead of spanning the display
+        ContentWidth.limit(binding.tabBar)
 
         binding.tabHome.setOnClickListener { selectTab(TAB_HOME) }
         binding.tabRecordings.setOnClickListener { selectTab(TAB_RECORDINGS) }
@@ -299,8 +304,8 @@ class MainActivity : AppCompatActivity(), SnackbarHost {
                 null
             }
             tabs[i].isSelected = isSelected
-            // Selected = black icon+label, unselected = #7A7A7A (mirrors iOS)
-            val tint = ContextCompat.getColor(this, if (isSelected) R.color.black else R.color.tab_unselected)
+            // Selected = the surface's text colour, unselected = the secondary text colour
+            val tint = themeColor(if (isSelected) MaterialR.attr.colorOnSurface else MaterialR.attr.colorOnSurfaceVariant)
             icons[i].setColorFilter(tint)
             labels[i].setTextColor(tint)
         }

@@ -49,7 +49,7 @@ class VocabularyActivityTest {
     private class FakeSource(
         var fetchResult: ApiClient.VocabularyResult,
         var saveResult: (List<VocabEntry>) -> ApiClient.VocabularyResult = { ApiClient.VocabularyResult.Ok(it, "") },
-        var importResult: (List<VocabEntry>) -> VocabularyImport.Result = { VocabularyImport.Result.Ok(it, it.size) }
+        var importResult: (List<VocabEntry>) -> ApiClient.VocabularyImportResult = { ApiClient.VocabularyImportResult.Ok(it, it.size) }
     ) : VocabularyActivity.VocabularySource {
         val saved = mutableListOf<List<VocabEntry>>()
         val imported = mutableListOf<List<VocabEntry>>()
@@ -58,7 +58,7 @@ class VocabularyActivityTest {
             saved += entries
             return saveResult(entries)
         }
-        override suspend fun import(entries: List<VocabEntry>): VocabularyImport.Result {
+        override suspend fun import(entries: List<VocabEntry>): ApiClient.VocabularyImportResult {
             imported += entries
             return importResult(entries)
         }
@@ -281,7 +281,7 @@ class VocabularyActivityTest {
     fun importParsesTheGazetteerAndMergesThroughTheImportCall() {
         val merged = existing + VocabEntry("Dana Whitlock", listOf("Dana Whitlok"), "obsidian")
         val fake = FakeSource(ApiClient.VocabularyResult.Ok(existing, ""))
-        fake.importResult = { VocabularyImport.Result.Ok(merged, 1) }
+        fake.importResult = { ApiClient.VocabularyImportResult.Ok(merged, 1) }
         val activity = launch(fake)
 
         activity.importFromText(
@@ -332,7 +332,7 @@ class VocabularyActivityTest {
     @Test
     fun importErrorShowsTheServersOwnExplanation() {
         val fake = FakeSource(ApiClient.VocabularyResult.Ok(existing, ""))
-        fake.importResult = { VocabularyImport.Result.Error("HTTP 422", "Too many entries.") }
+        fake.importResult = { ApiClient.VocabularyImportResult.Error("HTTP 422", "Too many entries.") }
         val activity = launch(fake)
         activity.importFromText("Dana Whitlock | person | Dana Whitlok")
         idle()

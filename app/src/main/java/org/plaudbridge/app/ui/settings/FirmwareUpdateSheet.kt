@@ -1,6 +1,5 @@
 package org.plaudbridge.app.ui.settings
 
-import android.graphics.Color
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -10,11 +9,13 @@ import android.widget.TextView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.R as MaterialR
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.databinding.SheetFirmwareUpdateBinding
 import org.plaudbridge.app.models.FirmwareUpdateUiState
+import org.plaudbridge.app.ui.common.themeColor
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -87,7 +88,7 @@ class FirmwareUpdateSheet : BottomSheetDialogFragment() {
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
                     if (i > 0) marginStart = (2 * density).toInt()
                 }
-                background = makeSegmentDrawable(EMPTY_COLOR)
+                background = makeSegmentDrawable(requireContext().themeColor(MaterialR.attr.colorSurfaceVariant))
             }
             binding.segmentContainer.addView(seg)
             segments.add(seg)
@@ -127,7 +128,9 @@ class FirmwareUpdateSheet : BottomSheetDialogFragment() {
 
         val filled = (totalSegments * state.progress).toInt()
         segments.forEachIndexed { i, seg ->
-            seg.background = makeSegmentDrawable(if (i < filled) Color.BLACK else EMPTY_COLOR)
+            seg.background = makeSegmentDrawable(
+                requireContext().themeColor(if (i < filled) MaterialR.attr.colorPrimary else MaterialR.attr.colorSurfaceVariant)
+            )
         }
 
         when (state.phase) {
@@ -204,7 +207,6 @@ class FirmwareUpdateSheet : BottomSheetDialogFragment() {
         private const val ARG_DEVICE_NAME = "device_name"
         private const val KEY_STARTED = "ota_started"
         private const val KEY_SAW_FRESH_STATE = "ota_saw_fresh_state"
-        private val EMPTY_COLOR = Color.parseColor("#E5E5E5")
 
         fun newInstance(deviceName: String): FirmwareUpdateSheet = FirmwareUpdateSheet().apply {
             arguments = Bundle().apply { putString(ARG_DEVICE_NAME, deviceName) }

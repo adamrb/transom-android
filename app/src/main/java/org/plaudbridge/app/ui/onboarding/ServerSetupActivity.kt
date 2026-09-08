@@ -4,11 +4,11 @@ import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.R as MaterialR
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +23,7 @@ import org.plaudbridge.app.common.ServerErrorText
 import org.plaudbridge.app.databinding.ActivityServerSetupBinding
 import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.ui.common.themeColor
 import org.plaudbridge.app.ui.main.MainActivity
 
 /**
@@ -105,7 +106,6 @@ class ServerSetupActivity : AppCompatActivity() {
         val invalidate = {
             verified = false
             binding.continueButton.isEnabled = false
-            binding.continueButton.alpha = 0.5f
             binding.statusLabel.text = ""
         }
         binding.serverUrlInput.addTextChangedListener(SimpleWatcher { invalidate() })
@@ -179,7 +179,6 @@ class ServerSetupActivity : AppCompatActivity() {
             plaudToken?.let { org.plaudbridge.app.net.TokenManager.store(it) }
             verified = true
             binding.continueButton.isEnabled = true
-            binding.continueButton.alpha = 1f
             showStatus(getString(R.string.server_setup_success), isError = false)
         }
     }
@@ -187,7 +186,7 @@ class ServerSetupActivity : AppCompatActivity() {
     private fun showStatus(message: String, isError: Boolean) {
         binding.statusLabel.text = message
         binding.statusLabel.setTextColor(
-            ContextCompat.getColor(this, if (isError) R.color.red else R.color.green)
+            themeColor(if (isError) MaterialR.attr.colorError else R.attr.pbColorSuccess)
         )
         binding.statusLabel.visibility = View.VISIBLE
     }

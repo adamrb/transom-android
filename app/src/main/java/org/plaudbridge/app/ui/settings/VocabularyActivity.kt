@@ -38,8 +38,9 @@ import org.plaudbridge.app.storage.RecordingStore
  * ("manual" or "obsidian") across edits so a later vault import can still tell them apart.
  *
  * Leaving with unsaved edits asks first. "Import from your vault" reads the vault's names file
- * from the phone's Obsidian copy and merges it server-side ([VocabularyImport]); it never
- * removes anything, so it needs no confirmation, only a clean (saved) list to start from.
+ * from the phone's Obsidian copy ([VocabularyImport.parseGazetteer]) and merges it server-side
+ * ([ApiClient.importVocabulary]); it never removes anything, so it needs no confirmation, only a
+ * clean (saved) list to start from.
  */
 class VocabularyActivity : AppCompatActivity() {
 
@@ -63,7 +64,7 @@ class VocabularyActivity : AppCompatActivity() {
     interface VocabularySource {
         suspend fun fetch(): ApiClient.VocabularyResult
         suspend fun save(entries: List<VocabEntry>): ApiClient.VocabularyResult
-        suspend fun import(entries: List<VocabEntry>): VocabularyImport.Result
+        suspend fun import(entries: List<VocabEntry>): ApiClient.VocabularyImportResult
     }
 
     private object ApiVocabularySource : VocabularySource {
@@ -71,7 +72,7 @@ class VocabularyActivity : AppCompatActivity() {
         override suspend fun save(entries: List<VocabEntry>) =
             withContext(Dispatchers.IO) { ApiClient.saveVocabulary(entries) }
         override suspend fun import(entries: List<VocabEntry>) =
-            withContext(Dispatchers.IO) { VocabularyImport.importEntries(entries) }
+            withContext(Dispatchers.IO) { ApiClient.importVocabulary(entries) }
     }
 
     companion object {
@@ -390,7 +391,7 @@ class VocabularyActivity : AppCompatActivity() {
             val result = source.import(parsed)
             busy = false
             when (result) {
-                is VocabularyImport.Result.Ok -> {
+                is ApiClient.VocabularyImportResult.Ok -> {
                     setBaseline(result.entries)
                     val message = if (result.added > 0) {
                         resources.getQuantityString(R.plurals.vocabulary_import_added, result.added, result.added)
@@ -407,11 +408,11 @@ class VocabularyActivity : AppCompatActivity() {
         }
     }
 
-    private fun importError(result: VocabularyImport.Result): String = when (result) {
-        is VocabularyImport.Result.Ok -> ""
-        is VocabularyImport.Result.Unsupported -> getString(R.string.vocabulary_unsupported)
-        is VocabularyImport.Result.AuthError -> getString(R.string.transcript_auth_error)
-        is VocabularyImport.Result.Error -> result.detail ?: ServerErrorText.fromResultMessage(this, result.message)
+    private fun importError(result: ApiClient.VocabularyImportResult): String = when (result) {
+        is ApiClient.VocabularyImportResult.Ok -> ""
+        is ApiClient.VocabularyImportResult.Unsupported -> getString(R.string.vocabulary_unsupported)
+        is ApiClient.VocabularyImportResult.AuthError -> getString(R.string.transcript_auth_error)
+        is ApiClient.VocabularyImportResult.Error -> result.detail ?: ServerErrorText.fromResultMessage(this, result.message)
     }
 
     private fun java.io.InputStream.readNBytesCompat(limit: Int): ByteArray {

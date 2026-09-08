@@ -28,7 +28,7 @@
             android:ellipsize="end"
             android:fontFamily="sans-serif"
             android:maxLines="1"
-            android:textColor="@color/dark_gray"
+            android:textColor="?attr/pbColorTextBody"
             android:textSize="14sp" />
 
         <TextView
@@ -39,7 +39,7 @@
             android:ellipsize="end"
             android:fontFamily="sans-serif"
             android:maxLines="1"
-            android:textColor="@color/text_secondary"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="13sp" />
 
         <TextView
@@ -50,7 +50,7 @@
             android:ellipsize="end"
             android:fontFamily="sans-serif"
             android:maxLines="1"
-            android:textColor="@color/gray5"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="13sp"
             android:visibility="gone" />
     </LinearLayout>
@@ -64,5 +64,5 @@
         android:contentDescription="@string/more_actions"
         android:src="@drawable/ic_more"
         android:visibility="gone"
-        app:tint="@color/text_secondary" />
+        app:tint="?attr/colorOnSurfaceVariant" />
 </LinearLayout>

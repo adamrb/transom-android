@@ -10,11 +10,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.R as MaterialR
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -29,8 +29,10 @@ import org.plaudbridge.app.models.SyncProgress
 import org.plaudbridge.app.models.SyncState
 import org.plaudbridge.app.models.displayName
 import org.plaudbridge.app.ui.common.AppManagers
+import org.plaudbridge.app.ui.common.ContentWidth
 import org.plaudbridge.app.ui.common.SyncFeedback
 import org.plaudbridge.app.ui.common.showSnackbar
+import org.plaudbridge.app.ui.common.themeColor
 import org.plaudbridge.app.ui.filedetail.FileDetailActivity
 import org.plaudbridge.app.ui.onboarding.ScanningActivity
 import org.plaudbridge.app.ui.recording.RecordingActivity
@@ -74,6 +76,7 @@ class HomeFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        ContentWidth.limit(binding.homeContent)
         setupClickListeners()
         observeManagers()
     }
@@ -149,7 +152,7 @@ class HomeFragment : Fragment() {
 
     private fun makeSeparator(): View = View(requireContext()).apply {
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
-        setBackgroundColor(resources.getColor(R.color.light_gray, null))
+        setBackgroundColor(requireContext().themeColor(R.attr.pbColorDivider))
     }
 
     /**
@@ -181,12 +184,13 @@ class HomeFragment : Fragment() {
         }
         val icon = android.widget.ImageView(requireContext()).apply {
             setImageResource(R.drawable.ic_device)
+            imageTintList = android.content.res.ColorStateList.valueOf(requireContext().themeColor(R.attr.pbColorTextBody))
             layoutParams = LinearLayout.LayoutParams(dp(32), dp(32))
         }
         val label = TextView(requireContext()).apply {
             text = info.name
             textSize = 14f
-            setTextColor(resources.getColor(R.color.black, null))
+            setTextColor(requireContext().themeColor(MaterialR.attr.colorOnSurface))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { marginStart = dp(12) }
@@ -199,7 +203,7 @@ class HomeFragment : Fragment() {
     private fun makeAddDeviceRow(): View = TextView(requireContext()).apply {
         text = getString(R.string.add_device)
         textSize = 14f
-        setTextColor(resources.getColor(R.color.black, null))
+        setTextColor(requireContext().themeColor(MaterialR.attr.colorOnSurface))
         gravity = android.view.Gravity.CENTER_VERTICAL
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(48))
         setPaddingRelative(dp(16), 0, dp(16), 0)
@@ -297,12 +301,12 @@ class HomeFragment : Fragment() {
 
         // Battery bar color
         val batteryColor = when {
-            !hasBattery -> R.color.text_secondary
-            device.batteryLevel <= 10 -> R.color.red
-            device.batteryLevel <= 20 -> R.color.orange
-            else -> R.color.green
+            !hasBattery -> MaterialR.attr.colorOnSurfaceVariant
+            device.batteryLevel <= 10 -> MaterialR.attr.colorError
+            device.batteryLevel <= 20 -> R.attr.pbColorWarning
+            else -> R.attr.pbColorSuccess
         }
-        binding.batteryFill.setBackgroundColor(ContextCompat.getColor(requireContext(), batteryColor))
+        binding.batteryFill.setBackgroundColor(requireContext().themeColor(batteryColor))
 
         // Battery bar width
         binding.batteryFill.post {

@@ -28,7 +28,7 @@
             android:maxLength="2000"
             android:minLines="3"
             android:maxLines="8"
-            android:textColor="@color/text_primary"
+            android:textColor="?attr/colorOnSurface"
             android:textSize="14sp" />
     </com.google.android.material.textfield.TextInputLayout>
 </FrameLayout>

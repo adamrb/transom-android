@@ -35,7 +35,7 @@
     <string name="detail_speaker_renamed">Speaker renamed</string>
     <string name="detail_server_needs_update">Your server needs an update for this</string>
     <string name="detail_request_failed">Couldn\'t reach your server. Try again.</string>
-    <string name="detail_export_failed">Export failed</string>
+    <!-- The export dialog's title is the shared export_failed_title -->
     <string name="detail_export_failed_body">Couldn\'t export this recording.</string>
 
     <!-- Player -->

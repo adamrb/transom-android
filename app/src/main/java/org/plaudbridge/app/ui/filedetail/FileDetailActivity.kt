@@ -25,6 +25,7 @@ import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.R as MaterialR
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.slider.Slider
 import com.google.android.material.snackbar.Snackbar
@@ -53,7 +54,9 @@ import org.plaudbridge.app.playback.ControllerPlayback
 import org.plaudbridge.app.playback.Playback
 import org.plaudbridge.app.playback.PlaybackService
 import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.ui.common.ContentWidth
 import org.plaudbridge.app.ui.common.MarkdownRenderer
+import org.plaudbridge.app.ui.common.themeColor
 import org.plaudbridge.app.ui.recordings.ApiServerRecordingActions
 import org.plaudbridge.app.ui.recordings.RecordingActions
 import org.plaudbridge.app.ui.recordings.RecordingItem
@@ -312,6 +315,11 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
         setupToolbar()
         setupBottomBar()
         setupAudioPlayerControls()
+        // Wide screens: header, page and player share one centred column. The list's rows (and
+        // the header item) pad themselves by the screen margin, so the list is capped short of it.
+        ContentWidth.limit(binding.headerBlock)
+        ContentWidth.limit(binding.transcriptList, contentInset = resources.getDimensionPixelSize(R.dimen.pb_screen_padding))
+        ContentWidth.limit(binding.audioPlayer)
         header.copyTranscriptButton.setOnClickListener { copyTranscript() }
         header.exportMarkdownButton.setOnClickListener { currentModel?.let { m -> exportMarkdown(m) } }
         header.copySummaryButton.setOnClickListener { currentModel?.let { m -> copySummary(m) } }
@@ -404,7 +412,8 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
             val height = bottom - top
             if (height != oldBottom - oldTop) {
                 val extra = (16 * resources.displayMetrics.density).toInt()
-                binding.transcriptList.setPadding(0, 0, 0, height + extra)
+                // Only the bottom changes; the sides belong to ContentWidth on wide screens
+                binding.transcriptList.setPadding(binding.transcriptList.paddingLeft, 0, binding.transcriptList.paddingRight, height + extra)
                 binding.fastScroller.setPadding(0, 0, 0, height)
             }
         }
@@ -763,17 +772,17 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
     private fun bindStatusBadge(item: RecordingItem) {
         when (item.status) {
             RecordingItem.Status.TRANSCRIBING ->
-                setStatusBadge(RecordingsAdapter.transcribingText(this, item.server), R.color.orange, R.drawable.bg_status_pending)
+                setStatusBadge(RecordingsAdapter.transcribingText(this, item.server), R.attr.pbColorWarning, R.drawable.bg_status_pending)
             RecordingItem.Status.FAILED ->
-                setStatusBadge(getString(R.string.status_failed), R.color.red, R.drawable.bg_status_pending)
+                setStatusBadge(getString(R.string.status_failed), MaterialR.attr.colorError, R.drawable.bg_status_pending)
             else -> binding.statusBadge.visibility = View.GONE
         }
     }
 
-    private fun setStatusBadge(text: String, colorRes: Int, backgroundRes: Int) {
+    private fun setStatusBadge(text: String, colorAttr: Int, backgroundRes: Int) {
         binding.statusBadge.visibility = View.VISIBLE
         binding.statusBadge.text = text
-        binding.statusBadge.setTextColor(ContextCompat.getColor(this, colorRes))
+        binding.statusBadge.setTextColor(themeColor(colorAttr))
         binding.statusBadge.setBackgroundResource(backgroundRes)
     }
 
@@ -957,7 +966,7 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
      */
     private fun showEmptyState(
         title: String, subtitle: String?, buttonText: String? = null,
-        icon: Int = R.drawable.ic_files, details: String? = null, onButton: (() -> Unit)? = null
+        icon: Int = R.drawable.ic_recordings, details: String? = null, onButton: (() -> Unit)? = null
     ) {
         header.transcriptLoading.visibility = View.GONE
         header.emptyState.visibility = View.VISIBLE
@@ -1139,7 +1148,7 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
         header.highlightsHeader.visibility = if (visible) View.VISIBLE else View.GONE
         header.highlightsList.visibility = if (visible) View.VISIBLE else View.GONE
         if (!visible) return
-        val accent = ContextCompat.getColor(this, R.color.highlight_accent)
+        val accent = themeColor(R.attr.pbColorHighlightAccent)
         val density = resources.displayMetrics.density
         for ((index, h) in highlights.withIndex()) {
             val stamp = "★ ${TranscriptMarkdown.formatTimestamp(h.at)}"
@@ -1155,7 +1164,7 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
                         android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                     )
                 }
-                setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.dark_gray))
+                setTextColor(themeColor(R.attr.pbColorTextBody))
                 textSize = 14f
                 typeface = android.graphics.Typeface.SANS_SERIF
                 setLineSpacing(4 * density, 1f)
@@ -1466,7 +1475,7 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
             block.addView(android.widget.TextView(this).apply {
                 id = R.id.automation_run_error
                 text = error
-                setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.red))
+                setTextColor(themeColor(MaterialR.attr.colorError))
                 textSize = 13f
                 typeface = android.graphics.Typeface.SANS_SERIF
                 setPadding(0, dp(8), 0, dp(4))
@@ -1504,7 +1513,7 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
             addView(android.widget.TextView(this@FileDetailActivity).apply {
                 id = R.id.automation_route_name
                 text = name
-                setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.text_primary))
+                setTextColor(themeColor(MaterialR.attr.colorOnSurface))
                 textSize = 14f
                 typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
             })
@@ -1543,7 +1552,7 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
             row.addView(android.widget.TextView(this).apply {
                 id = R.id.automation_delivery_pill
                 text = chipText
-                setTextColor(ContextCompat.getColor(this@FileDetailActivity, presentation.chipColor))
+                setTextColor(themeColor(presentation.chipColorAttr))
                 setBackgroundResource(presentation.chipBackground)
                 textSize = 11f
                 typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
@@ -1560,7 +1569,7 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
                 addView(android.widget.TextView(this@FileDetailActivity).apply {
                     id = R.id.automation_delivery_text
                     text = detail
-                    setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.dark_gray))
+                    setTextColor(themeColor(R.attr.pbColorTextBody))
                     textSize = 13f
                     typeface = android.graphics.Typeface.SANS_SERIF
                 })
@@ -1578,7 +1587,7 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
             row.addView(android.widget.TextView(this).apply {
                 id = R.id.automation_retry
                 text = getString(R.string.retry)
-                setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.text_primary))
+                setTextColor(themeColor(MaterialR.attr.colorOnSurface))
                 setBackgroundResource(R.drawable.bg_pill_outline_gray)
                 textSize = 12f
                 typeface = android.graphics.Typeface.SANS_SERIF
@@ -1597,15 +1606,15 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
      * the outcome in words (the agent's summary alone when there is one), or null when the chip
      * says it all.
      */
-    private data class DeliveryPresentation(val chip: String?, val chipColor: Int, val chipBackground: Int, val detail: String?)
+    private data class DeliveryPresentation(val chip: String?, val chipColorAttr: Int, val chipBackground: Int, val detail: String?)
 
     private fun deliveryPresentation(d: Delivery): DeliveryPresentation = when (d.resultStatus) {
         Delivery.RESULT_QUEUED -> DeliveryPresentation(
-            getString(R.string.automation_state_working), R.color.orange, R.drawable.bg_status_pending, null
+            getString(R.string.automation_state_working), R.attr.pbColorWarning, R.drawable.bg_status_pending, null
         )
         Delivery.RESULT_DONE -> DeliveryPresentation(null, 0, 0, d.resultSummary ?: getString(R.string.automation_state_done))
         Delivery.RESULT_FAILED -> DeliveryPresentation(
-            getString(R.string.automation_state_failed), R.color.red, R.drawable.bg_status_pending,
+            getString(R.string.automation_state_failed), MaterialR.attr.colorError, R.drawable.bg_status_pending,
             d.resultSummary ?: d.lastError
         )
         // The job was accepted but never reported back within the server's deadline: neither
@@ -1613,10 +1622,10 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
         Delivery.RESULT_UNKNOWN -> DeliveryPresentation(null, 0, 0, getString(R.string.automation_no_report_text))
         else -> when (d.status) {
             Delivery.STATUS_FAILED -> DeliveryPresentation(
-                getString(R.string.automation_state_failed), R.color.red, R.drawable.bg_status_pending, d.lastError
+                getString(R.string.automation_state_failed), MaterialR.attr.colorError, R.drawable.bg_status_pending, d.lastError
             )
             Delivery.STATUS_PENDING -> DeliveryPresentation(
-                getString(R.string.detail_delivery_waiting), R.color.orange, R.drawable.bg_status_pending, null
+                getString(R.string.detail_delivery_waiting), R.attr.pbColorWarning, R.drawable.bg_status_pending, null
             )
             // "ok" without a report: a webhook was handed to something that has not (or will
             // not) report back; a markdown or decision-only action ran to completion right there.
@@ -1630,7 +1639,7 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
 
     private fun mutedText(text: CharSequence): android.widget.TextView = android.widget.TextView(this).apply {
         this.text = text
-        setTextColor(ContextCompat.getColor(this@FileDetailActivity, R.color.text_secondary))
+        setTextColor(themeColor(MaterialR.attr.colorOnSurfaceVariant))
         textSize = 13f
         typeface = android.graphics.Typeface.SANS_SERIF
     }
@@ -2478,7 +2487,7 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
             .setPositiveButton(R.string.delete) { _, _ -> delete(item) }
             .setNegativeButton(R.string.cancel, null)
             .show()
-        dialog.getButton(DialogInterface.BUTTON_POSITIVE)?.setTextColor(ContextCompat.getColor(this, R.color.red))
+        dialog.getButton(DialogInterface.BUTTON_POSITIVE)?.setTextColor(themeColor(MaterialR.attr.colorError))
     }
 
     /** Server first (when it has the recording), then the phone copy; see [RecordingActions.delete]. */
@@ -2515,7 +2524,7 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
                 }
                 result.onFailure {
                     org.plaudbridge.app.common.AppLog.w("FileDetail", "audio export failed", it)
-                    showAlert(getString(R.string.detail_export_failed), getString(R.string.detail_export_failed_body))
+                    showAlert(getString(R.string.export_failed_title), getString(R.string.detail_export_failed_body))
                 }
             }
         }
@@ -2592,7 +2601,7 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
             TranscriptShare.share(this, ExportFileName.sanitize(model.title), model.title, markdown)
         } catch (e: Exception) {
             org.plaudbridge.app.common.AppLog.w("FileDetail", "markdown export failed", e)
-            showAlert(getString(R.string.detail_export_failed), getString(R.string.detail_export_failed_body))
+            showAlert(getString(R.string.export_failed_title), getString(R.string.detail_export_failed_body))
         }
     }
 

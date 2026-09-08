@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Widest a column of content may grow before it is centred with margins on both sides.
+         0 means no cap (phones); values-sw600dp sets one for tablets and unfolded foldables. -->
+    <dimen name="pb_content_max_width">0dp</dimen>
+    <!-- The screen edge margin for page content -->
+    <dimen name="pb_screen_padding">24dp</dimen>
+    <!-- The large tab titles (Home, Recordings, Settings) -->
+    <dimen name="pb_large_title_text_size">44sp</dimen>
+    <!-- The recording title at the top of the detail screen -->
+    <dimen name="pb_detail_title_text_size">28sp</dimen>
+    <!-- Opacity of the light onboarding artwork (welcome background, success ellipse);
+         values-night fades it so it does not glare on the dark palette -->
+    <item name="pb_welcome_art_alpha" type="dimen" format="float">1.0</item>
+</resources>

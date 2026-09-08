@@ -1,25 +1,176 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Theme -->
-    <style name="Theme.PlaudBridge" parent="Theme.MaterialComponents.Light.NoActionBar">
-        <item name="colorPrimary">#1F1F1F</item>
-        <item name="colorPrimaryVariant">#1F1F1F</item>
-        <item name="colorOnPrimary">#FFFFFF</item>
-        <item name="colorSecondary">#6CAE85</item>
-        <item name="colorOnSecondary">#FFFFFF</item>
-        <item name="android:windowBackground">@color/bg_primary</item>
-        <item name="android:statusBarColor">@color/bg_primary</item>
-        <item name="android:windowLightStatusBar">true</item>
+    <!-- The app theme. DayNight: the light palette from values/colors.xml or the dark one from
+         values-night/colors.xml, chosen by the Appearance setting (System / Light / Dark, applied
+         through AppCompatDelegate at start). Everything on screen reads its colours from these
+         attributes; see attrs.xml for the app-specific ones. -->
+    <style name="Base.Theme.PlaudBridge" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/pb_primary</item>
+        <item name="colorPrimaryVariant">@color/pb_primary</item>
+        <item name="colorOnPrimary">@color/pb_on_primary</item>
+        <!-- Monochrome controls: checkboxes, switches and sliders follow the primary, not a
+             brand accent -->
+        <item name="colorSecondary">@color/pb_primary</item>
+        <item name="colorSecondaryVariant">@color/pb_primary</item>
+        <item name="colorOnSecondary">@color/pb_on_primary</item>
+        <item name="colorSurface">@color/pb_surface</item>
+        <item name="colorOnSurface">@color/pb_on_surface</item>
+        <item name="colorSurfaceVariant">@color/pb_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/pb_on_surface_variant</item>
+        <item name="colorOutline">@color/pb_outline</item>
+        <item name="colorError">@color/pb_error</item>
+        <item name="colorOnError">@color/pb_on_primary</item>
+        <item name="android:colorBackground">@color/pb_background</item>
+        <item name="colorOnBackground">@color/pb_on_surface</item>
+        <item name="colorControlNormal">@color/pb_on_surface_variant</item>
+        <item name="android:textColorPrimary">@color/pb_on_surface</item>
+        <item name="android:textColorSecondary">@color/pb_on_surface_variant</item>
+        <item name="android:textColorHint">@color/pb_on_surface_variant</item>
+        <item name="android:textColorLink">@color/pb_on_surface</item>
+
+        <item name="pbColorTextBody">@color/pb_text_body</item>
+        <item name="pbColorDivider">@color/pb_divider</item>
+        <item name="pbColorSuccess">@color/pb_success</item>
+        <item name="pbColorWarning">@color/pb_warning</item>
+        <item name="pbColorHighlightAccent">@color/pb_warning</item>
+        <item name="pbColorHighlightFlash">@color/pb_highlight_flash</item>
+        <item name="pbColorSelectionTint">@color/pb_selection_tint</item>
+
+        <item name="android:windowBackground">@color/pb_background</item>
+        <item name="android:statusBarColor">@color/pb_background</item>
+        <item name="android:windowLightStatusBar">@bool/pb_light_system_bars</item>
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+
+        <item name="materialButtonStyle">@style/Widget.PlaudBridge.Button</item>
+        <item name="materialButtonOutlinedStyle">@style/Widget.PlaudBridge.Button.Outlined</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.PlaudBridge.Dialog</item>
+        <item name="alertDialogTheme">@style/ThemeOverlay.PlaudBridge.Dialog</item>
+        <item name="bottomSheetDialogTheme">@style/ThemeOverlay.PlaudBridge.BottomSheet</item>
+    </style>
+
+    <!-- values-v27 adds the navigation bar items (light icons need API 27). -->
+    <style name="Theme.PlaudBridge" parent="Base.Theme.PlaudBridge" />
+
+    <!-- The Recording screen: always dark, whatever the palette, so its own colours are fixed
+         (see activity_recording.xml) and only the system bars come from here. -->
+    <style name="Theme.PlaudBridge.Recording" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="colorPrimary">#E8E8E8</item>
+        <item name="colorOnPrimary">#1A1A1A</item>
+        <item name="colorSecondary">#E8E8E8</item>
+        <item name="colorSurface">@color/recording_dark_bg</item>
+        <item name="colorOnSurface">@color/white</item>
+        <item name="android:windowBackground">@color/recording_dark_bg</item>
+        <item name="android:statusBarColor">@color/recording_dark_bg</item>
+        <item name="android:navigationBarColor">@color/recording_dark_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
     </style>
 
-    <!-- Recording dark theme -->
-    <style name="Theme.PlaudBridge.Recording" parent="Theme.PlaudBridge">
-        <item name="android:windowBackground">@color/recording_dark_bg</item>
-        <item name="android:statusBarColor">@color/recording_dark_bg</item>
-        <item name="android:windowLightStatusBar">false</item>
+    <!-- Dialogs: surface-coloured, with the primary (near black / near white) for the buttons -->
+    <style name="ThemeOverlay.PlaudBridge.Dialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="colorPrimary">@color/pb_primary</item>
+        <item name="colorOnSurface">@color/pb_on_surface</item>
+        <item name="android:textColorPrimary">@color/pb_on_surface</item>
+        <item name="android:textColorSecondary">@color/pb_text_body</item>
+        <item name="android:textColorAlertDialogListItem">@color/pb_on_surface</item>
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearanceOverlay.PlaudBridge.Dialog</item>
+    </style>
+
+    <style name="ShapeAppearanceOverlay.PlaudBridge.Dialog" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">16dp</item>
+    </style>
+
+    <!-- Bottom sheets draw their own rounded surface (bg_bottom_sheet); the dialog window behind
+         them stays transparent. -->
+    <style name="ThemeOverlay.PlaudBridge.BottomSheet" parent="ThemeOverlay.MaterialComponents.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/Widget.PlaudBridge.BottomSheet</item>
+        <item name="android:navigationBarColor">@color/pb_surface</item>
+    </style>
+
+    <style name="Widget.PlaudBridge.BottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
+        <item name="android:background">@android:color/transparent</item>
+        <item name="backgroundTint">@android:color/transparent</item>
+    </style>
+
+    <!-- The two buttons. Filled: the one thing to do on a card or screen (Sync now, Connect,
+         Save). Outlined: everything beside it (Copy transcript, Retry, Cancel, Manage). Both
+         sentence case, 12dp corners, no vertical inset so a 32-48dp layout height is the real
+         height. -->
+    <style name="Widget.PlaudBridge.Button" parent="Widget.MaterialComponents.Button.UnelevatedButton">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">36dp</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">16dp</item>
+        <item name="android:textColor">@color/pb_button_filled_text</item>
+        <item name="backgroundTint">@color/pb_button_filled_bg</item>
+        <item name="rippleColor">@color/pb_button_filled_ripple</item>
+        <item name="cornerRadius">12dp</item>
+        <item name="iconTint">@color/pb_button_filled_text</item>
+    </style>
+
+    <style name="Widget.PlaudBridge.Button.Outlined" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">36dp</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">16dp</item>
+        <item name="android:textColor">@color/pb_button_outlined_text</item>
+        <item name="backgroundTint">?attr/colorSurface</item>
+        <item name="strokeColor">@color/pb_button_outlined_stroke</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="rippleColor">@color/pb_button_outlined_ripple</item>
+        <item name="cornerRadius">12dp</item>
+        <item name="iconTint">@color/pb_button_outlined_text</item>
+    </style>
+
+    <!-- Compact variants for the trailing button on a settings card (32dp tall, 13sp) -->
+    <style name="Widget.PlaudBridge.Button.Small">
+        <item name="android:minHeight">32dp</item>
+        <item name="android:textSize">13sp</item>
+    </style>
+
+    <style name="Widget.PlaudBridge.Button.Outlined.Small">
+        <item name="android:minHeight">32dp</item>
+        <item name="android:textSize">13sp</item>
+    </style>
+
+    <!-- A destructive outlined pill (Unpair) -->
+    <style name="Widget.PlaudBridge.Button.Outlined.Destructive">
+        <item name="android:textColor">?attr/colorError</item>
+        <item name="strokeColor">?attr/colorError</item>
+        <item name="iconTint">?attr/colorError</item>
+    </style>
+
+    <!-- Icon-only buttons on toolbars and rows -->
+    <style name="Widget.PlaudBridge.IconButton" parent="">
+        <item name="android:layout_width">48dp</item>
+        <item name="android:layout_height">48dp</item>
+        <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
+        <item name="android:scaleType">center</item>
+        <item name="tint">?attr/colorOnSurface</item>
+    </style>
+
+    <!-- The large page titles (Home, Recordings, Settings) -->
+    <style name="TextAppearance.PlaudBridge.LargeTitle" parent="TextAppearance.MaterialComponents.Headline3">
+        <item name="android:fontFamily">sans-serif-light</item>
+        <item name="android:textSize">@dimen/pb_large_title_text_size</item>
+        <item name="android:textColor">?attr/colorOnSurface</item>
+        <item name="android:letterSpacing">0</item>
     </style>
 
 </resources>

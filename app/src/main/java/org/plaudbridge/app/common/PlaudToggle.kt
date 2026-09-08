@@ -9,7 +9,13 @@ import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 import android.view.animation.DecelerateInterpolator
+import com.google.android.material.R as MaterialR
+import org.plaudbridge.app.ui.common.themeColor
 
+/**
+ * The settings switch: a rounded track that fills with the primary when on, a knob in the surface
+ * colour. All three colours come from the theme so the control reads on both palettes.
+ */
 class PlaudToggle @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -28,7 +34,7 @@ class PlaudToggle @JvmOverloads constructor(
 
     private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val knobPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
+        color = context.themeColor(MaterialR.attr.colorSurface)
     }
 
     private val trackRect = RectF()
@@ -39,8 +45,8 @@ class PlaudToggle @JvmOverloads constructor(
     private val knobPadding = dpToPx(2f)
     private val knobSize = dpToPx(22f)
 
-    private val trackColorOn = Color.BLACK
-    private val trackColorOff = Color.parseColor("#D6D6D6")
+    private val trackColorOn = context.themeColor(MaterialR.attr.colorPrimary)
+    private val trackColorOff = context.themeColor(MaterialR.attr.colorOutline)
 
     // Animation progress: 0 = off, 1 = on
     private var animProgress = 0f

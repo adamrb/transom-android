@@ -10,6 +10,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.plaudbridge.app.common.AppLog
+import org.plaudbridge.app.common.ServerErrorText
 import org.plaudbridge.app.models.RoutingRun
 import org.plaudbridge.app.models.ServerRecording
 import org.plaudbridge.app.models.VocabEntry
@@ -753,6 +754,57 @@ object ApiClient {
             .put(body)
             .build()
         return executeForVocabulary(req, "save vocabulary")
+    }
+
+    /** Typed result of the vault import. Never throws once the server is configured. */
+    sealed class VocabularyImportResult {
+        /** The server's merged list and how many entries were new. */
+        data class Ok(val entries: List<VocabEntry>, val added: Int) : VocabularyImportResult()
+        /** 404: the server predates the vocabulary feature. */
+        object Unsupported : VocabularyImportResult()
+        data class AuthError(val code: Int) : VocabularyImportResult()
+        /** [detail] is the server's own sentence for a rejected request, when it sent one. */
+        data class Error(val message: String, val detail: String? = null) : VocabularyImportResult()
+    }
+
+    /**
+     * POST /api/v1/vocabulary/import: MERGE [entries] into the server's list (the endpoint the
+     * server's own `contrib/vocab_from_obsidian.py` uses). A merge never removes anything:
+     * existing terms and aliases stay, new ones are added, and the answer is the merged list plus
+     * how many were new. The entries come from [VocabularyImport.parseGazetteer].
+     */
+    fun importVocabulary(entries: List<VocabEntry>): VocabularyImportResult {
+        val body = JSONObject().put("entries", VocabEntry.listToJson(entries)).toString().toRequestBody(jsonType)
+        val req = Request.Builder()
+            .url("${baseUrl()}/api/v1/vocabulary/import")
+            .header("Authorization", authHeader())
+            .post(body)
+            .build()
+        return try {
+            client.newCall(req).execute().use { resp ->
+                val text = resp.body?.string() ?: ""
+                when {
+                    resp.code == 404 -> VocabularyImportResult.Unsupported
+                    resp.code == 401 || resp.code == 403 -> VocabularyImportResult.AuthError(resp.code)
+                    !resp.isSuccessful -> {
+                        AppLog.w(TAG, "import vocabulary failed: HTTP ${resp.code} (${text.length} bytes)")
+                        VocabularyImportResult.Error("HTTP ${resp.code}", ServerErrorText.detailFrom(text))
+                    }
+                    else -> try {
+                        val json = JSONObject(text)
+                        VocabularyImportResult.Ok(
+                            VocabEntry.listFromJson(json.optJSONArray("entries")),
+                            json.optInt("added", 0)
+                        )
+                    } catch (e: Exception) {
+                        VocabularyImportResult.Error("import vocabulary response is not valid JSON")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            AppLog.w(TAG, "import vocabulary request failed", e)
+            VocabularyImportResult.Error(e.message ?: "network error")
+        }
     }
 
     private fun executeForVocabulary(req: Request, what: String): VocabularyResult = try {

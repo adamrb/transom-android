@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="@drawable/bg_sync_banner"
@@ -13,12 +14,12 @@
 
         <ImageView
             android:id="@+id/syncIcon"
-            android:layout_width="14dp"
-            android:layout_height="14dp"
+            android:layout_width="16dp"
+            android:layout_height="16dp"
             android:layout_centerVertical="true"
-            android:contentDescription="Sync"
+            android:contentDescription="@null"
             android:src="@drawable/ic_sync"
-            android:tint="@color/dark_gray" />
+            app:tint="?attr/pbColorTextBody" />
 
         <TextView
             android:id="@+id/syncTitleLabel"
@@ -29,7 +30,7 @@
             android:layout_toEndOf="@id/syncIcon"
             android:fontFamily="sans-serif"
             android:text="@string/syncing_recordings"
-            android:textColor="@color/dark_gray"
+            android:textColor="?attr/pbColorTextBody"
             android:textSize="14sp" />
 
         <TextView
@@ -39,7 +40,7 @@
             android:layout_alignParentEnd="true"
             android:layout_centerVertical="true"
             android:fontFamily="sans-serif"
-            android:textColor="@color/gray7"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="13sp" />
     </RelativeLayout>
 
@@ -70,7 +71,7 @@
             android:layout_alignParentStart="true"
             android:layout_centerVertical="true"
             android:fontFamily="sans-serif"
-            android:textColor="@color/gray7"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="13sp" />
 
         <TextView
@@ -82,13 +83,15 @@
             android:drawableStart="@drawable/ic_wifi"
             android:drawablePadding="4dp"
             android:fontFamily="sans-serif"
+            android:gravity="center_vertical"
             android:paddingStart="8dp"
             android:paddingTop="4dp"
             android:paddingEnd="8dp"
             android:paddingBottom="4dp"
             android:text="@string/fast_transfer"
-            android:textColor="@color/white"
-            android:textSize="13sp" />
+            android:textColor="?attr/colorOnPrimary"
+            android:textSize="13sp"
+            app:drawableTint="?attr/colorOnPrimary" />
     </RelativeLayout>
 
 </LinearLayout>

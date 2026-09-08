@@ -7,9 +7,10 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.core.content.ContextCompat
+import com.google.android.material.R as MaterialR
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import org.plaudbridge.app.R
+import org.plaudbridge.app.ui.common.themeColor
 
 /**
  * The detail screen's More sheet: one row per applicable action, Delete last in the destructive
@@ -42,14 +43,14 @@ class MoreActionsSheet : BottomSheetDialogFragment() {
         title.visibility = if (caption.isNullOrBlank()) View.GONE else View.VISIBLE
         val list = view.findViewById<LinearLayout>(R.id.actionsList)
         val inflater = LayoutInflater.from(view.context)
-        val red = ContextCompat.getColor(view.context, R.color.red)
+        val red = view.themeColor(MaterialR.attr.colorError)
         for (i in 0 until menu.size()) {
             val item = menu.getItem(i)
             if (!item.isVisible) continue
             val destructive = item.itemId == R.id.action_delete
             if (destructive && list.childCount > 0) {
                 list.addView(View(view.context).apply {
-                    setBackgroundColor(ContextCompat.getColor(view.context, R.color.separator))
+                    setBackgroundColor(view.themeColor(R.attr.pbColorDivider))
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1).apply {
                     val m = (8 * resources.displayMetrics.density).toInt()
                     topMargin = m

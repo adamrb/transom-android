@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Recording page — dark full screen, aligned item-by-item with iOS RecordingViewController:
+  Recording page: dark full screen in both palettes (Theme.PlaudBridge.Recording), aligned
+  item-by-item with iOS RecordingViewController:
   - Title is at about 58.5% of the screen (iOS top=494/844), subtitle 16dp below it
   - Waveform is at about 75.6% (iOS top=638/844), nearly full width, height 28dp
   - Record button sits 48dp above the bottom (iOS bottom safeArea-48), white circle 72dp (shrinks to 64dp while recording)
@@ -10,7 +11,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#1B1B1B">
+    android:background="@color/recording_dark_bg">
 
     <!-- Background image (centerCrop = iOS scaleAspectFill) -->
     <ImageView
@@ -32,11 +33,11 @@
         android:layout_marginTop="6dp"
         android:layout_marginEnd="14dp"
         android:background="?attr/selectableItemBackgroundBorderless"
-        android:contentDescription="Close"
+        android:contentDescription="@string/cd_close"
         android:padding="10dp"
         android:scaleType="fitCenter"
         android:src="@drawable/ic_close"
-        android:tint="@color/white"
+        app:tint="@color/white"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
@@ -69,7 +70,7 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- Subtitle / timer -->
+    <!-- Subtitle / timer: 6.4:1 on the dark background -->
     <TextView
         android:id="@+id/recordingSubtitle"
         android:layout_width="wrap_content"
@@ -77,7 +78,7 @@
         android:layout_marginTop="16dp"
         android:fontFamily="sans-serif"
         android:text="@string/record_via_device"
-        android:textColor="#858585"
+        android:textColor="#B0B0B0"
         android:textSize="13sp"
         app:layout_constraintTop_toBottomOf="@id/recordingTitle"
         app:layout_constraintStart_toStartOf="parent"

@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Material Icons "mic". White with no theme tint: it is also the playback notification's small
+     icon, which the system tints itself. Layouts that show it set app:tint. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="19dp"
-    android:height="22dp"
-    android:viewportWidth="18.5664"
-    android:viewportHeight="21.7666">
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
     <path
-        android:pathData="M1.5,12.4834C1.50024,16.7818 4.9848,20.2665 9.2832,20.2666C13.5816,20.2665 17.0662,16.7818 17.0664,12.4834V10.3496H18.5664V12.4834C18.5662,17.6102 14.41,21.7665 9.2832,21.7666C4.15637,21.7665 0.000243676,17.6102 0,12.4834V10.3496H1.5V12.4834ZM9.2832,0C12.6427,0.000176009 15.367,2.72353 15.3672,6.08301V12.4834C15.3669,15.8428 12.6426,18.5662 9.2832,18.5664C5.92377,18.5662 3.20044,15.8428 3.2002,12.4834V6.08301C3.20037,2.72354 5.92373,0.000175741 9.2832,0ZM9.2832,1.5C6.75216,1.50018 4.70037,3.55196 4.7002,6.08301V12.4834C4.70044,15.0144 6.7522,17.0662 9.2832,17.0664C11.8142,17.0662 13.8669,15.0144 13.8672,12.4834V6.08301C13.867,3.55196 11.8142,1.50018 9.2832,1.5Z"
-        android:fillColor="#FFFFFF" />
+        android:fillColor="@android:color/white"
+        android:pathData="M12,14c1.66,0 2.99,-1.34 2.99,-3L15,5c0,-1.66 -1.34,-3 -3,-3S9,3.34 9,5v6c0,1.66 1.34,3 3,3zm5.3,-3c0,3 -2.54,5.1 -5.3,5.1S6.7,14 6.7,11H5c0,3.41 2.72,6.23 6,6.72V21h2v-3.28c3.28,-0.48 6,-3.3 6,-6.72h-1.7z" />
 </vector>

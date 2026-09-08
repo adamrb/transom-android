@@ -6,8 +6,8 @@ import android.widget.Toast
 import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.R as MaterialR
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +20,7 @@ import org.plaudbridge.app.common.ServerErrorText
 import org.plaudbridge.app.databinding.ActivityQrLoginBinding
 import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.ui.common.themeColor
 
 /**
  * Settings > Sign in on a computer: scan the QR on the web dashboard's login screen and approve
@@ -194,7 +195,7 @@ class QrLoginActivity : AppCompatActivity() {
     private fun showStatus(message: String, isError: Boolean) {
         binding.statusLabel.text = message
         binding.statusLabel.setTextColor(
-            ContextCompat.getColor(this, if (isError) R.color.red else R.color.text_secondary)
+            themeColor(if (isError) MaterialR.attr.colorError else MaterialR.attr.colorOnSurfaceVariant)
         )
     }
 }

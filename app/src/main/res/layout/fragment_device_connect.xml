@@ -21,7 +21,7 @@
             android:layout_gravity="start|center_vertical"
             android:fontFamily="sans-serif-light"
             android:text="@string/connect_device"
-            android:textColor="@color/text_primary"
+            android:textColor="?attr/colorOnSurface"
             android:textSize="24sp" />
 
         <ImageButton
@@ -32,7 +32,7 @@
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/cd_close"
             android:src="@drawable/ic_close"
-            android:tint="@color/text_primary" />
+            app:tint="?attr/colorOnSurface" />
     </FrameLayout>
 
     <!-- Device icon -->
@@ -53,7 +53,7 @@
         android:layout_gravity="center_horizontal"
         android:layout_marginTop="16dp"
         android:fontFamily="sans-serif-light"
-        android:textColor="@color/text_primary"
+        android:textColor="?attr/colorOnSurface"
         android:textSize="20sp"
         android:text="" />
 
@@ -65,7 +65,7 @@
         android:layout_gravity="center_horizontal"
         android:layout_marginTop="4dp"
         android:fontFamily="sans-serif"
-        android:textColor="@color/text_secondary"
+        android:textColor="?attr/colorOnSurfaceVariant"
         android:textSize="14sp"
         android:text="" />
 
@@ -93,7 +93,8 @@
         <ProgressBar
             android:layout_width="16dp"
             android:layout_height="16dp"
-            android:indeterminate="true" />
+            android:indeterminate="true"
+            android:indeterminateTint="?attr/colorPrimary" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -101,7 +102,7 @@
             android:layout_marginStart="8dp"
             android:fontFamily="sans-serif"
             android:text="@string/connecting"
-            android:textColor="@color/text_secondary"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="14sp" />
     </LinearLayout>
 
@@ -111,19 +112,15 @@
         android:layout_weight="1" />
 
     <!-- Connect button -->
-    <Button
+    <com.google.android.material.button.MaterialButton
         android:id="@+id/connectButton"
+        style="@style/Widget.PlaudBridge.Button"
         android:layout_width="match_parent"
         android:layout_height="48dp"
         android:layout_marginStart="24dp"
         android:layout_marginEnd="24dp"
         android:layout_marginBottom="24dp"
-        android:background="@drawable/bg_primary_button"
-        app:backgroundTint="@null"
-        android:fontFamily="sans-serif-medium"
         android:text="@string/connect"
-        android:textAllCaps="false"
-        android:textColor="@color/white"
         android:textSize="16sp" />
 
 </LinearLayout>

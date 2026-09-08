@@ -4,7 +4,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_primary"
+    android:background="?android:attr/colorBackground"
     android:orientation="vertical">
 
     <!-- Toolbar, same shape as the vocabulary and web dashboard screens -->
@@ -14,14 +14,11 @@
 
         <ImageButton
             android:id="@+id/backButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            style="@style/Widget.PlaudBridge.IconButton"
             android:layout_gravity="start|center_vertical"
             android:layout_marginStart="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/cd_back"
-            android:src="@drawable/ic_chevron_left"
-            android:tint="@color/text_primary" />
+            android:src="@drawable/ic_chevron_left" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -29,7 +26,7 @@
             android:layout_gravity="center"
             android:fontFamily="sans-serif-medium"
             android:text="@string/sign_in_on_computer"
-            android:textColor="@color/text_primary"
+            android:textColor="?attr/colorOnSurface"
             android:textSize="16sp" />
     </FrameLayout>
 
@@ -41,7 +38,7 @@
         android:layout_marginEnd="24dp"
         android:fontFamily="sans-serif"
         android:text="@string/qr_login_help"
-        android:textColor="@color/gray_medium"
+        android:textColor="?attr/colorOnSurfaceVariant"
         android:textSize="13sp" />
 
     <TextView
@@ -54,7 +51,7 @@
         android:background="@drawable/bg_card"
         android:fontFamily="sans-serif"
         android:padding="16dp"
-        android:textColor="@color/text_primary"
+        android:textColor="?attr/colorOnSurface"
         android:textSize="14sp" />
 
     <TextView
@@ -65,23 +62,17 @@
         android:layout_marginTop="16dp"
         android:layout_marginEnd="24dp"
         android:fontFamily="sans-serif"
-        android:textColor="@color/text_secondary"
+        android:textColor="?attr/colorOnSurfaceVariant"
         android:textSize="13sp" />
 
-    <Button
+    <com.google.android.material.button.MaterialButton
         android:id="@+id/scanButton"
+        style="@style/Widget.PlaudBridge.Button"
         android:layout_width="match_parent"
         android:layout_height="48dp"
         android:layout_marginStart="24dp"
         android:layout_marginTop="16dp"
         android:layout_marginEnd="24dp"
-        android:background="@drawable/bg_primary_button"
-        android:fontFamily="sans-serif"
-        android:insetTop="0dp"
-        android:insetBottom="0dp"
         android:text="@string/qr_login_scan"
-        android:textAllCaps="false"
-        android:textColor="@color/white"
-        android:textSize="15sp"
-        app:backgroundTint="@null" />
+        android:textSize="15sp" />
 </LinearLayout>

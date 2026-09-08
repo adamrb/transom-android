@@ -2,6 +2,7 @@
 <!-- One custom-vocabulary term: the spelling, the mis-hearings it corrects, and a remove button.
      Tapping the row edits it. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="?attr/selectableItemBackground"
@@ -26,7 +27,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:fontFamily="sans-serif"
-            android:textColor="@color/text_primary"
+            android:textColor="?attr/colorOnSurface"
             android:textSize="15sp" />
 
         <TextView
@@ -35,7 +36,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
             android:fontFamily="sans-serif"
-            android:textColor="@color/gray_medium"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="13sp"
             android:visibility="gone" />
     </LinearLayout>
@@ -48,5 +49,5 @@
         android:background="?attr/selectableItemBackgroundBorderless"
         android:contentDescription="@string/cd_remove"
         android:src="@drawable/ic_close"
-        android:tint="@color/gray_medium" />
+        app:tint="?attr/colorOnSurfaceVariant" />
 </LinearLayout>

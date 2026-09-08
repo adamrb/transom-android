@@ -30,6 +30,7 @@ object RecordingStore {
     private const val KEY_CACHED_PLAUD_TOKEN = "cached_plaud_token"
     private const val KEY_CACHED_PLAUD_TOKEN_EXPIRY = "cached_plaud_token_expiry"
     private const val KEY_ADVANCED_SETTINGS_EXPANDED = "advanced_settings_expanded"
+    private const val KEY_APPEARANCE = "appearance"
     private const val KEY_HIDDEN_SESSIONS = "hidden_sessions"
     private const val RECORDINGS_FILE = "recordings.json"
 
@@ -239,6 +240,11 @@ object RecordingStore {
     var advancedSettingsExpanded: Boolean
         get() = prefs.getBoolean(KEY_ADVANCED_SETTINGS_EXPANDED, false)
         set(value) = prefs.edit().putBoolean(KEY_ADVANCED_SETTINGS_EXPANDED, value).apply()
+
+    /** Settings > Appearance: System (default), Light or Dark; see [org.plaudbridge.app.common.Appearance]. */
+    var appearance: org.plaudbridge.app.common.Appearance
+        get() = org.plaudbridge.app.common.Appearance.fromStorage(prefs.getString(KEY_APPEARANCE, null))
+        set(value) = prefs.edit().putString(KEY_APPEARANCE, value.storageKey).apply()
 
     // --- Delete tombstones ---
 

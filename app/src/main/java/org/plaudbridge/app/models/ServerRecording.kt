@@ -43,7 +43,14 @@ data class ServerRecording(
     /** 0..1 while the server is transcribing; null when unknown or not applicable. */
     val progress: Double? = null,
     /** One of the STAGE_ constants while the server is working on the recording, else null. */
-    val stage: String? = null
+    val stage: String? = null,
+    /**
+     * Where a list search matched ("title", "summary" or "transcript", CONTRACTS §4); null when
+     * the list was not a search or the server predates snippets.
+     */
+    val matchField: String? = null,
+    /** About 160 characters around the first hit, ellipsised by the server; null when none. */
+    val matchSnippet: String? = null
 ) {
     /** Name for lists and headers: the AI/manual title when the server has one, else the file name. */
     val displayTitle: String
@@ -134,7 +141,9 @@ data class ServerRecording(
                 noSpeech = obj.opt("no_speech") == true,
                 errorDetail = obj.optNullableString("error_detail")?.takeIf { it.isNotBlank() },
                 progress = obj.optDouble("progress", Double.NaN).takeIf { !it.isNaN() },
-                stage = obj.optNullableString("stage")?.takeIf { it.isNotBlank() }
+                stage = obj.optNullableString("stage")?.takeIf { it.isNotBlank() },
+                matchField = obj.optNullableString("match_field")?.takeIf { it.isNotBlank() },
+                matchSnippet = obj.optNullableString("match_snippet")?.takeIf { it.isNotBlank() }
             )
         }
 

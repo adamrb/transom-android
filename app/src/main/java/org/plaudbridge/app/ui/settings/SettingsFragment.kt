@@ -19,17 +19,20 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.common.AppLog
+import org.plaudbridge.app.common.Appearance
 import org.plaudbridge.app.common.ServerErrorText
 import org.plaudbridge.app.databinding.FragmentSettingsBinding
 import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.service.DeviceConnectionService
 import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.ui.common.ContentWidth
 import org.plaudbridge.app.ui.library.WebDashboardActivity
 import org.plaudbridge.app.ui.onboarding.WelcomeActivity
 
@@ -57,6 +60,13 @@ class SettingsFragment : Fragment() {
             token.isNullOrBlank() -> "$url · ${context.getString(R.string.access_token_missing)}"
             else -> "$url · ${context.getString(R.string.access_token_set)}"
         }
+
+        /** The Appearance row's value and the dialog's choices, in the user's words. */
+        fun appearanceLabel(appearance: Appearance): Int = when (appearance) {
+            Appearance.SYSTEM -> R.string.appearance_system
+            Appearance.LIGHT -> R.string.appearance_light
+            Appearance.DARK -> R.string.appearance_dark
+        }
     }
 
     private var _binding: FragmentSettingsBinding? = null
@@ -73,6 +83,7 @@ class SettingsFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        ContentWidth.limit(binding.settingsContent)
 
         // Re-check firmware on open (mirrors iOS setupBindings), covering late/failed on-connect checks
         deviceManager.refreshFirmwareCheck()
@@ -106,6 +117,11 @@ class SettingsFragment : Fragment() {
         binding.deleteAfterUploadToggle.onToggleChanged = { isChecked ->
             RecordingStore.deleteAfterUpload = isChecked
         }
+
+        // Appearance: System (default), Light or Dark. Applying a new value recreates the
+        // activity; the selected tab survives through MainActivity's saved state.
+        renderAppearanceRow()
+        binding.appearanceRow.setOnClickListener { showAppearanceDialog() }
 
         // Bridge server (URL + auth token)
         renderServerCard()
@@ -189,6 +205,30 @@ class SettingsFragment : Fragment() {
     private fun renderAdvancedSection(expanded: Boolean) {
         binding.advancedContent.visibility = if (expanded) View.VISIBLE else View.GONE
         binding.advancedChevron.rotation = if (expanded) 90f else 0f
+    }
+
+    // MARK: - Appearance
+
+    private fun renderAppearanceRow() {
+        binding.appearanceLabel.text = getString(appearanceLabel(RecordingStore.appearance))
+    }
+
+    private fun showAppearanceDialog() {
+        val options = Appearance.values()
+        val labels = options.map { getString(appearanceLabel(it)) }.toTypedArray()
+        val current = options.indexOf(RecordingStore.appearance)
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.appearance)
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                dialog.dismiss()
+                val chosen = options[which]
+                if (chosen == RecordingStore.appearance) return@setSingleChoiceItems
+                RecordingStore.appearance = chosen
+                renderAppearanceRow()
+                chosen.apply() // recreates the activity when the palette changes
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     // MARK: - Battery optimization

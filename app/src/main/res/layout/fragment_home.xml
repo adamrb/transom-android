@@ -8,12 +8,14 @@
     android:paddingBottom="24dp"
     android:scrollbars="none">
 
+    <!-- The column HomeFragment caps on wide screens (ContentWidth) -->
     <LinearLayout
+        android:id="@+id/homeContent"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingStart="24dp"
-        android:paddingEnd="24dp">
+        android:paddingStart="@dimen/pb_screen_padding"
+        android:paddingEnd="@dimen/pb_screen_padding">
 
         <!-- "Home" large title -->
         <TextView
@@ -21,10 +23,8 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:fontFamily="sans-serif-light"
             android:text="@string/home"
-            android:textColor="@color/black"
-            android:textSize="44sp" />
+            android:textAppearance="@style/TextAppearance.PlaudBridge.LargeTitle" />
 
         <!-- ===== Device card (collapsed/expanded) ===== -->
         <LinearLayout
@@ -52,7 +52,7 @@
                     android:layout_height="32dp"
                     android:contentDescription="@null"
                     android:src="@drawable/ic_device"
-                    app:tint="@color/gray_ad" />
+                    app:tint="?attr/colorOnSurfaceVariant" />
 
                 <TextView
                     android:layout_width="0dp"
@@ -61,26 +61,16 @@
                     android:layout_weight="1"
                     android:fontFamily="sans-serif"
                     android:text="@string/no_recorder_connected"
-                    android:textColor="@color/dark_gray"
+                    android:textColor="?attr/pbColorTextBody"
                     android:textSize="14sp" />
 
-                <Button
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/connectRecorderButton"
+                    style="@style/Widget.PlaudBridge.Button"
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
                     android:layout_marginStart="12dp"
-                    android:background="@drawable/bg_primary_button"
-                    android:fontFamily="sans-serif"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:minWidth="0dp"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp"
-                    android:text="@string/connect_recorder"
-                    android:textAllCaps="false"
-                    android:textColor="@color/white"
-                    android:textSize="14sp"
-                    app:backgroundTint="@null" />
+                    android:text="@string/connect_recorder" />
             </LinearLayout>
 
             <!-- Collapsed row: device icon + name + status + chevron -->
@@ -97,7 +87,8 @@
                     android:layout_height="32dp"
                     android:layout_centerVertical="true"
                     android:contentDescription="@null"
-                    android:src="@drawable/ic_device" />
+                    android:src="@drawable/ic_device"
+                    app:tint="?attr/pbColorTextBody" />
 
                 <TextView
                     android:id="@+id/deviceNameLabel"
@@ -107,7 +98,7 @@
                     android:layout_marginTop="16dp"
                     android:layout_toEndOf="@id/deviceIcon"
                     android:fontFamily="sans-serif"
-                    android:textColor="@color/black"
+                    android:textColor="?attr/colorOnSurface"
                     android:textSize="14sp" />
 
                 <!-- Status dot + Connected -->
@@ -134,19 +125,19 @@
                         android:layout_marginStart="4dp"
                         android:fontFamily="sans-serif"
                         android:text="@string/connected"
-                        android:textColor="@color/gray_ad"
+                        android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="13sp" />
                 </LinearLayout>
 
                 <ImageView
                     android:id="@+id/deviceChevron"
-                    android:layout_width="16dp"
-                    android:layout_height="16dp"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
                     android:layout_alignParentEnd="true"
                     android:layout_centerVertical="true"
                     android:contentDescription="@null"
                     android:src="@drawable/ic_chevron_right"
-                    app:tint="@color/gray7" />
+                    app:tint="?attr/colorOnSurfaceVariant" />
             </RelativeLayout>
 
             <!-- Expanded content -->
@@ -172,7 +163,7 @@
                         android:layout_alignParentStart="true"
                         android:fontFamily="sans-serif"
                         android:text="@string/battery"
-                        android:textColor="@color/black"
+                        android:textColor="?attr/colorOnSurface"
                         android:textSize="14sp" />
 
                     <TextView
@@ -181,7 +172,7 @@
                         android:layout_height="wrap_content"
                         android:layout_alignParentEnd="true"
                         android:fontFamily="sans-serif"
-                        android:textColor="@color/gray_ad"
+                        android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="13sp" />
                 </RelativeLayout>
 
@@ -211,7 +202,7 @@
                         android:layout_alignParentStart="true"
                         android:fontFamily="sans-serif"
                         android:text="@string/storage"
-                        android:textColor="@color/black"
+                        android:textColor="?attr/colorOnSurface"
                         android:textSize="14sp" />
 
                     <TextView
@@ -220,7 +211,7 @@
                         android:layout_height="wrap_content"
                         android:layout_alignParentEnd="true"
                         android:fontFamily="sans-serif"
-                        android:textColor="@color/gray_ad"
+                        android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="13sp" />
                 </RelativeLayout>
 
@@ -238,20 +229,13 @@
                         android:background="@drawable/bg_progress_fill_dark" />
                 </FrameLayout>
 
-                <!-- Manage device button (TextView with border to avoid MaterialButton inset clipping) -->
-                <TextView
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/manageButton"
-                    android:layout_width="133dp"
+                    style="@style/Widget.PlaudBridge.Button.Outlined.Small"
+                    android:layout_width="wrap_content"
                     android:layout_height="32dp"
                     android:layout_marginTop="20dp"
-                    android:background="@drawable/bg_manage_button"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:fontFamily="sans-serif"
-                    android:gravity="center"
-                    android:text="@string/manage_device"
-                    android:textColor="@color/black"
-                    android:textSize="14sp" />
+                    android:text="@string/manage_device" />
 
                 <!-- Other paired devices + Add device (rendered programmatically, mirrors iOS) -->
                 <LinearLayout
@@ -263,7 +247,7 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- ===== Recording entry card (dark): rounded black card, bg image aspect-fills ===== -->
+        <!-- ===== Recording entry card: always dark (a photo on black), so its text is fixed white ===== -->
         <FrameLayout
             android:id="@+id/recordCard"
             android:layout_width="match_parent"
@@ -286,14 +270,14 @@
                 android:layout_marginStart="16dp"
                 android:layout_marginTop="16dp"
                 android:contentDescription="@null"
-                android:src="@drawable/icon_record_mic"
+                android:src="@drawable/ic_mic"
                 app:tint="@color/white" />
 
             <ImageView
-                android:layout_width="16dp"
-                android:layout_height="16dp"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
                 android:layout_gravity="end"
-                android:layout_marginTop="21dp"
+                android:layout_marginTop="20dp"
                 android:layout_marginEnd="12dp"
                 android:contentDescription="@null"
                 android:src="@drawable/ic_chevron_right"
@@ -323,7 +307,7 @@
                     android:layout_marginTop="4dp"
                     android:fontFamily="sans-serif"
                     android:text="@string/record_via_device"
-                    android:textColor="@color/gray5"
+                    android:textColor="@color/on_dark_card_secondary"
                     android:textSize="13sp" />
             </LinearLayout>
         </FrameLayout>
@@ -361,7 +345,7 @@
                 android:layout_marginStart="8dp"
                 android:fontFamily="sans-serif-medium"
                 android:text="@string/recording_ellipsis"
-                android:textColor="@color/red"
+                android:textColor="?attr/colorError"
                 android:textSize="14sp" />
 
             <TextView
@@ -371,7 +355,7 @@
                 android:layout_marginStart="12dp"
                 android:fontFamily="sans-serif"
                 android:text="00:00"
-                android:textColor="@color/text_secondary"
+                android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="14sp" />
 
             <View
@@ -380,11 +364,11 @@
                 android:layout_weight="1" />
 
             <ImageView
-                android:layout_width="16dp"
-                android:layout_height="16dp"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
                 android:contentDescription="@null"
                 android:src="@drawable/ic_chevron_right"
-                app:tint="@color/text_secondary" />
+                app:tint="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
 
         <!-- ===== Recent recordings Section ===== -->
@@ -402,25 +386,15 @@
                 android:layout_weight="1"
                 android:fontFamily="sans-serif-light"
                 android:text="@string/recent_recordings"
-                android:textColor="@color/dark_gray"
+                android:textColor="?attr/pbColorTextBody"
                 android:textSize="24sp" />
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/syncNowButton"
+                style="@style/Widget.PlaudBridge.Button.Small"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
-                android:background="@drawable/bg_primary_button"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                app:backgroundTint="@null"
-                android:fontFamily="sans-serif"
-                android:minWidth="0dp"
-                android:paddingStart="16dp"
-                android:paddingEnd="16dp"
-                android:text="@string/sync_now"
-                android:textAllCaps="false"
-                android:textColor="@color/white"
-                android:textSize="14sp" />
+                android:text="@string/sync_now" />
         </LinearLayout>
 
         <LinearLayout
@@ -438,7 +412,7 @@
             android:fontFamily="sans-serif"
             android:gravity="center"
             android:text="@string/no_recordings_yet"
-            android:textColor="@color/text_secondary"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="14sp" />
 
     </LinearLayout>

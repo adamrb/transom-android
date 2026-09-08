@@ -138,7 +138,7 @@ object RecordingActions {
                 is ApiClient.RecordingResult.Ok -> RecordingsRepository.replace(result.recording)
                 is ApiClient.RecordingResult.NotFound -> return ApiClient.ActionResult.NotFound
                 is ApiClient.RecordingResult.AuthError -> return ApiClient.ActionResult.AuthError(result.code)
-                is ApiClient.RecordingResult.Error -> return ApiClient.ActionResult.Error(result.message)
+                is ApiClient.RecordingResult.Error -> return ApiClient.ActionResult.Error(result.message, detail = result.detail)
             }
         }
         item.local?.let { local.renameFile(it, title) }

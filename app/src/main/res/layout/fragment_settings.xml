@@ -7,22 +7,22 @@
     android:paddingBottom="120dp"
     android:scrollbars="none">
 
+    <!-- The column SettingsFragment caps on wide screens (ContentWidth) -->
     <LinearLayout
+        android:id="@+id/settingsContent"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingStart="24dp"
-        android:paddingEnd="24dp">
+        android:paddingStart="@dimen/pb_screen_padding"
+        android:paddingEnd="@dimen/pb_screen_padding">
 
         <!-- "Settings" large title -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:fontFamily="sans-serif-light"
             android:text="@string/settings"
-            android:textColor="@color/black"
-            android:textSize="44sp" />
+            android:textAppearance="@style/TextAppearance.PlaudBridge.LargeTitle" />
 
         <!-- Card 1: Auto Sync -->
         <LinearLayout
@@ -48,19 +48,19 @@
                     android:orientation="horizontal">
 
                     <ImageView
-                        android:layout_width="32dp"
-                        android:layout_height="32dp"
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
                         android:contentDescription="@null"
-                        android:src="@drawable/icon_cloud_sync"
-                        android:tint="@color/dark_gray" />
+                        android:src="@drawable/ic_sync"
+                        app:tint="?attr/pbColorTextBody" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
+                        android:layout_marginStart="12dp"
                         android:fontFamily="sans-serif"
                         android:text="@string/automatic_sync"
-                        android:textColor="@color/text_primary"
+                        android:textColor="?attr/colorOnSurface"
                         android:textSize="16sp" />
                 </LinearLayout>
 
@@ -76,10 +76,10 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:layout_marginStart="28dp"
+                android:layout_marginStart="36dp"
                 android:fontFamily="sans-serif"
                 android:text="@string/auto_sync_subtitle"
-                android:textColor="@color/gray_medium"
+                android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="13sp" />
         </LinearLayout>
 
@@ -107,19 +107,19 @@
                     android:orientation="horizontal">
 
                     <ImageView
-                        android:layout_width="32dp"
-                        android:layout_height="32dp"
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
                         android:contentDescription="@null"
                         android:src="@drawable/ic_bluetooth"
-                        android:tint="@color/dark_gray" />
+                        app:tint="?attr/pbColorTextBody" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
+                        android:layout_marginStart="12dp"
                         android:fontFamily="sans-serif"
                         android:text="@string/background_sync"
-                        android:textColor="@color/text_primary"
+                        android:textColor="?attr/colorOnSurface"
                         android:textSize="16sp" />
                 </LinearLayout>
 
@@ -135,10 +135,10 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:layout_marginStart="28dp"
+                android:layout_marginStart="36dp"
                 android:fontFamily="sans-serif"
                 android:text="@string/background_sync_subtitle"
-                android:textColor="@color/gray_medium"
+                android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="13sp" />
         </LinearLayout>
 
@@ -166,7 +166,7 @@
                     android:layout_height="wrap_content"
                     android:fontFamily="sans-serif"
                     android:text="@string/battery_optimization"
-                    android:textColor="@color/text_primary"
+                    android:textColor="?attr/colorOnSurface"
                     android:textSize="16sp" />
 
                 <TextView
@@ -175,18 +175,18 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
                     android:fontFamily="sans-serif"
-                    android:textColor="@color/text_secondary"
+                    android:textColor="?attr/colorOnSurfaceVariant"
                     android:textSize="13sp" />
             </LinearLayout>
 
             <ImageView
                 android:id="@+id/batteryOptimizationChevron"
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
                 android:layout_marginStart="8dp"
                 android:contentDescription="@string/cd_open"
                 android:src="@drawable/ic_chevron_right"
-                android:tint="@color/gray_medium" />
+                app:tint="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
 
         <!-- Card 2: Delete after upload -->
@@ -211,7 +211,7 @@
                     android:layout_marginEnd="16dp"
                     android:fontFamily="sans-serif"
                     android:text="@string/delete_after_upload"
-                    android:textColor="@color/text_primary"
+                    android:textColor="?attr/colorOnSurface"
                     android:textSize="16sp" />
 
                 <org.plaudbridge.app.common.PlaudToggle
@@ -228,8 +228,54 @@
                 android:layout_marginTop="4dp"
                 android:fontFamily="sans-serif"
                 android:text="@string/delete_after_upload_subtitle"
-                android:textColor="@color/gray_medium"
+                android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="13sp" />
+        </LinearLayout>
+
+        <!-- Card 2b: Appearance (System / Light / Dark) -->
+        <LinearLayout
+            android:id="@+id/appearanceRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_card"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="16dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif"
+                    android:text="@string/appearance"
+                    android:textColor="?attr/colorOnSurface"
+                    android:textSize="16sp" />
+
+                <TextView
+                    android:id="@+id/appearanceLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:fontFamily="sans-serif"
+                    android:textColor="?attr/colorOnSurfaceVariant"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <ImageView
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:layout_marginStart="8dp"
+                android:contentDescription="@string/cd_open"
+                android:src="@drawable/ic_chevron_right"
+                app:tint="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
 
         <!-- Card 3: Your server (URL + access token) -->
@@ -253,7 +299,7 @@
                     android:layout_height="wrap_content"
                     android:fontFamily="sans-serif"
                     android:text="@string/bridge_server"
-                    android:textColor="@color/text_primary"
+                    android:textColor="?attr/colorOnSurface"
                     android:textSize="16sp" />
 
                 <TextView
@@ -262,27 +308,17 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
                     android:fontFamily="sans-serif"
-                    android:textColor="@color/text_secondary"
+                    android:textColor="?attr/colorOnSurfaceVariant"
                     android:textSize="13sp" />
             </LinearLayout>
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/editServerButton"
+                style="@style/Widget.PlaudBridge.Button.Outlined.Small"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
                 android:layout_marginStart="8dp"
-                android:background="@drawable/bg_primary_button"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                app:backgroundTint="@null"
-                android:fontFamily="sans-serif"
-                android:minWidth="0dp"
-                android:paddingStart="16dp"
-                android:paddingEnd="16dp"
-                android:text="@string/edit"
-                android:textAllCaps="false"
-                android:textColor="@color/white"
-                android:textSize="14sp" />
+                android:text="@string/edit" />
         </LinearLayout>
 
         <!-- Card 3a: Custom vocabulary (names/terms for the server's transcriber) -->
@@ -309,7 +345,7 @@
                     android:layout_height="wrap_content"
                     android:fontFamily="sans-serif"
                     android:text="@string/custom_vocabulary"
-                    android:textColor="@color/text_primary"
+                    android:textColor="?attr/colorOnSurface"
                     android:textSize="16sp" />
 
                 <TextView
@@ -318,17 +354,17 @@
                     android:layout_marginTop="2dp"
                     android:fontFamily="sans-serif"
                     android:text="@string/custom_vocabulary_subtitle"
-                    android:textColor="@color/text_secondary"
+                    android:textColor="?attr/colorOnSurfaceVariant"
                     android:textSize="13sp" />
             </LinearLayout>
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
                 android:layout_marginStart="8dp"
                 android:contentDescription="@string/cd_open"
                 android:src="@drawable/ic_chevron_right"
-                android:tint="@color/gray_medium" />
+                app:tint="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
 
         <!-- Card 3b: Automations (the server's dashboard opened straight on its Automations tab) -->
@@ -355,7 +391,7 @@
                     android:layout_height="wrap_content"
                     android:fontFamily="sans-serif"
                     android:text="@string/automations"
-                    android:textColor="@color/text_primary"
+                    android:textColor="?attr/colorOnSurface"
                     android:textSize="16sp" />
 
                 <TextView
@@ -364,17 +400,17 @@
                     android:layout_marginTop="2dp"
                     android:fontFamily="sans-serif"
                     android:text="@string/automations_subtitle"
-                    android:textColor="@color/text_secondary"
+                    android:textColor="?attr/colorOnSurfaceVariant"
                     android:textSize="13sp" />
             </LinearLayout>
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
                 android:layout_marginStart="8dp"
                 android:contentDescription="@string/cd_open"
                 android:src="@drawable/ic_chevron_right"
-                android:tint="@color/gray_medium" />
+                app:tint="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
 
         <!-- Card 3c: Sign in on a computer (approve the dashboard's login QR with the phone) -->
@@ -401,7 +437,7 @@
                     android:layout_height="wrap_content"
                     android:fontFamily="sans-serif"
                     android:text="@string/sign_in_on_computer"
-                    android:textColor="@color/text_primary"
+                    android:textColor="?attr/colorOnSurface"
                     android:textSize="16sp" />
 
                 <TextView
@@ -410,17 +446,17 @@
                     android:layout_marginTop="2dp"
                     android:fontFamily="sans-serif"
                     android:text="@string/sign_in_on_computer_subtitle"
-                    android:textColor="@color/text_secondary"
+                    android:textColor="?attr/colorOnSurfaceVariant"
                     android:textSize="13sp" />
             </LinearLayout>
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
                 android:layout_marginStart="8dp"
                 android:contentDescription="@string/cd_open"
                 android:src="@drawable/ic_chevron_right"
-                android:tint="@color/gray_medium" />
+                app:tint="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
 
         <!-- Card 4: Recorder firmware (hidden until a recorder is paired) -->
@@ -435,20 +471,20 @@
             android:padding="16dp">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
                 android:contentDescription="@null"
-                android:src="@drawable/icon_firmware"
-                android:tint="@color/dark_gray" />
+                android:src="@drawable/ic_update"
+                app:tint="?attr/pbColorTextBody" />
 
             <TextView
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
+                android:layout_marginStart="12dp"
                 android:layout_weight="1"
                 android:fontFamily="sans-serif"
                 android:text="@string/device_firmware"
-                android:textColor="@color/text_primary"
+                android:textColor="?attr/colorOnSurface"
                 android:textSize="16sp" />
 
             <TextView
@@ -456,25 +492,19 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:fontFamily="sans-serif"
-                android:textColor="@color/text_secondary"
+                android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="14sp" />
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/firmwareUpdateButton"
+                style="@style/Widget.PlaudBridge.Button.Small"
                 android:layout_width="wrap_content"
                 android:layout_height="28dp"
                 android:layout_marginStart="8dp"
-                android:background="@drawable/bg_primary_button"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                app:backgroundTint="@null"
-                android:fontFamily="sans-serif"
-                android:minWidth="0dp"
+                android:minHeight="28dp"
                 android:paddingStart="12dp"
                 android:paddingEnd="12dp"
                 android:text="@string/update"
-                android:textAllCaps="false"
-                android:textColor="@color/white"
                 android:textSize="12sp"
                 android:visibility="gone" />
         </LinearLayout>
@@ -500,7 +530,7 @@
                     android:layout_height="wrap_content"
                     android:fontFamily="sans-serif"
                     android:text="@string/app_version"
-                    android:textColor="@color/text_primary"
+                    android:textColor="?attr/colorOnSurface"
                     android:textSize="16sp" />
 
                 <TextView
@@ -509,27 +539,17 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
                     android:fontFamily="sans-serif"
-                    android:textColor="@color/text_secondary"
+                    android:textColor="?attr/colorOnSurfaceVariant"
                     android:textSize="13sp" />
             </LinearLayout>
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/checkUpdateButton"
+                style="@style/Widget.PlaudBridge.Button.Outlined.Small"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
                 android:layout_marginStart="8dp"
-                android:background="@drawable/bg_primary_button"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                app:backgroundTint="@null"
-                android:fontFamily="sans-serif"
-                android:minWidth="0dp"
-                android:paddingStart="16dp"
-                android:paddingEnd="16dp"
-                android:text="@string/check_updates"
-                android:textAllCaps="false"
-                android:textColor="@color/white"
-                android:textSize="14sp" />
+                android:text="@string/check_updates" />
         </LinearLayout>
 
         <!-- Advanced: a card header that toggles the rows most people never need (full web
@@ -553,17 +573,17 @@
                 android:layout_weight="1"
                 android:fontFamily="sans-serif"
                 android:text="@string/advanced"
-                android:textColor="@color/text_primary"
+                android:textColor="?attr/colorOnSurface"
                 android:textSize="16sp" />
 
             <ImageView
                 android:id="@+id/advancedChevron"
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
                 android:layout_marginStart="8dp"
                 android:contentDescription="@string/cd_expand"
                 android:src="@drawable/ic_chevron_right"
-                android:tint="@color/gray_medium" />
+                app:tint="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
 
         <LinearLayout
@@ -598,7 +618,7 @@
                         android:layout_height="wrap_content"
                         android:fontFamily="sans-serif"
                         android:text="@string/web_dashboard"
-                        android:textColor="@color/text_primary"
+                        android:textColor="?attr/colorOnSurface"
                         android:textSize="16sp" />
 
                     <TextView
@@ -607,17 +627,17 @@
                         android:layout_marginTop="2dp"
                         android:fontFamily="sans-serif"
                         android:text="@string/web_dashboard_subtitle"
-                        android:textColor="@color/text_secondary"
+                        android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="13sp" />
                 </LinearLayout>
 
                 <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
                     android:layout_marginStart="8dp"
                     android:contentDescription="@string/cd_open"
                     android:src="@drawable/ic_chevron_right"
-                    android:tint="@color/gray_medium" />
+                    app:tint="?attr/colorOnSurfaceVariant" />
             </LinearLayout>
 
             <!-- Advanced 1: Plaud cloud region (auth handshake only) -->
@@ -641,7 +661,7 @@
                         android:layout_height="wrap_content"
                         android:fontFamily="sans-serif"
                         android:text="@string/plaud_region"
-                        android:textColor="@color/text_primary"
+                        android:textColor="?attr/colorOnSurface"
                         android:textSize="16sp" />
 
                     <TextView
@@ -650,27 +670,17 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
                         android:fontFamily="sans-serif"
-                        android:textColor="@color/text_secondary"
+                        android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="13sp" />
                 </LinearLayout>
 
-                <Button
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/switchRegionButton"
+                    style="@style/Widget.PlaudBridge.Button.Outlined.Small"
                     android:layout_width="wrap_content"
                     android:layout_height="32dp"
                     android:layout_marginStart="8dp"
-                    android:background="@drawable/bg_primary_button"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    app:backgroundTint="@null"
-                    android:fontFamily="sans-serif"
-                    android:minWidth="0dp"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp"
-                    android:text="@string/switch_env"
-                    android:textAllCaps="false"
-                    android:textColor="@color/white"
-                    android:textSize="14sp" />
+                    android:text="@string/switch_env" />
             </LinearLayout>
 
             <!-- Advanced 2: User ID (per-install, sent to the bridge server) -->
@@ -694,7 +704,7 @@
                         android:layout_height="wrap_content"
                         android:fontFamily="sans-serif"
                         android:text="@string/user_id"
-                        android:textColor="@color/text_primary"
+                        android:textColor="?attr/colorOnSurface"
                         android:textSize="16sp" />
 
                     <TextView
@@ -703,27 +713,17 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
                         android:fontFamily="sans-serif"
-                        android:textColor="@color/text_secondary"
+                        android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="13sp" />
                 </LinearLayout>
 
-                <Button
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/copyUserIdButton"
+                    style="@style/Widget.PlaudBridge.Button.Outlined.Small"
                     android:layout_width="wrap_content"
                     android:layout_height="32dp"
                     android:layout_marginStart="8dp"
-                    android:background="@drawable/bg_primary_button"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    app:backgroundTint="@null"
-                    android:fontFamily="sans-serif"
-                    android:minWidth="0dp"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp"
-                    android:text="@string/copy"
-                    android:textAllCaps="false"
-                    android:textColor="@color/white"
-                    android:textSize="14sp" />
+                    android:text="@string/copy" />
             </LinearLayout>
 
             <!-- Advanced 3: Diagnostic logs (export the SDK's encrypted .plaud log package) -->
@@ -747,7 +747,7 @@
                         android:layout_height="wrap_content"
                         android:fontFamily="sans-serif"
                         android:text="@string/sdk_logs"
-                        android:textColor="@color/text_primary"
+                        android:textColor="?attr/colorOnSurface"
                         android:textSize="16sp" />
 
                     <TextView
@@ -756,27 +756,17 @@
                         android:layout_marginTop="2dp"
                         android:fontFamily="sans-serif"
                         android:text="@string/sdk_logs_desc"
-                        android:textColor="@color/text_secondary"
+                        android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="13sp" />
                 </LinearLayout>
 
-                <Button
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/exportLogsButton"
+                    style="@style/Widget.PlaudBridge.Button.Outlined.Small"
                     android:layout_width="wrap_content"
                     android:layout_height="32dp"
                     android:layout_marginStart="8dp"
-                    android:background="@drawable/bg_primary_button"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    app:backgroundTint="@null"
-                    android:fontFamily="sans-serif"
-                    android:minWidth="0dp"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp"
-                    android:text="@string/export_logs"
-                    android:textAllCaps="false"
-                    android:textColor="@color/white"
-                    android:textSize="14sp" />
+                    android:text="@string/export_logs" />
             </LinearLayout>
 
             <!-- Advanced 4: build number (the version row above shows only the version name) -->
@@ -795,7 +785,7 @@
                     android:layout_weight="1"
                     android:fontFamily="sans-serif"
                     android:text="@string/build_number"
-                    android:textColor="@color/text_primary"
+                    android:textColor="?attr/colorOnSurface"
                     android:textSize="16sp" />
 
                 <TextView
@@ -803,7 +793,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:fontFamily="sans-serif"
-                    android:textColor="@color/text_secondary"
+                    android:textColor="?attr/colorOnSurfaceVariant"
                     android:textSize="14sp" />
             </LinearLayout>
 
@@ -823,7 +813,7 @@
                 android:layout_gravity="center"
                 android:fontFamily="sans-serif"
                 android:text="@string/unpair_device"
-                android:textColor="@color/red"
+                android:textColor="?attr/colorError"
                 android:textSize="16sp" />
         </FrameLayout>
 

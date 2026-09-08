@@ -47,6 +47,9 @@ class PlaudBridgeApp : Application() {
         super.onCreate()
         instance = this
         RecordingStore.init(this)
+        // Settings > Appearance, before any activity inflates: the DayNight theme picks its
+        // palette from the delegate's default night mode.
+        RecordingStore.appearance.apply()
         // Reconcile the index with the filesystem: recordings whose exported audio vanished
         // (legacy cacheDir eviction, user "clear cache") become unsynced again so the sync flow
         // re-downloads them while the recorder copy still exists.

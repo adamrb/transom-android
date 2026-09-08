@@ -8,6 +8,7 @@ import android.widget.FrameLayout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.R as MaterialR
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
@@ -17,6 +18,7 @@ import org.plaudbridge.app.databinding.FragmentDeviceConnectBinding
 import org.plaudbridge.app.models.DeviceConnectionState
 import org.plaudbridge.app.models.ScannedDevice
 import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.ui.common.themeColor
 import kotlinx.coroutines.launch
 
 /**
@@ -182,10 +184,7 @@ class DeviceConnectBottomSheet : BottomSheetDialogFragment() {
             dot.layoutParams = params
             dot.background = android.graphics.drawable.GradientDrawable().apply {
                 cornerRadius = 2 * dp
-                setColor(
-                    if (isActive) resources.getColor(R.color.black, null)
-                    else resources.getColor(R.color.light_gray, null)
-                )
+                setColor(requireContext().themeColor(if (isActive) MaterialR.attr.colorPrimary else MaterialR.attr.colorOutline))
             }
             binding.dotsContainer.addView(dot)
         }

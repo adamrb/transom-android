@@ -30,6 +30,7 @@ import org.plaudbridge.app.models.SyncState
 import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.storage.RecordingStore
 import org.plaudbridge.app.ui.common.AppManagers
+import org.plaudbridge.app.ui.common.ContentWidth
 import org.plaudbridge.app.ui.common.FriendlyErrors
 import org.plaudbridge.app.ui.common.SyncFeedback
 import org.plaudbridge.app.ui.common.showSnackbar
@@ -84,6 +85,7 @@ class RecordingsFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        ContentWidth.limit(binding.recordingsRoot)
         binding.recordingsRecyclerView.layoutManager = LinearLayoutManager(requireContext())
         binding.recordingsRecyclerView.adapter = adapter
 
@@ -435,7 +437,7 @@ class RecordingsFragment : Fragment() {
                 is ApiClient.ActionResult.AuthError -> showSnackbar(getString(R.string.library_auth_failed))
                 // The server's own sentence (its `detail`) when it sent one; never a code.
                 is ApiClient.ActionResult.Error ->
-                    showSnackbar(FriendlyErrors.forDisplay(result.message, getString(R.string.server_action_failed)))
+                    showSnackbar(FriendlyErrors.forDisplay(result.detail ?: result.message, getString(R.string.server_action_failed)))
             }
             refresh()
         }

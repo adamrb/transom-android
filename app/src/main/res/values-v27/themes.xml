@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- API 27+: the navigation bar takes the surface colour (the tab bar and the player sit on
+         it) with icons that flip with the palette. Older releases keep the system default so
+         light icons never land on a light bar. -->
+    <style name="Theme.PlaudBridge" parent="Base.Theme.PlaudBridge">
+        <item name="android:navigationBarColor">@color/pb_surface</item>
+        <item name="android:windowLightNavigationBar">@bool/pb_light_system_bars</item>
+    </style>
+</resources>

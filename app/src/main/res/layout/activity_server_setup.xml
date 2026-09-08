@@ -3,19 +3,16 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_primary"
+    android:background="?android:attr/colorBackground"
     android:orientation="vertical">
 
     <ImageButton
         android:id="@+id/backButton"
-        android:layout_width="44dp"
-        android:layout_height="44dp"
-        android:layout_marginStart="12dp"
+        style="@style/Widget.PlaudBridge.IconButton"
+        android:layout_marginStart="8dp"
         android:layout_marginTop="8dp"
-        android:background="?android:attr/selectableItemBackgroundBorderless"
         android:contentDescription="@string/cancel"
-        android:src="@drawable/ic_chevron_left"
-        app:tint="@color/text_primary" />
+        android:src="@drawable/ic_chevron_left" />
 
     <ScrollView
         android:layout_width="match_parent"
@@ -36,7 +33,7 @@
                 android:layout_marginTop="8dp"
                 android:fontFamily="sans-serif-light"
                 android:text="@string/server_setup_title"
-                android:textColor="@color/text_primary"
+                android:textColor="?attr/colorOnSurface"
                 android:textSize="32sp" />
 
             <TextView
@@ -45,20 +42,16 @@
                 android:layout_marginTop="8dp"
                 android:fontFamily="sans-serif"
                 android:text="@string/server_setup_subtitle"
-                android:textColor="@color/gray_medium"
+                android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="14sp" />
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/scanQrButton"
+                style="@style/Widget.PlaudBridge.Button.Outlined"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:layout_marginTop="24dp"
-                android:background="@drawable/bg_secondary_button"
-                app:backgroundTint="@null"
-                android:fontFamily="sans-serif"
                 android:text="@string/scan_qr"
-                android:textAllCaps="false"
-                android:textColor="@color/text_primary"
                 android:textSize="16sp" />
 
             <TextView
@@ -67,7 +60,7 @@
                 android:layout_marginTop="24dp"
                 android:fontFamily="sans-serif"
                 android:text="@string/server_url"
-                android:textColor="@color/text_primary"
+                android:textColor="?attr/colorOnSurface"
                 android:textSize="14sp" />
 
             <EditText
@@ -82,8 +75,8 @@
                 android:paddingStart="16dp"
                 android:paddingEnd="16dp"
                 android:singleLine="true"
-                android:textColor="@color/text_primary"
-                android:textColorHint="@color/text_secondary"
+                android:textColor="?attr/colorOnSurface"
+                android:textColorHint="?attr/colorOnSurfaceVariant"
                 android:textSize="15sp" />
 
             <TextView
@@ -92,7 +85,7 @@
                 android:layout_marginTop="20dp"
                 android:fontFamily="sans-serif"
                 android:text="@string/server_auth_token"
-                android:textColor="@color/text_primary"
+                android:textColor="?attr/colorOnSurface"
                 android:textSize="14sp" />
 
             <EditText
@@ -107,21 +100,17 @@
                 android:paddingStart="16dp"
                 android:paddingEnd="16dp"
                 android:singleLine="true"
-                android:textColor="@color/text_primary"
-                android:textColorHint="@color/text_secondary"
+                android:textColor="?attr/colorOnSurface"
+                android:textColorHint="?attr/colorOnSurfaceVariant"
                 android:textSize="15sp" />
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/testButton"
+                style="@style/Widget.PlaudBridge.Button.Outlined"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:layout_marginTop="24dp"
-                android:background="@drawable/bg_secondary_button"
-                app:backgroundTint="@null"
-                android:fontFamily="sans-serif"
                 android:text="@string/test_connection"
-                android:textAllCaps="false"
-                android:textColor="@color/text_primary"
                 android:textSize="16sp" />
 
             <TextView
@@ -130,22 +119,17 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
                 android:fontFamily="sans-serif"
-                android:textColor="@color/gray_medium"
+                android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="13sp" />
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/continueButton"
+                style="@style/Widget.PlaudBridge.Button"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:layout_marginTop="24dp"
-                android:alpha="0.5"
-                android:background="@drawable/bg_primary_button"
-                app:backgroundTint="@null"
                 android:enabled="false"
-                android:fontFamily="sans-serif"
                 android:text="@string/continue_label"
-                android:textAllCaps="false"
-                android:textColor="@color/white"
                 android:textSize="16sp" />
 
         </LinearLayout>

@@ -6,9 +6,10 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import androidx.core.content.ContextCompat
+import com.google.android.material.R as MaterialR
 import org.plaudbridge.app.R
 import org.plaudbridge.app.models.ServerRecording
+import org.plaudbridge.app.ui.common.themeColor
 import org.plaudbridge.app.ui.list.DateGroupedAdapter
 import org.plaudbridge.app.ui.list.DateGrouping
 import java.util.concurrent.Executor
@@ -131,7 +132,7 @@ class RecordingsAdapter(
             if (start < 0) return line
             return SpannableString(line).apply {
                 setSpan(
-                    ForegroundColorSpan(ContextCompat.getColor(context, R.color.red)),
+                    ForegroundColorSpan(context.themeColor(MaterialR.attr.colorError)),
                     start, start + word.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
             }
@@ -142,8 +143,8 @@ class RecordingsAdapter(
          * SHOWS ([shownTitle], see [rowTitle]) already contains the match. A no-speech row shows
          * "No speech detected" while search matched its hidden plain title or file name, so that
          * hidden name is the first snippet source: the user sees why the row is in the results.
-         * The server's `match_snippet` (CONTRACTS §4) is not on the list model yet; once it is,
-         * pass it as [SearchSnippet.derive]'s serverSnippet here.
+         * A row that came back from a server-side search carries the server's own
+         * `match_snippet` (CONTRACTS §4), which wins over anything derived here.
          */
         fun snippetFor(item: RecordingItem, query: String?, shownTitle: String = item.title): SearchSnippet.Snippet? =
             SearchSnippet.derive(
@@ -152,7 +153,8 @@ class RecordingsAdapter(
                 bodies = listOf(
                     item.title.takeIf { it != shownTitle },
                     item.server?.textPreview, item.server?.summary, item.local?.summaryText
-                )
+                ),
+                serverSnippet = item.server?.matchSnippet
             )
     }
 }

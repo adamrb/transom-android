@@ -5,7 +5,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_primary"
+    android:background="?android:attr/colorBackground"
     android:orientation="vertical">
 
     <!-- Toolbar, same shape as the file detail and web dashboard screens -->
@@ -15,14 +15,11 @@
 
         <ImageButton
             android:id="@+id/backButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            style="@style/Widget.PlaudBridge.IconButton"
             android:layout_gravity="start|center_vertical"
             android:layout_marginStart="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/cd_back"
-            android:src="@drawable/ic_chevron_left"
-            android:tint="@color/text_primary" />
+            android:src="@drawable/ic_chevron_left" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -30,19 +27,16 @@
             android:layout_gravity="center"
             android:fontFamily="sans-serif-medium"
             android:text="@string/custom_vocabulary"
-            android:textColor="@color/text_primary"
+            android:textColor="?attr/colorOnSurface"
             android:textSize="16sp" />
 
         <ImageButton
             android:id="@+id/moreButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            style="@style/Widget.PlaudBridge.IconButton"
             android:layout_gravity="end|center_vertical"
             android:layout_marginEnd="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/cd_more"
-            android:src="@drawable/ic_more"
-            android:tint="@color/text_primary" />
+            android:src="@drawable/ic_more" />
     </FrameLayout>
 
     <TextView
@@ -54,7 +48,7 @@
         android:layout_marginEnd="24dp"
         android:fontFamily="sans-serif"
         android:text="@string/vocabulary_help"
-        android:textColor="@color/gray_medium"
+        android:textColor="?attr/colorOnSurfaceVariant"
         android:textSize="13sp" />
 
     <!-- Search narrows the list to terms (or mis-hearings) containing the text -->
@@ -68,7 +62,7 @@
         android:background="@drawable/bg_card"
         android:drawableStart="@drawable/ic_search"
         android:drawablePadding="10dp"
-        app:drawableTint="@color/gray_medium"
+        app:drawableTint="?attr/colorOnSurfaceVariant"
         android:hint="@string/vocabulary_search_hint"
         android:imeOptions="actionSearch"
         android:importantForAutofill="no"
@@ -76,8 +70,8 @@
         android:maxLines="1"
         android:paddingStart="14dp"
         android:paddingEnd="14dp"
-        android:textColor="@color/text_primary"
-        android:textColorHint="@color/gray_ad"
+        android:textColor="?attr/colorOnSurface"
+        android:textColorHint="?attr/colorOnSurfaceVariant"
         android:textSize="14sp" />
 
     <FrameLayout
@@ -107,7 +101,7 @@
             android:fontFamily="sans-serif"
             android:gravity="center"
             android:padding="24dp"
-            android:textColor="@color/gray_medium"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="14sp"
             android:visibility="gone" />
     </FrameLayout>
@@ -129,45 +123,27 @@
             android:layout_weight="1"
             android:fontFamily="sans-serif"
             android:text="@string/vocabulary_loading"
-            android:textColor="@color/text_secondary"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="13sp" />
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/addButton"
+            style="@style/Widget.PlaudBridge.Button.Outlined"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:layout_marginStart="12dp"
-            android:background="@drawable/bg_secondary_button"
             android:enabled="false"
-            android:fontFamily="sans-serif"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:minWidth="0dp"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp"
-            android:text="@string/vocabulary_add_term"
-            android:textAllCaps="false"
-            android:textColor="@color/text_primary"
-            android:textSize="14sp"
-            app:backgroundTint="@null" />
+            android:text="@string/vocabulary_add_term" />
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/saveButton"
+            style="@style/Widget.PlaudBridge.Button"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:layout_marginStart="8dp"
-            android:background="@drawable/bg_primary_button"
             android:enabled="false"
-            android:fontFamily="sans-serif"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:minWidth="0dp"
             android:paddingStart="20dp"
             android:paddingEnd="20dp"
-            android:text="@string/save"
-            android:textAllCaps="false"
-            android:textColor="@color/white"
-            android:textSize="14sp"
-            app:backgroundTint="@null" />
+            android:text="@string/save" />
     </LinearLayout>
 </LinearLayout>

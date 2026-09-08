@@ -24,7 +24,7 @@
             android:imeOptions="actionDone"
             android:inputType="textCapSentences"
             android:maxLines="1"
-            android:textColor="@color/text_primary"
+            android:textColor="?attr/colorOnSurface"
             android:textSize="15sp" />
     </com.google.android.material.textfield.TextInputLayout>
 </FrameLayout>

@@ -3,15 +3,16 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_primary">
+    android:background="?android:attr/colorBackground">
 
-    <!-- Top decorative ellipse -->
+    <!-- Top decorative ellipse (faded on the dark palette) -->
     <ImageView
         android:id="@+id/topDecoration"
         android:layout_width="match_parent"
         android:layout_height="280dp"
         android:layout_gravity="center_horizontal|top"
         android:layout_marginTop="-30dp"
+        android:alpha="@dimen/pb_welcome_art_alpha"
         android:contentDescription="@null"
         android:scaleType="centerCrop"
         android:src="@drawable/success_bg_ellipse" />
@@ -25,7 +26,6 @@
         android:orientation="vertical"
         android:paddingBottom="60dp">
 
-        <!-- Green check icon -->
         <ImageView
             android:id="@+id/checkIcon"
             android:layout_width="80dp"
@@ -42,7 +42,7 @@
             android:alpha="0"
             android:fontFamily="sans-serif-light"
             android:text="@string/youre_all_set"
-            android:textColor="@color/text_primary"
+            android:textColor="?attr/colorOnSurface"
             android:textSize="24sp" />
 
         <!-- Subtitle -->
@@ -56,25 +56,21 @@
             android:gravity="center"
             android:lineSpacingExtra="4dp"
             android:text="@string/success_subtitle"
-            android:textColor="@color/text_secondary"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="13sp" />
     </LinearLayout>
 
     <!-- "Open Plaud Bridge" button -->
-    <Button
+    <com.google.android.material.button.MaterialButton
         android:id="@+id/exploreButton"
+        style="@style/Widget.PlaudBridge.Button"
         android:layout_width="match_parent"
         android:layout_height="48dp"
         android:layout_gravity="bottom|center_horizontal"
         android:layout_marginStart="24dp"
         android:layout_marginEnd="24dp"
         android:layout_marginBottom="20dp"
-        android:background="@drawable/bg_primary_button"
-        app:backgroundTint="@null"
-        android:fontFamily="sans-serif-medium"
         android:text="@string/explore_intelligence"
-        android:textAllCaps="false"
-        android:textColor="@color/white"
         android:textSize="16sp" />
 
 </FrameLayout>
