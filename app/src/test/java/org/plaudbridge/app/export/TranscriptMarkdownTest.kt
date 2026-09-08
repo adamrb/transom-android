@@ -125,6 +125,79 @@ class TranscriptMarkdownTest {
     }
 
     @Test
+    fun paragraphsReplaceTheFlatTextWithBookmarkStars() {
+        // The server's transcript_markdown with `paragraphs`: paragraphs_markdown is the body, the
+        // flat text is not used for it, and the Highlights section keeps its timestamps.
+        val paragraphs = listOf(
+            TranscriptParagraph("Speaker 1", "Intro.", 0.0, 5.0),
+            TranscriptParagraph("Speaker 2", "Reply.", 5.0, 10.0, listOf(0)),
+            TranscriptParagraph("Speaker 1", "Later.", 30.0, 35.0, listOf(1, 2))
+        )
+        val md = TranscriptMarkdown.build(
+            title = "Standup",
+            recordedAtMillis = recordedAt,
+            durationSeconds = 61L,
+            transcript = "Speaker 1: Intro.\nSpeaker 2: Reply.\nSpeaker 1: Later.",
+            highlights = listOf(
+                TranscriptHighlight(6.0, 5.0, 10.0, "Reply."),
+                TranscriptHighlight(20.0, 20.0, 20.0, ""),
+                TranscriptHighlight(99.0, 99.0, 99.0, "")
+            ),
+            paragraphs = paragraphs
+        )
+        val expected = """
+            |---
+            |title: "Standup"
+            |recorded: "2026-09-07T05:27:31Z"
+            |duration_s: "61"
+            |source: plaud-bridge
+            |---
+            |# Standup
+            |
+            |## Highlights
+            |
+            |- **0:06** Reply.
+            |- **0:20** (no speech near this mark)
+            |- **1:39** (no speech near this mark)
+            |
+            |## Transcript
+            |
+            |**Speaker 1:** Intro.
+            |
+            |**Speaker 2:** ★ Reply.
+            |
+            |**Speaker 1:** ★ Later.
+            |""".trimMargin()
+        assertEquals(expected, md)
+        // Undiarized paragraphs have no label; a bookmarked one still gets its star.
+        assertTrue(
+            TranscriptMarkdown.build("T", recordedAt, 1L, "", paragraphs = listOf(
+                TranscriptParagraph(null, "Just me.", 0.0, 1.0), TranscriptParagraph(null, "Still me.", 2.0, 3.0, listOf(0))
+            )).endsWith("## Transcript\n\nJust me.\n\n★ Still me.\n")
+        )
+    }
+
+    @Test
+    fun emptyParagraphsFallBackToTheFlatText() {
+        val flat = TranscriptMarkdown.build("T", recordedAt, 1L, "Speaker 1: Hi.\nSpeaker 2: Hello.")
+        assertEquals(flat, TranscriptMarkdown.build("T", recordedAt, 1L, "Speaker 1: Hi.\nSpeaker 2: Hello.", paragraphs = emptyList()))
+        assertEquals(flat, TranscriptMarkdown.build("T", recordedAt, 1L, "Speaker 1: Hi.\nSpeaker 2: Hello.", paragraphs = null))
+        assertTrue(flat.endsWith("## Transcript\n\n**Speaker 1:** Hi.\n\n**Speaker 2:** Hello.\n"))
+    }
+
+    @Test
+    fun plainParagraphsOfTheReaderLayoutCarryNoStarsOrTimes() {
+        assertEquals(
+            "Speaker 1: Intro.\n\nSpeaker 2: Reply.\n\nStill talking.",
+            TranscriptMarkdown.plainParagraphs(listOf(
+                TranscriptParagraph("Speaker 1", "Intro.", 0.0, 5.0),
+                TranscriptParagraph("Speaker 2", "Reply.", 5.0, 10.0, listOf(0)),
+                TranscriptParagraph(null, "Still talking.", 10.0, 12.0)
+            ))
+        )
+    }
+
+    @Test
     fun highlightsWithoutSummaryFollowTheTitleDirectly() {
         val md = TranscriptMarkdown.build(
             "Standup", recordedAt, 61L, "Speaker 1: Hi.",

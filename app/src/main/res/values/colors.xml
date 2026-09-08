@@ -30,5 +30,6 @@
     <color name="tab_bar_white">#E6FFFFFF</color><!-- white 90%: closest flat approximation of iOS blur+white70% (RenderEffect needs API31+) --><!-- white 70% -->
     <color name="orange">#FF9500</color>
     <color name="highlight_accent">#FF9500</color><!-- star + timestamp of a button-press highlight -->
+    <color name="highlight_flash">#33FF9500</color><!-- accent 20%: brief emphasis of the paragraph a highlight jumps to -->
     <color name="ic_launcher_background">#1F1F1F</color>
 </resources>

@@ -166,9 +166,209 @@ class FileDetailActivityTest {
         // The server's speaker turns as paragraphs: no timestamps, no per-segment blocks.
         assertEquals("Speaker 1: Hello there.\n\nSpeaker 2: Hi.", clip.getItemAt(0).text.toString())
         assertEquals("Transcript copied", ShadowToast.getTextOfLatestToast())
-        // The on-screen rendering keeps its segment blocks with timestamps.
+        // A document without `paragraphs` is grouped locally from its segments: speaker label
+        // above each turn, no clock times anywhere.
         val shown = activity.findViewById<android.widget.TextView>(R.id.transcriptText).text.toString()
-        assertEquals("Speaker 00 \u00b7 00:00:00\nHello there.\n\nSpeaker 01 \u00b7 00:00:02\nHi.", shown)
+        assertEquals("Speaker 00\nHello there.\n\nSpeaker 01\nHi.", shown)
+        assertNoClockTimes(shown)
+    }
+
+    private fun assertNoClockTimes(text: String) {
+        assertTrue("clock time in transcript: $text", !Regex("\\d:\\d\\d").containsMatchIn(text))
+    }
+
+    /** A server document with the reader layout: three turns, the middle one holding a bookmark. */
+    private val transcriptWithParagraphs = """{"text":"Speaker 1: Hello there. How are you?\nSpeaker 2: Fine. And you?\nSpeaker 1: Good.",
+        "summary":"A greeting.",
+        "segments":[{"speaker":"Speaker 1","start":0.0,"end":2.0,"text":"Hello there."},
+                    {"speaker":"Speaker 1","start":2.0,"end":4.0,"text":"How are you?"},
+                    {"speaker":"Speaker 2","start":4.0,"end":5.0,"text":"Fine."},
+                    {"speaker":"Speaker 2","start":5.0,"end":7.0,"text":"And you?"},
+                    {"speaker":"Speaker 1","start":7.0,"end":9.0,"text":"Good."}],
+        "marks":[4.5],
+        "highlights":[{"at":4.5,"start":4.0,"end":7.0,"speakers":["Speaker 2"],"text":"Fine. And you?"}],
+        "paragraphs":[{"speaker":"Speaker 1","text":"Hello there. How are you?","start":0.0,"end":4.0,"bookmarks":[]},
+                      {"speaker":"Speaker 2","text":"Fine. And you?","start":4.0,"end":7.0,"bookmarks":[0]},
+                      {"speaker":"Speaker 1","text":"Good.","start":7.0,"end":9.0,"bookmarks":[]}]}"""
+
+    private fun transcriptView(activity: FileDetailActivity) =
+        activity.findViewById<android.widget.TextView>(R.id.transcriptText)
+
+    private inline fun <reified T> spans(view: android.widget.TextView): List<T> {
+        val s = view.text as android.text.Spanned
+        return s.getSpans(0, s.length, T::class.java).toList()
+    }
+
+    private fun spanRange(view: android.widget.TextView, span: Any): IntRange {
+        val s = view.text as android.text.Spanned
+        return s.getSpanStart(span) until s.getSpanEnd(span)
+    }
+
+    @Test
+    fun transcriptRendersServerParagraphsAsProseWithoutTimestamps() {
+        val file = storeFile(transcriptWithParagraphs)
+        val activity = launch(file.id)
+        val view = transcriptView(activity)
+        assertEquals(View.VISIBLE, view.visibility)
+        val shown = view.text.toString()
+        // Speaker label on its own line whenever the speaker changes; the bookmarked paragraph
+        // opens with the Highlights rows' star; no "Speaker N \u00b7 HH:MM:SS" blocks anywhere.
+        assertEquals(
+            "Speaker 1\nHello there. How are you?\n\nSpeaker 2\n\u2605 Fine. And you?\n\nSpeaker 1\nGood.",
+            shown
+        )
+        assertNoClockTimes(shown)
+        assertTrue(!shown.contains("\u00b7"))
+
+        // Exactly the bookmarked paragraph carries the accent bar, from its label to its end.
+        val bars = spans<BookmarkBarSpan>(view)
+        assertEquals(1, bars.size)
+        val barText = shown.substring(spanRange(view, bars[0]).first, spanRange(view, bars[0]).last + 1)
+        assertEquals("Speaker 2\n\u2605 Fine. And you?", barText)
+        // The star itself is in the accent colour, like the Highlights rows.
+        val accent = androidx.core.content.ContextCompat.getColor(activity, R.color.highlight_accent)
+        val starSpan = spans<android.text.style.ForegroundColorSpan>(view).single { it.foregroundColor == accent }
+        assertEquals("\u2605 ", shown.substring(spanRange(view, starSpan).first, spanRange(view, starSpan).last + 1))
+        // Every paragraph is tappable (seeks the player), and the labels read as secondary text.
+        assertEquals(3, spans<android.text.style.ClickableSpan>(view).size)
+        assertEquals(3, spans<android.text.style.RelativeSizeSpan>(view).size)
+    }
+
+    @Test
+    fun consecutiveParagraphsBySameSpeakerShareOneLabel() {
+        val json = """{"paragraphs":[
+            {"speaker":"Speaker 1","text":"First stretch.","start":0.0,"end":30.0,"bookmarks":[]},
+            {"speaker":"Speaker 1","text":"Second stretch after a pause.","start":33.0,"end":60.0,"bookmarks":[]},
+            {"speaker":"Speaker 2","text":"Reply.","start":60.0,"end":61.0,"bookmarks":[]}]}"""
+        val file = storeFile(json)
+        val shown = transcriptView(launch(file.id)).text.toString()
+        assertEquals("Speaker 1\nFirst stretch.\n\nSecond stretch after a pause.\n\nSpeaker 2\nReply.", shown)
+    }
+
+    @Test
+    fun undiarizedTranscriptShowsNoSpeakerLabels() {
+        val json = """{"paragraphs":[
+            {"speaker":null,"text":"Just me talking.","start":0.0,"end":3.0,"bookmarks":[]},
+            {"speaker":null,"text":"Still me.","start":6.0,"end":9.0,"bookmarks":[]}]}"""
+        val file = storeFile(json)
+        val shown = transcriptView(launch(file.id)).text.toString()
+        assertEquals("Just me talking.\n\nStill me.", shown)
+        assertNoClockTimes(shown)
+
+        // The same for a legacy document whose segments never name a speaker.
+        RecordingStore.clearAll()
+        val legacy = storeFile("""{"segments":[{"start":0.0,"text":"Just me"},{"start":1.0,"text":"talking."}]}""")
+        assertEquals("Just me talking.", transcriptView(launch(legacy.id)).text.toString())
+    }
+
+    @Test
+    fun legacyDocumentWithoutParagraphsIsGroupedFromSegmentsWithBookmarks() {
+        // Older cached documents (no `paragraphs`) never fall back to timestamped output: the
+        // segments are grouped per speaker turn and the highlights attach to the turn they fall in.
+        val legacy = """{"segments":[{"speaker":"Speaker 1","start":0.0,"end":2.0,"text":"Hello"},
+            {"speaker":"Speaker 1","start":2.0,"end":4.0,"text":"there."},
+            {"speaker":"Speaker 2","start":4.0,"end":7.0,"text":"Hi."}],
+            "highlights":[{"at":5.0,"start":4.0,"end":7.0,"speakers":["Speaker 2"],"text":"Hi."}]}"""
+        val file = storeFile(legacy)
+        val activity = launch(file.id)
+        val view = transcriptView(activity)
+        assertEquals("Speaker 1\nHello there.\n\nSpeaker 2\n\u2605 Hi.", view.text.toString())
+        assertEquals(1, spans<BookmarkBarSpan>(view).size)
+        // Copy of such a document is the same paragraphs without the star.
+        activity.findViewById<View>(R.id.copyTranscriptButton).performClick()
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        assertEquals("Speaker 1: Hello there.\n\nSpeaker 2: Hi.", clipboard.primaryClip!!.getItemAt(0).text.toString())
+    }
+
+    @Test
+    fun copyAndExportUseTheServerParagraphLayout() {
+        val file = storeFile(transcriptWithParagraphs)
+        val activity = launch(file.id)
+        activity.findViewById<View>(R.id.copyTranscriptButton).performClick()
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        // paragraphs_plain: "Speaker: text" paragraphs, no stars, no times.
+        assertEquals(
+            "Speaker 1: Hello there. How are you?\n\nSpeaker 2: Fine. And you?\n\nSpeaker 1: Good.",
+            clipboard.primaryClip!!.getItemAt(0).text.toString()
+        )
+        activity.findViewById<View>(R.id.exportMarkdownButton).performClick()
+        val exported = File(context.cacheDir, "exports/Budget -Q3- call.md").readText()
+        // paragraphs_markdown: bold label, "\u2605 " on the bookmarked paragraph, one blank line between.
+        val expectedTail = """
+            |## Highlights
+            |
+            |- **0:04** Fine. And you?
+            |
+            |## Transcript
+            |
+            |**Speaker 1:** Hello there. How are you?
+            |
+            |**Speaker 2:** ${FileDetailActivity.BOOKMARK_STAR}Fine. And you?
+            |
+            |**Speaker 1:** Good.
+            |""".trimMargin()
+        assertTrue(exported, exported.endsWith(expectedTail))
+    }
+
+    @Test
+    fun tappingAParagraphSeeksThePlayerToItsStart() {
+        // A server copy gives the page a streaming player, so the seek has somewhere to land.
+        val fake = FakeServerSource(serverRecording(), org.plaudbridge.app.net.ApiClient.TranscriptResult.Ready(transcriptWithParagraphs))
+        configureServer(fake)
+        val file = storeFile(transcriptWithParagraphs, serverId = "srv-9")
+        val activity = launchBoth(file.id)
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        val view = transcriptView(activity)
+        assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.audioPlayer).visibility)
+        val clock = activity.findViewById<android.widget.TextView>(R.id.currentTimeLabel)
+        assertEquals("00:00:00", clock.text.toString())
+
+        val paragraphs = spans<android.text.style.ClickableSpan>(view).sortedBy { spanRange(view, it).first }
+        paragraphs[2].onClick(view)
+        assertEquals("00:00:07", clock.text.toString())
+        paragraphs[1].onClick(view)
+        assertEquals("00:00:04", clock.text.toString())
+        // Tapping a paragraph is not a link: no underline or link colour is applied.
+        val paint = android.text.TextPaint().apply { isUnderlineText = false; color = 0x11223344 }
+        paragraphs[1].updateDrawState(paint)
+        assertEquals(false, paint.isUnderlineText)
+        assertEquals(0x11223344, paint.color)
+    }
+
+    @Test
+    fun tappingAHighlightScrollsToItsParagraphAndFlashesIt() {
+        val file = storeFile(transcriptWithParagraphs)
+        val activity = launch(file.id)
+        val view = transcriptView(activity)
+        val scroll = activity.findViewById<android.widget.ScrollView>(R.id.contentScroll)
+        // Lay the page out in a short window so the content overflows and there is room to scroll.
+        val root = activity.findViewById<View>(android.R.id.content)
+        root.measure(
+            View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY)
+        )
+        root.layout(0, 0, 1080, 400)
+        assertEquals(0, scroll.scrollY)
+        assertNotNull(view.layout)
+
+        activity.findViewById<android.widget.LinearLayout>(R.id.highlightsList).getChildAt(0).performClick()
+
+        // The page moved down to the bookmarked paragraph...
+        val bar = spans<BookmarkBarSpan>(view).single()
+        val line = view.layout.getLineForOffset(spanRange(view, bar).first)
+        val expectedY = view.top + view.totalPaddingTop + view.layout.getLineTop(line) -
+            (16 * activity.resources.displayMetrics.density).toInt()
+        val maxScroll = scroll.getChildAt(0).height - (scroll.height - scroll.paddingTop - scroll.paddingBottom)
+        assertTrue("paragraph at $expectedY must be reachable (max scroll $maxScroll)", expectedY in 1..maxScroll)
+        assertEquals(expectedY, scroll.scrollY)
+        // ...and that paragraph is tinted for a moment, then plain again.
+        val flash = spans<android.text.style.BackgroundColorSpan>(view).single()
+        assertEquals(spanRange(view, bar), spanRange(view, flash))
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(FileDetailActivity.PARAGRAPH_FLASH_MS + 100))
+        assertEquals(0, spans<android.text.style.BackgroundColorSpan>(view).size)
+        // Re-binding (the onResume reload) starts clean: no stale flash, no duplicate spans.
+        activity.findViewById<android.widget.LinearLayout>(R.id.highlightsList).getChildAt(0).performClick()
+        assertEquals(1, spans<android.text.style.BackgroundColorSpan>(view).size)
     }
 
     @Test

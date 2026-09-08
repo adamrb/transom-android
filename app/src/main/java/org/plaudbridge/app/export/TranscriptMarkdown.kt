@@ -38,9 +38,12 @@ import java.util.TimeZone
  * **Speaker 2:** <turn>
  * ```
  *
- * The Transcript section is [transcriptBody]: the server's flat `text` (one "Speaker N: ..."
- * line per turn) rendered as bold-label paragraphs, the same way `transcript_body_markdown`
- * does it server-side, so the two exports stay identical.
+ * The Transcript section is the server's reader layout when the document carries `paragraphs`
+ * ([TranscriptParagraph.markdown]: speaker-turn paragraphs, a "★ " on the ones holding a
+ * bookmark, no timestamps, as `paragraphs_markdown` does it server-side). Without paragraphs it
+ * is [transcriptBody]: the flat `text` (one "Speaker N: ..." line per turn) rendered as
+ * bold-label paragraphs, the same way `transcript_body_markdown` does it, so the two exports
+ * stay identical either way.
  */
 object TranscriptMarkdown {
 
@@ -54,6 +57,8 @@ object TranscriptMarkdown {
      * @param transcript the transcript body ("Speaker 1: ..." lines when diarized)
      * @param summary AI summary, or null/blank to omit the Summary block
      * @param highlights button-press highlights, or null/empty to omit the Highlights block
+     * @param paragraphs the document's reader paragraphs; when non-empty they are the Transcript
+     *   section and [transcript] is not used for it
      */
     fun build(
         title: String,
@@ -61,7 +66,8 @@ object TranscriptMarkdown {
         durationSeconds: Double,
         transcript: String,
         summary: String? = null,
-        highlights: List<TranscriptHighlight>? = null
+        highlights: List<TranscriptHighlight>? = null,
+        paragraphs: List<TranscriptParagraph>? = null
     ): String = buildString {
         append("---\n")
         append("title: ").append(quote(title)).append('\n')
@@ -89,9 +95,10 @@ object TranscriptMarkdown {
         }
         append("## Transcript\n")
         append('\n')
-        // transcriptBody drops blank lines, so the document ends with exactly one newline
-        // regardless of the stored text.
-        append(transcriptBody(transcript)).append('\n')
+        // Both bodies are free of blank lines at either end, so the document ends with exactly
+        // one newline regardless of the stored text.
+        val body = if (!paragraphs.isNullOrEmpty()) TranscriptParagraph.markdown(paragraphs) else transcriptBody(transcript)
+        append(body).append('\n')
     }
 
     /**
@@ -113,6 +120,9 @@ object TranscriptMarkdown {
      */
     fun plainParagraphs(text: String): String = paragraphs(text).joinToString("\n\n")
 
+    /** The reader paragraphs for the clipboard: server `paragraphs_plain` ("Speaker 1: text", no stars, no times). */
+    fun plainParagraphs(paragraphs: List<TranscriptParagraph>): String = TranscriptParagraph.plain(paragraphs)
+
     /** Non-blank, trimmed lines of the server's `text` field; each is one speaker turn. */
     fun paragraphs(text: String): List<String> =
         text.lines().map { it.trim() }.filter { it.isNotEmpty() }
@@ -126,8 +136,9 @@ object TranscriptMarkdown {
         durationSeconds: Long,
         transcript: String,
         summary: String? = null,
-        highlights: List<TranscriptHighlight>? = null
-    ): String = build(title, recordedAtMillis, durationSeconds.toDouble(), transcript, summary, highlights)
+        highlights: List<TranscriptHighlight>? = null,
+        paragraphs: List<TranscriptParagraph>? = null
+    ): String = build(title, recordedAtMillis, durationSeconds.toDouble(), transcript, summary, highlights, paragraphs)
 
     /**
      * "m:ss" (minutes unpadded) below one hour, "h:mm:ss" from one hour on. Seconds are rounded

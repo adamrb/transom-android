@@ -37,6 +37,7 @@ import org.plaudbridge.app.databinding.ActivityFileDetailBinding
 import org.plaudbridge.app.export.ExportFileName
 import org.plaudbridge.app.export.TranscriptHighlight
 import org.plaudbridge.app.export.TranscriptMarkdown
+import org.plaudbridge.app.export.TranscriptParagraph
 import org.plaudbridge.app.export.TranscriptShare
 import org.plaudbridge.app.managers.TitleSyncManager
 import org.plaudbridge.app.models.Delivery
@@ -187,6 +188,16 @@ class FileDetailActivity : AppCompatActivity() {
         /** A route's reason is a paragraph; show its opening lines and unfold on tap. */
         private const val REASON_COLLAPSED_LINES = 3
 
+        /** Opens a transcript paragraph that holds a bookmark; the same star the Highlights rows use. */
+        @VisibleForTesting
+        const val BOOKMARK_STAR = "★ "
+
+        /** How long the paragraph a highlight jumps to stays tinted. */
+        @VisibleForTesting
+        const val PARAGRAPH_FLASH_MS = 1_200L
+
+        private const val SPAN_FLAGS = android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+
         /** Recording ids with a Run automations call on the wire, see [runAutomations]. */
         private val rerunsInFlight = mutableSetOf<String>()
 
@@ -335,11 +346,19 @@ class FileDetailActivity : AppCompatActivity() {
         }
     }
 
-    /** On-screen transcript ("Speaker N · HH:MM:SS" blocks); null when nothing parseable. */
+    /** On-screen transcript as plain characters (reader paragraphs); null when nothing parseable. */
     private var transcriptPlainText: String? = null
 
     /** What Copy transcript puts on the clipboard: speaker paragraphs, no timestamps. */
     private var transcriptCopyText: String? = null
+
+    /** The paragraphs on screen and where each one sits in [ActivityFileDetailBinding.transcriptText]. */
+    private var transcriptParagraphs: List<TranscriptParagraph> = emptyList()
+    private var paragraphRanges: List<IntRange> = emptyList()
+
+    /** The brief emphasis a highlight tap puts on its paragraph; cleared by [flashHandler]. */
+    private var paragraphFlash: android.text.style.BackgroundColorSpan? = null
+    private val flashHandler = Handler(Looper.getMainLooper())
 
     /** The merged view of whatever this screen knows; null before anything has loaded. */
     private fun currentItem(): RecordingItem? {
@@ -408,12 +427,18 @@ class FileDetailActivity : AppCompatActivity() {
         // Highlights: the server's transcript-around-each-button-press rows, above the transcript
         bindHighlights(model.transcriptJSON?.let { TranscriptHighlight.parse(it) } ?: emptyList())
 
-        // Transcript: parsed segments from the bridge server, or (caller-defined) empty state
-        transcriptPlainText = model.transcriptJSON?.let { parseTranscript(it) }
+        // Transcript: the document's reader paragraphs (or the same grouping derived from its
+        // segments), else its flat text; nothing parseable leaves the (caller-defined) empty state
+        clearParagraphFlash()
+        transcriptParagraphs = model.transcriptJSON?.let { TranscriptParagraph.parse(it) } ?: emptyList()
+        val shown: CharSequence? = if (transcriptParagraphs.isNotEmpty()) renderParagraphs(transcriptParagraphs)
+            else model.transcriptJSON?.let { flatTranscriptText(it) }
+        if (transcriptParagraphs.isEmpty()) paragraphRanges = emptyList()
+        transcriptPlainText = shown?.toString()
         transcriptCopyText = model.transcriptJSON?.let { copyTextFor(it) } ?: transcriptPlainText
         binding.transcriptActions.visibility = if (transcriptPlainText != null) View.VISIBLE else View.GONE
-        if (transcriptPlainText != null) {
-            binding.transcriptText.text = transcriptPlainText
+        if (shown != null) {
+            binding.transcriptText.text = shown
             binding.transcriptText.visibility = View.VISIBLE
             binding.emptyState.visibility = View.GONE
         } else {
@@ -781,8 +806,9 @@ class FileDetailActivity : AppCompatActivity() {
      * One row per highlight: "★ m:ss" in the accent color, then the text (or the server's
      * no-speech placeholder). Rows are plain TextViews built here rather than a RecyclerView
      * because the list is short (one per button press) and lives inside the page's ScrollView.
-     * Tapping a row seeks the player to the highlight's start when a local audio file exists;
-     * without a player the row is display only.
+     * Tapping a row seeks the player to the highlight's start (when there is a player) and
+     * scrolls the page to the transcript paragraph holding the bookmark, so a highlight is an
+     * easy jump into the text.
      */
     private fun bindHighlights(highlights: List<TranscriptHighlight>) {
         binding.highlightsList.removeAllViews()
@@ -792,7 +818,7 @@ class FileDetailActivity : AppCompatActivity() {
         if (!visible) return
         val accent = ContextCompat.getColor(this, R.color.highlight_accent)
         val density = resources.displayMetrics.density
-        for (h in highlights) {
+        for ((index, h) in highlights.withIndex()) {
             val stamp = "★ ${TranscriptMarkdown.formatTimestamp(h.at)}"
             val body = h.text.ifEmpty { getString(R.string.highlight_no_speech) }
             val row = android.widget.TextView(this).apply {
@@ -813,21 +839,133 @@ class FileDetailActivity : AppCompatActivity() {
                 setPadding(0, (8 * density).toInt(), 0, (8 * density).toInt())
                 tag = h
                 contentDescription = "Highlight at ${TranscriptMarkdown.formatTimestamp(h.at)}"
-                setOnClickListener { seekToHighlight(h) }
+                setOnClickListener {
+                    seekPlayerTo(h.start)
+                    revealParagraphForHighlight(index, h)
+                }
             }
             binding.highlightsList.addView(row)
         }
     }
 
-    /** Jump playback to the highlight's first transcript segment; no player, no action. */
-    private fun seekToHighlight(h: TranscriptHighlight) {
+    /** Jump playback to [seconds] from the start; no player, no action. */
+    private fun seekPlayerTo(seconds: Double) {
         val p = exoPlayer ?: return
         val duration = p.duration.coerceAtLeast(0)
-        val target = (h.start * 1000).toLong().coerceIn(0, if (duration > 0) duration else Long.MAX_VALUE)
+        val target = (seconds * 1000).toLong().coerceIn(0, if (duration > 0) duration else Long.MAX_VALUE)
         p.seekTo(target)
         binding.currentTimeLabel.text = formatClock(target)
         binding.progressSlider.progress = if (duration > 0) (target * 1000 / duration).toInt() else 0
     }
+
+    // MARK: - Transcript paragraphs
+
+    /**
+     * The transcript as prose: one block per [TranscriptParagraph], a small secondary speaker
+     * label above the text whenever the speaker changes (none at all for an undiarized
+     * transcript), no clock times. A paragraph holding a bookmark opens with the Highlights
+     * rows' orange star and carries a [BookmarkBarSpan] down its left edge. Every paragraph is
+     * a [android.text.style.ClickableSpan] that seeks the player to its start, the same jump the
+     * Highlights rows make. One TextView with spans rather than one view per paragraph: a
+     * two-hour recording has a few hundred paragraphs, and a single layout pass handles that.
+     */
+    private fun renderParagraphs(paragraphs: List<TranscriptParagraph>): CharSequence {
+        val accent = ContextCompat.getColor(this, R.color.highlight_accent)
+        val labelColor = ContextCompat.getColor(this, R.color.gray7)
+        val density = resources.displayMetrics.density
+        val builder = android.text.SpannableStringBuilder()
+        val ranges = ArrayList<IntRange>(paragraphs.size)
+        var previousSpeaker: String? = null
+        for ((i, p) in paragraphs.withIndex()) {
+            if (i > 0) builder.append("\n\n")
+            val paragraphStart = builder.length
+            if (p.speaker != null && p.speaker != previousSpeaker) {
+                val labelStart = builder.length
+                builder.append(p.speaker).append('\n')
+                val labelEnd = labelStart + p.speaker.length
+                builder.setSpan(android.text.style.RelativeSizeSpan(0.85f), labelStart, labelEnd, SPAN_FLAGS)
+                builder.setSpan(android.text.style.ForegroundColorSpan(labelColor), labelStart, labelEnd, SPAN_FLAGS)
+                builder.setSpan(android.text.style.TypefaceSpan("sans-serif-medium"), labelStart, labelEnd, SPAN_FLAGS)
+            }
+            previousSpeaker = p.speaker
+            if (p.isBookmarked) {
+                val starStart = builder.length
+                builder.append(BOOKMARK_STAR)
+                builder.setSpan(android.text.style.ForegroundColorSpan(accent), starStart, builder.length, SPAN_FLAGS)
+                builder.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), starStart, builder.length, SPAN_FLAGS)
+            }
+            builder.append(p.text)
+            val paragraphEnd = builder.length
+            if (p.isBookmarked) {
+                builder.setSpan(
+                    BookmarkBarSpan(accent, (3 * density).toInt().coerceAtLeast(1), (12 * density).toInt()),
+                    paragraphStart, paragraphEnd, SPAN_FLAGS
+                )
+            }
+            val start = p.start
+            if (start != null) {
+                builder.setSpan(object : android.text.style.ClickableSpan() {
+                    override fun onClick(widget: View) = seekPlayerTo(start)
+                    override fun updateDrawState(ds: android.text.TextPaint) { /* plain text, not a link */ }
+                }, paragraphStart, paragraphEnd, SPAN_FLAGS)
+            }
+            ranges += paragraphStart until paragraphEnd
+        }
+        paragraphRanges = ranges
+        binding.transcriptText.movementMethod = android.text.method.LinkMovementMethod.getInstance()
+        binding.transcriptText.highlightColor = android.graphics.Color.TRANSPARENT
+        return builder
+    }
+
+    /**
+     * A document with no segments at all but a flat `text` (one "Speaker N: ..." line per turn):
+     * shown as blank-line-separated paragraphs. Null when there is nothing to show.
+     */
+    private fun flatTranscriptText(json: String): String? =
+        transcriptExportFields(json).first?.let { TranscriptMarkdown.plainParagraphs(it) }?.takeIf { it.isNotBlank() }
+
+    /**
+     * Scroll the page so the paragraph holding highlight [index] sits near the top and give it a
+     * short background flash. The paragraph is found by its bookmark index, or by time when the
+     * document's paragraphs do not name it (a derived layout, or a highlight the server dropped).
+     */
+    private fun revealParagraphForHighlight(index: Int, h: TranscriptHighlight) {
+        val paragraphs = transcriptParagraphs
+        if (paragraphs.isEmpty()) return
+        val position = paragraphs.indexOfFirst { index in it.bookmarks }.takeIf { it >= 0 }
+            ?: paragraphs.indexOfFirst { it.start != null && it.end != null && it.start <= h.at && h.at <= it.end }.takeIf { it >= 0 }
+            ?: paragraphs.indexOfFirst { it.start != null && it.start >= h.at }.takeIf { it >= 0 }
+            ?: paragraphs.lastIndex
+        revealParagraph(position)
+    }
+
+    private fun revealParagraph(position: Int) {
+        val range = paragraphRanges.getOrNull(position) ?: return
+        val text = binding.transcriptText
+        val layout = text.layout ?: return
+        val line = layout.getLineForOffset(range.first)
+        val y = text.top + text.totalPaddingTop + layout.getLineTop(line) - (16 * resources.displayMetrics.density).toInt()
+        val scroll = binding.contentScroll
+        if (animationsEnabled()) scroll.smoothScrollTo(0, y.coerceAtLeast(0)) else scroll.scrollTo(0, y.coerceAtLeast(0))
+
+        clearParagraphFlash()
+        val spannable = text.text as? android.text.Spannable ?: return
+        val flash = android.text.style.BackgroundColorSpan(ContextCompat.getColor(this, R.color.highlight_flash))
+        spannable.setSpan(flash, range.first, range.last + 1, SPAN_FLAGS)
+        paragraphFlash = flash
+        flashHandler.postDelayed({ clearParagraphFlash() }, PARAGRAPH_FLASH_MS)
+    }
+
+    private fun clearParagraphFlash() {
+        flashHandler.removeCallbacksAndMessages(null)
+        val flash = paragraphFlash ?: return
+        paragraphFlash = null
+        (binding.transcriptText.text as? android.text.Spannable)?.removeSpan(flash)
+    }
+
+    /** False under the system's "Remove animations" setting (and in tests), where a jump beats a glide. */
+    private fun animationsEnabled(): Boolean =
+        android.provider.Settings.Global.getFloat(contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
 
     // MARK: - Automations
 
@@ -1499,70 +1637,6 @@ class FileDetailActivity : AppCompatActivity() {
 
     private fun showTranscriptAlert(message: String) = showAlert(getString(R.string.transcript), message)
 
-    /**
-     * Parse the cached transcript JSON into "Speaker N · HH:MM:SS" paragraphs (mirrors iOS).
-     * Tolerant of both a bare segment array and an object wrapping one; returns null if nothing
-     * parseable so the caller can fall back to the empty state.
-     */
-    private fun parseTranscript(json: String): String? {
-        val segments = parseSegments(json) ?: return null
-        if (segments.isEmpty()) {
-            // Segments empty (or absent) but the server may still have produced flat text.
-            return try {
-                org.json.JSONObject(json).optString("text").takeIf { it.isNotBlank() }
-            } catch (e: Exception) {
-                null
-            }
-        }
-
-        return segments.joinToString("\n\n") { (speakerLabel, startMs, text) ->
-            "$speakerLabel · ${formatClock(startMs)}\n$text"
-        }
-    }
-
-    /**
-     * (speaker label, start millis, text) per non-blank segment. Null when the JSON is not a
-     * transcript at all; an empty list when it is an object without a usable segment array, so
-     * callers can still try its flat `text`.
-     */
-    private fun parseSegments(json: String): List<Triple<String, Long, String>>? {
-        return try {
-            val arr = when {
-                json.trimStart().startsWith("[") -> org.json.JSONArray(json)
-                else -> {
-                    val obj = org.json.JSONObject(json)
-                    obj.optJSONArray("segments")
-                        ?: obj.optJSONArray("transaction")
-                        ?: obj.optJSONArray("list")
-                        ?: obj.optJSONArray("data")
-                        ?: return emptyList()
-                }
-            }
-            (0 until arr.length()).mapNotNull { i ->
-                val seg = arr.optJSONObject(i) ?: return@mapNotNull null
-                val text = seg.optString("content", seg.optString("text", seg.optString("sentence")))
-                if (text.isBlank()) return@mapNotNull null
-                // speaker_id is a string like "SPEAKER_00" (Plaud result shape, mirrors iOS);
-                // device-cache shapes may use a numeric "speaker".
-                val speakerLabel = when {
-                    seg.has("speaker_id") ->
-                        seg.optString("speaker_id").replace("SPEAKER_", "Speaker ").ifBlank { "Speaker" }
-                    else -> "Speaker ${seg.optInt("speaker", 0) + 1}"
-                }
-                // start_time/startTime are milliseconds (device cache shape); "start" is SECONDS
-                // (Double, possibly a numeric string) in the Plaud transcription-result shape.
-                val startMs = when {
-                    seg.has("start_time") -> seg.optLong("start_time")
-                    seg.has("startTime") -> seg.optLong("startTime")
-                    else -> (seg.optDouble("start", 0.0).takeIf { !it.isNaN() }?.times(1000))?.toLong() ?: 0L
-                }
-                Triple(speakerLabel, startMs, text)
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
     /** "Xm Ys" / "Xh Ym Zs" duration for the meta line. */
     private fun formatMetaDuration(seconds: Long): String {
         if (seconds <= 0) return "0s"
@@ -1766,6 +1840,7 @@ class FileDetailActivity : AppCompatActivity() {
         super.onDestroy()
         releasePlayer()
         routingHandler.removeCallbacksAndMessages(null)
+        flashHandler.removeCallbacksAndMessages(null)
         // Reads in flight die with the scope; whoever waited on them must not wait forever
         // (a rerun guard held for reconciliation would otherwise pin Run automations off).
         drainRoutingSettledCallbacks()
@@ -1974,9 +2049,8 @@ class FileDetailActivity : AppCompatActivity() {
     }
 
     /**
-     * Copies the transcript as speaker paragraphs (no timestamps) and confirms with a toast. The
-     * on-screen segment blocks stay as they are: they exist for following along with playback,
-     * while a pasted transcript wants to read like a document.
+     * Copies the transcript as speaker paragraphs (no timestamps, no stars) and confirms with a
+     * toast: the same paragraphs as on screen, in the server's `paragraphs_plain` layout.
      */
     private fun copyTranscript() {
         val text = transcriptCopyText ?: transcriptPlainText ?: return
@@ -1984,34 +2058,38 @@ class FileDetailActivity : AppCompatActivity() {
     }
 
     /**
-     * Clipboard text for a transcript document: the server's `text` field (one "Speaker N: ..."
-     * line per turn, consecutive same-speaker segments already merged) as blank-line-separated
-     * paragraphs. Legacy shapes without `text` fall back to the segments merged per speaker turn,
-     * still without timestamps. Null when neither is available.
+     * Clipboard text for a transcript document, in the server's clipboard layout ("Speaker 1:
+     * text" paragraphs, one blank line between, nothing else): the document's own `paragraphs`
+     * when it has them; for older documents the server's flat `text` (one "Speaker N: ..." line
+     * per turn), else the paragraphs derived from the segments. Null when none is available.
      */
     private fun copyTextFor(json: String): String? {
-        transcriptExportFields(json).first?.let { return TranscriptMarkdown.plainParagraphs(it) }
-        val segments = parseSegments(json)?.takeIf { it.isNotEmpty() } ?: return null
-        val turns = mutableListOf<Pair<String, StringBuilder>>()
-        for ((speaker, _, text) in segments) {
-            val last = turns.lastOrNull()
-            if (last != null && last.first == speaker) last.second.append(' ').append(text.trim())
-            else turns += speaker to StringBuilder(text.trim())
-        }
-        return turns.joinToString("\n\n") { (speaker, text) -> "$speaker: $text" }
+        val paragraphs = exportParagraphs(json)
+        if (paragraphs != null) return TranscriptMarkdown.plainParagraphs(paragraphs)
+        return transcriptExportFields(json).first?.let { TranscriptMarkdown.plainParagraphs(it) }
     }
+
+    /**
+     * The paragraphs Copy and Export render, or null to fall back to the flat `text`: the server's
+     * own `paragraphs` when the document carries them (the server exports exactly these), else a
+     * locally derived grouping only for documents that have segments but no flat text either.
+     */
+    private fun exportParagraphs(json: String): List<TranscriptParagraph>? =
+        TranscriptParagraph.fromDocument(json)?.takeIf { it.isNotEmpty() }
+            ?: if (transcriptExportFields(json).first == null) TranscriptParagraph.derive(json)?.takeIf { it.isNotEmpty() } else null
 
     // MARK: - Markdown export
 
     /**
-     * Export the transcript as markdown via the share sheet. The body is the server's flat
-     * `text` field (already "Speaker N: ..." when diarized), which [TranscriptMarkdown] renders
-     * as bold-speaker paragraphs so the file matches the server's own export byte for byte; the
-     * on-screen paragraph rendering is only the fallback for legacy shapes that carry no `text`.
+     * Export the transcript as markdown via the share sheet. The body is the document's reader
+     * paragraphs (bold speaker, "★ " on bookmarked paragraphs, no timestamps) when the server
+     * wrote them, so the file matches the server's own export byte for byte; older documents
+     * render their flat `text` field as bold-speaker paragraphs the way the server does for them.
      */
     private fun exportMarkdown(model: DetailModel) {
         val json = model.transcriptJSON ?: return
         val (text, summary) = transcriptExportFields(json)
+        val paragraphs = exportParagraphs(json)
         val body = text ?: transcriptPlainText ?: return
         val markdown = TranscriptMarkdown.build(
             title = model.title,
@@ -2019,7 +2097,8 @@ class FileDetailActivity : AppCompatActivity() {
             durationSeconds = model.durationSeconds,
             transcript = body,
             summary = summary ?: model.summary,
-            highlights = TranscriptHighlight.parse(json)
+            highlights = TranscriptHighlight.parse(json),
+            paragraphs = paragraphs
         )
         try {
             TranscriptShare.share(this, ExportFileName.sanitize(model.title), model.title, markdown)

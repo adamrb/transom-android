@@ -39,6 +39,7 @@
     </FrameLayout>
 
     <ScrollView
+        android:id="@+id/contentScroll"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:clipToPadding="false"
@@ -262,7 +263,7 @@
                 android:textSize="13sp"
                 android:visibility="gone" />
 
-            <!-- Parsed transcript segments ("Speaker N · HH:MM:SS" + text) -->
+            <!-- Transcript as prose: speaker-turn paragraphs, no timestamps; bookmarked ones carry a star and an accent bar -->
             <TextView
                 android:id="@+id/transcriptText"
                 android:layout_width="match_parent"
