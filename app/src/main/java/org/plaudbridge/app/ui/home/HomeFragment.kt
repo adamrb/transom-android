@@ -1,7 +1,6 @@
 package org.plaudbridge.app.ui.home
 
 import android.animation.ObjectAnimator
-import android.animation.ValueAnimator
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -16,10 +15,22 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.databinding.FragmentHomeBinding
-import org.plaudbridge.app.models.*
+import org.plaudbridge.app.managers.UploadManager
+import org.plaudbridge.app.models.PlaudDevice
+import org.plaudbridge.app.models.RecordingState
+import org.plaudbridge.app.models.ScannedDevice
+import org.plaudbridge.app.models.SyncProgress
+import org.plaudbridge.app.models.SyncState
+import org.plaudbridge.app.models.displayName
+import org.plaudbridge.app.ui.common.AppManagers
+import org.plaudbridge.app.ui.common.SyncFeedback
+import org.plaudbridge.app.ui.common.showSnackbar
 import org.plaudbridge.app.ui.filedetail.FileDetailActivity
 import org.plaudbridge.app.ui.onboarding.ScanningActivity
 import org.plaudbridge.app.ui.recording.RecordingActivity
@@ -27,11 +38,14 @@ import org.plaudbridge.app.ui.recordings.RecordingItem
 import org.plaudbridge.app.ui.recordings.RecordingsAdapter
 import org.plaudbridge.app.ui.recordings.RecordingsMerger
 import org.plaudbridge.app.ui.recordings.RecordingsRepository
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.launch
 
 /**
- * Home Tab: Device card + Recording entry + Banners + Recent recordings
+ * Home tab: recorder card, Record entry, transfer banner, recent recordings.
+ *
+ * With no recorder connected the card is a single "Connect your recorder" call to action and
+ * the Record card and Sync now are dimmed: tapping them says what is missing and offers to
+ * connect, rather than opening a recording screen that cannot start or a sync that has nobody
+ * to ask. Once a recorder is connected everything behaves as before.
  */
 class HomeFragment : Fragment() {
 
@@ -39,14 +53,19 @@ class HomeFragment : Fragment() {
     private val binding get() = _binding!!
 
     private val app get() = requireActivity().application as PlaudBridgeApp
-    private val deviceManager get() = app.deviceManager
+    private val deviceManager get() = AppManagers.device(app)
     private val recordingManager get() = app.recordingManager
-    private val syncManager get() = app.syncManager
+    private val syncManager get() = AppManagers.sync(app)
 
     private var isDeviceCardExpanded = false
     private var currentDevice: PlaudDevice? = null
     private var recordingTimerHandler: Handler? = null
     private var recordingTimerRunnable: Runnable? = null
+
+    /** The delayed hide after a completed sync, cancelled if a new sync starts meanwhile. */
+    private var bannerHide: Runnable? = null
+
+    private val isRecorderConnected: Boolean get() = currentDevice != null
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         _binding = FragmentHomeBinding.inflate(inflater, container, false)
@@ -71,10 +90,11 @@ class HomeFragment : Fragment() {
     }
 
     private fun setupClickListeners() {
-        // Expand/collapse the device card
+        // Expand/collapse the recorder card; with none connected the tap goes to the connect flow
         binding.deviceCardHeader.setOnClickListener { toggleDeviceCard() }
+        binding.connectRecorderButton.setOnClickListener { openConnectFlow() }
 
-        // Manage device
+        // Manage recorder
         binding.manageButton.setOnClickListener {
             currentDevice?.let { device ->
                 val intent = Intent(requireContext(), DevicePanelActivity::class.java)
@@ -87,18 +107,36 @@ class HomeFragment : Fragment() {
         }
 
         // Recording entry
-        binding.recordCard.setOnClickListener { openRecording() }
+        binding.recordCard.setOnClickListener {
+            if (isRecorderConnected) openRecording() else showConnectHint()
+        }
 
         // Fast Transfer button (inside the syncBanner include)
         binding.syncBanner.fastTransferButton.setOnClickListener {
             showFastTransferDialog()
         }
 
-        // Manual sync: pull new recordings off the device, then push queued uploads to the server
+        // Manual sync: pull new recordings off the recorder, then push queued uploads to the server
         binding.syncNowButton.setOnClickListener {
+            if (!isRecorderConnected) {
+                showConnectHint()
+                return@setOnClickListener
+            }
             syncManager.startSync()
-            org.plaudbridge.app.managers.UploadManager.kick()
+            UploadManager.kick()
         }
+    }
+
+    /** "Connect your recorder first", with the connect flow one tap away. */
+    private fun showConnectHint() {
+        showSnackbar(getString(R.string.sync_connect_first), getString(R.string.connect)) { openConnectFlow() }
+    }
+
+    /** The existing pairing flow: scan, then the connect sheet; returns here once connected. */
+    private fun openConnectFlow() {
+        val intent = Intent(requireContext(), ScanningActivity::class.java)
+        intent.putExtra(ScanningActivity.EXTRA_ADDING_DEVICE, true)
+        startActivity(intent)
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
@@ -167,11 +205,7 @@ class HomeFragment : Fragment() {
         setPaddingRelative(dp(16), 0, dp(16), 0)
         isClickable = true
         setBackgroundResource(selectableBackgroundRes())
-        setOnClickListener {
-            val intent = Intent(requireContext(), ScanningActivity::class.java)
-            intent.putExtra(ScanningActivity.EXTRA_ADDING_DEVICE, true)
-            startActivity(intent)
-        }
+        setOnClickListener { openConnectFlow() }
     }
 
     // MARK: - Data binding
@@ -179,15 +213,16 @@ class HomeFragment : Fragment() {
     private fun observeManagers() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                // Device state
+                // Recorder state
                 launch {
                     deviceManager.connectedDevice.collect { device ->
                         currentDevice = device
                         updateDeviceCard(device)
+                        updateConnectionGating()
                     }
                 }
 
-                // Recording state (updates the record card only; matches iOS — iOS does not show a separate recording banner)
+                // Recording state (updates the record card only; matches iOS)
                 launch {
                     recordingManager.state.collect { state ->
                         updateRecordCard(state)
@@ -203,12 +238,12 @@ class HomeFragment : Fragment() {
 
                 // Recent recordings: the same merged phone + server list the Recordings tab shows
                 launch {
-                    combine(syncManager.files, RecordingsRepository.server) { local, server ->
-                        RecordingsMerger.merge(local, server).take(5)
+                    combine(syncManager.files, RecordingsRepository.server, UploadManager.failedUploads) { local, server, failed ->
+                        RecordingsMerger.merge(local, server, failed).take(5)
                     }.collect { items -> updateRecentRecordings(items) }
                 }
 
-                // Auto-reconnect rejected by a locked device — offer recovery (lifecycle guide §3.3)
+                // Auto-reconnect rejected by a locked recorder: offer recovery (lifecycle guide §3.3)
                 launch {
                     deviceManager.recoveryOffers.collect { device ->
                         offerRecovery(device)
@@ -219,38 +254,43 @@ class HomeFragment : Fragment() {
     }
 
     /**
-     * Auto-reconnect was rejected before the handshake completed — the device is likely
+     * Auto-reconnect was rejected before the handshake completed: the recorder is likely
      * still locked by a previous account. Mirrors iOS MainTabBarController's offer.
      */
     private fun offerRecovery(device: ScannedDevice) {
         if (!isAdded) return
-        androidx.appcompat.app.AlertDialog.Builder(requireContext())
-            .setTitle("Device Locked")
-            .setMessage("${device.name} may still be locked by a previous account. Try to recover it?")
-            .setPositiveButton("Recover") { _, _ ->
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.recorder_locked_title)
+            .setMessage(getString(R.string.recorder_locked_message_fmt, device.name))
+            .setPositiveButton(R.string.recover) { _, _ ->
                 deviceManager.startDeviceRecovery(device)
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
     }
 
-    // MARK: - Device card
+    // MARK: - Recorder card
 
     private fun updateDeviceCard(device: PlaudDevice?) {
         renderOtherDevices(device?.serialNumber)
+        val connected = device != null
+        binding.noRecorderContent.visibility = if (connected) View.GONE else View.VISIBLE
+        binding.deviceCardHeader.visibility = if (connected) View.VISIBLE else View.GONE
         if (device == null) {
-            binding.deviceNameLabel.text = getString(R.string.no_device)
-            binding.statusDot.setBackgroundResource(R.drawable.bg_status_dot_gray)
-            binding.statusLabel.text = getString(R.string.disconnected)
+            // Battery and storage belong to a recorder; with none there is nothing to expand.
+            isDeviceCardExpanded = false
+            binding.deviceExpandedContent.visibility = View.GONE
+            binding.deviceChevron.rotation = 0f
             return
         }
         binding.deviceNameLabel.text = device.displayName
+        binding.statusDot.setBackgroundResource(R.drawable.bg_status_dot)
         binding.statusLabel.text = getString(R.string.connected)
 
         // Battery level. A negative level means "not reported yet" (the SDK hands us -1 until the
-        // device sends it, which showed up as "-1%" on NotePin S \u2014 PLA2-312): show a placeholder
+        // device sends it, which showed up as "-1%" on NotePin S — PLA2-312): show a placeholder
         // and a neutral, empty bar instead of a nonsense number.
-        val chargingPrefix = if (device.isCharging) "\u26A1 " else ""
+        val chargingPrefix = if (device.isCharging) "⚡ " else ""
         val hasBattery = device.batteryLevel >= 0
         binding.batteryValueLabel.text =
             if (hasBattery) "$chargingPrefix${device.batteryLevel}%" else "$chargingPrefix--"
@@ -288,7 +328,26 @@ class HomeFragment : Fragment() {
         }
     }
 
+    /**
+     * Record and Sync now need a recorder. Without one they are dimmed and their tap explains
+     * (see [showConnectHint]) instead of doing nothing or opening a screen that cannot work.
+     */
+    private fun updateConnectionGating() {
+        val alpha = if (isRecorderConnected) 1f else DISABLED_ALPHA
+        binding.syncNowButton.alpha = alpha
+        binding.recordCard.alpha = alpha
+        if (!isRecorderConnected) {
+            binding.recordSubtitleLabel.text = getString(R.string.sync_connect_first)
+        } else if (recordingManager.state.value !is RecordingState.Recording) {
+            binding.recordSubtitleLabel.text = getString(R.string.record_via_device)
+        }
+    }
+
     private fun toggleDeviceCard() {
+        if (!isRecorderConnected) {
+            openConnectFlow()
+            return
+        }
         isDeviceCardExpanded = !isDeviceCardExpanded
         // Animate the height change (mirrors iOS 0.25s constraint animation)
         android.transition.TransitionManager.beginDelayedTransition(
@@ -315,7 +374,8 @@ class HomeFragment : Fragment() {
             }
             else -> {
                 binding.recordTitleLabel.text = getString(R.string.capture_moments)
-                binding.recordSubtitleLabel.text = getString(R.string.record_via_device)
+                binding.recordSubtitleLabel.text =
+                    if (isRecorderConnected) getString(R.string.record_via_device) else getString(R.string.sync_connect_first)
                 stopRecordCardTimer()
             }
         }
@@ -347,22 +407,22 @@ class HomeFragment : Fragment() {
 
     private fun updateSyncBanner(state: SyncState) {
         val bannerRoot = binding.syncBanner.root
-        when (state) {
-            is SyncState.Syncing -> {
+        bannerHide?.let { bannerRoot.removeCallbacks(it) }
+        bannerHide = null
+        when (SyncFeedback.banner(state)) {
+            SyncFeedback.Banner.SHOW -> {
                 fadeInBanner(bannerRoot)
-                updateSyncBannerContent(state.progress, isWiFi = false)
+                updateSyncBannerContent(state.currentProgress ?: return, isWiFi = state is SyncState.WiFiTransferring)
             }
-            is SyncState.WiFiTransferring -> {
-                fadeInBanner(bannerRoot)
-                updateSyncBannerContent(state.progress, isWiFi = true)
+            // The WiFi connect window belongs to the Fast Transfer sheet; hiding here would flash.
+            SyncFeedback.Banner.KEEP -> {}
+            SyncFeedback.Banner.HIDE_SOON -> {
+                val hide = Runnable { if (_binding != null) fadeOutBanner(bannerRoot) }
+                bannerHide = hide
+                bannerRoot.postDelayed(hide, 2000)
             }
-            // Keep the banner untouched during the WiFi connect window (mirrors iOS —
-            // the FastTransferSheet owns that phase; hiding here would make it flash)
-            is SyncState.WiFiConnecting -> {}
-            is SyncState.Completed -> {
-                bannerRoot.postDelayed({ fadeOutBanner(bannerRoot) }, 2000)
-            }
-            else -> fadeOutBanner(bannerRoot)
+            // Idle and Failed: the failure itself is told through MainActivity's snackbar.
+            SyncFeedback.Banner.HIDE -> fadeOutBanner(bannerRoot)
         }
     }
 
@@ -428,7 +488,7 @@ class HomeFragment : Fragment() {
         val row = LayoutInflater.from(requireContext())
             .inflate(R.layout.item_file_row, binding.recentFilesList, false)
         row.findViewById<TextView>(R.id.fileNameLabel).text = RecordingsAdapter.rowTitle(requireContext(), item)
-        row.findViewById<TextView>(R.id.fileMetaLabel).text = RecordingsAdapter.metaLine(requireContext(), item)
+        row.findViewById<TextView>(R.id.fileMetaLabel).text = RecordingsAdapter.metaText(requireContext(), item)
         row.setOnClickListener {
             startActivity(FileDetailActivity.intentFor(requireContext(), item))
         }
@@ -453,6 +513,13 @@ class HomeFragment : Fragment() {
     override fun onDestroyView() {
         super.onDestroyView()
         stopRecordCardTimer()
+        bannerHide?.let { _binding?.syncBanner?.root?.removeCallbacks(it) }
+        bannerHide = null
         _binding = null
+    }
+
+    companion object {
+        /** Opacity of Record and Sync now while no recorder is connected. */
+        const val DISABLED_ALPHA = 0.4f
     }
 }

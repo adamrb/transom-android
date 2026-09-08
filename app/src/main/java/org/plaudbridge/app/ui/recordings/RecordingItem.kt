@@ -11,7 +11,12 @@ import org.plaudbridge.app.models.ServerRecording
  */
 data class RecordingItem(
     val local: RecordingFile?,
-    val server: ServerRecording?
+    val server: ServerRecording?,
+    /**
+     * The phone's last attempt to upload [local] failed (UploadManager.failedUploads). Only
+     * meaningful for a phone-only row still waiting to upload; a server row means it got there.
+     */
+    val uploadFailed: Boolean = false
 ) {
     init {
         require(local != null || server != null) { "a RecordingItem needs a local file or a server recording" }
@@ -20,9 +25,13 @@ data class RecordingItem(
     /**
      * What the meta line says about a recording that is not finished yet. [NONE] is the normal
      * state and prints nothing: a done recording needs no label, and words like "Synced" or
-     * "Uploaded" describe plumbing the user should not have to think about.
+     * "Uploaded" describe plumbing the user should not have to think about. [UPLOAD_FAILED] is
+     * the phone-side counterpart of [FAILED]: the recording is here but did not reach the server.
      */
-    enum class Status { NONE, DOWNLOADING, UPLOADING, TRANSCRIBING, FAILED }
+    enum class Status { NONE, DOWNLOADING, UPLOADING, UPLOAD_FAILED, TRANSCRIBING, FAILED }
+
+    /** The row's action list offers Retry upload. */
+    val canRetryUpload: Boolean get() = status == Status.UPLOAD_FAILED && localId != null
 
     /** Stable identity for adapters and tests: the server id when known, else the local id. */
     val key: String get() = serverId ?: local!!.id
@@ -121,7 +130,7 @@ data class RecordingItem(
                 // Audio dropped on purpose; the row is a link to the server copy, not a download.
                 l.removedFromPhone -> Status.NONE
                 !l.isSynced -> Status.DOWNLOADING
-                !l.uploaded -> Status.UPLOADING
+                !l.uploaded -> if (uploadFailed) Status.UPLOAD_FAILED else Status.UPLOADING
                 // Uploaded but absent from the server list we hold (stale snapshot, or removed
                 // on the server): nothing certain to say, so say nothing.
                 else -> Status.NONE

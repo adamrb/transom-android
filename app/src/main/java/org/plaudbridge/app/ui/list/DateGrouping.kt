@@ -6,7 +6,7 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Day grouping shared by the Files tab and the Library tab so both lists read the same way:
+ * Day grouping shared by the Recordings tab and Home's recent list so both read the same way:
  * newest first, one "Today" / "Yesterday" / "EEE, MMM d" header per calendar day. Pure Kotlin
  * so the header rules are unit-testable; the RecyclerView side lives in [DateGroupedAdapter].
  */
@@ -38,7 +38,11 @@ object DateGrouping {
     }
 
     /** "Today", "Yesterday", or "EEE, MMM d" for the calendar day containing [dateMillis]. */
-    fun headerTitle(dateMillis: Long, now: Long = System.currentTimeMillis()): String {
+    fun headerTitle(dateMillis: Long, now: Long = System.currentTimeMillis()): String =
+        relativeDay(dateMillis, now) ?: SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(Date(dateMillis))
+
+    /** "Today" / "Yesterday" when [dateMillis] falls on those calendar days relative to [now], else null. */
+    private fun relativeDay(dateMillis: Long, now: Long): String? {
         val dayFormat = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
         val dayKey = dayFormat.format(Date(dateMillis))
         val today = Calendar.getInstance().apply { timeInMillis = now }
@@ -46,26 +50,40 @@ object DateGrouping {
         return when (dayKey) {
             dayFormat.format(today.time) -> "Today"
             dayFormat.format(yesterday.time) -> "Yesterday"
-            else -> SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(Date(dateMillis))
+            else -> null
         }
     }
 
-    /** "MMM d  ·  HH:mm" as the Files rows print it. */
-    fun formatDateTime(millis: Long): String {
+    /**
+     * A friendly timestamp, the same one everywhere a recording's time is printed: "Today
+     * 12:25 AM", "Yesterday 6:47 PM", "Sep 3, 6:47 PM", and with the year only once it is not
+     * this one ("Sep 3, 2025, 6:47 PM"). No seconds.
+     */
+    fun formatDateTime(millis: Long, now: Long = System.currentTimeMillis()): String {
         val date = Date(millis)
-        val dateFormat = SimpleDateFormat("MMM d", Locale.getDefault())
-        val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-        return "${dateFormat.format(date)}  ·  ${timeFormat.format(date)}"
+        val time = SimpleDateFormat("h:mm a", Locale.getDefault()).format(date)
+        relativeDay(millis, now)?.let { return "$it $time" }
+        val thisYear = Calendar.getInstance().apply { timeInMillis = now }.get(Calendar.YEAR)
+        val year = Calendar.getInstance().apply { timeInMillis = millis }.get(Calendar.YEAR)
+        val day = if (year == thisYear) SimpleDateFormat("MMM d", Locale.getDefault()).format(date)
+        else SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(date)
+        return "$day, $time"
     }
 
-    /** "Xm Ys" below an hour, "Xh Ym" from an hour on, "--" when unknown (the Files row format). */
+    /**
+     * Compact duration, the same form the detail screen uses: "16s" under a minute, "4m 12s"
+     * under an hour, "2h 19m" from an hour on (seconds dropped there: nobody needs them on a two
+     * hour recording). "--" when the length is not known yet.
+     */
     fun formatDuration(seconds: Long): String {
         if (seconds <= 0) return "--"
-        val total = seconds.toInt()
-        return if (total >= 3600) {
-            String.format("%dh %dm", total / 3600, (total % 3600) / 60)
-        } else {
-            String.format("%dm %ds", total / 60, total % 60)
+        val h = seconds / 3600
+        val m = (seconds % 3600) / 60
+        val s = seconds % 60
+        return when {
+            h > 0 -> "${h}h ${m}m"
+            m > 0 -> "${m}m ${s}s"
+            else -> "${s}s"
         }
     }
 

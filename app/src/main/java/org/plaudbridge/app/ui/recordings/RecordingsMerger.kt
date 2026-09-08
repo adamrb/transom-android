@@ -15,7 +15,15 @@ import org.plaudbridge.app.models.ServerRecording
  */
 object RecordingsMerger {
 
-    fun merge(local: List<RecordingFile>, server: List<ServerRecording>): List<RecordingItem> {
+    /**
+     * [failedUploads] are the phone entries (by [RecordingFile.id]) whose last upload attempt
+     * failed, from UploadManager.failedUploads; they mark their rows so the list can say so.
+     */
+    fun merge(
+        local: List<RecordingFile>,
+        server: List<ServerRecording>,
+        failedUploads: Set<String> = emptySet()
+    ): List<RecordingItem> {
         val byServerId = HashMap<String, RecordingFile>()
         val bySession = HashMap<Pair<String, Long>, RecordingFile>()
         for (file in local) {
@@ -31,10 +39,10 @@ object RecordingsMerger {
                     if (rec.deviceSn.isBlank()) null else bySession[rec.deviceSn to sid]
                 }?.takeIf { it.id !in consumed }
             if (match != null) consumed += match.id
-            items += RecordingItem(local = match, server = rec)
+            items += RecordingItem(local = match, server = rec, uploadFailed = match != null && match.id in failedUploads)
         }
         for (file in local) {
-            if (file.id !in consumed) items += RecordingItem(local = file, server = null)
+            if (file.id !in consumed) items += RecordingItem(local = file, server = null, uploadFailed = file.id in failedUploads)
         }
         return items.sortedByDescending { it.recordedAt }
     }

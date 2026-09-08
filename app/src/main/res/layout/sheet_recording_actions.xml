@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Row actions for one recording (RecordingActionsSheet): icon rows, then a divider and Delete
+     in red. Rows that do not apply to the recording are hidden by the sheet. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_bottom_sheet"
+    android:orientation="vertical"
+    android:paddingTop="12dp"
+    android:paddingBottom="16dp">
+
+    <TextView
+        android:id="@+id/sheetTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:fontFamily="sans-serif-medium"
+        android:maxLines="2"
+        android:paddingStart="24dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="24dp"
+        android:paddingBottom="12dp"
+        android:textColor="@color/dark_gray"
+        android:textSize="16sp" />
+
+    <LinearLayout
+        android:id="@+id/actionRename"
+        style="@style/RecordingActionRow">
+
+        <ImageView
+            style="@style/RecordingActionIcon"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_edit" />
+
+        <TextView
+            style="@style/RecordingActionLabel"
+            android:text="@string/rename" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/actionRetryUpload"
+        style="@style/RecordingActionRow">
+
+        <ImageView
+            style="@style/RecordingActionIcon"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_upload" />
+
+        <TextView
+            style="@style/RecordingActionLabel"
+            android:text="@string/retry_upload" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/actionRetranscribe"
+        style="@style/RecordingActionRow">
+
+        <ImageView
+            style="@style/RecordingActionIcon"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_sync" />
+
+        <TextView
+            style="@style/RecordingActionLabel"
+            android:text="@string/retranscribe" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/actionRemoveFromPhone"
+        style="@style/RecordingActionRow">
+
+        <ImageView
+            style="@style/RecordingActionIcon"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_phone_erase" />
+
+        <TextView
+            style="@style/RecordingActionLabel"
+            android:text="@string/remove_from_phone" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginEnd="24dp"
+        android:layout_marginBottom="8dp"
+        android:background="@color/separator" />
+
+    <LinearLayout
+        android:id="@+id/actionDelete"
+        style="@style/RecordingActionRow">
+
+        <ImageView
+            style="@style/RecordingActionIcon"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_delete"
+            app:tint="@color/red" />
+
+        <TextView
+            style="@style/RecordingActionLabel"
+            android:text="@string/delete"
+            android:textColor="@color/red" />
+    </LinearLayout>
+</LinearLayout>

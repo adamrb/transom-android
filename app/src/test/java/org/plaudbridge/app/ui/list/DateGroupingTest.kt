@@ -54,9 +54,33 @@ class DateGroupingTest {
     }
 
     @Test
-    fun durationFormatMatchesFilesRows() {
+    fun durationIsCompactLikeTheDetailScreen() {
         assertEquals("--", DateGrouping.formatDuration(0))
+        assertEquals("--", DateGrouping.formatDuration(-5))
+        assertEquals("16s", DateGrouping.formatDuration(16))
+        assertEquals("1m 0s", DateGrouping.formatDuration(60))
         assertEquals("1m 5s", DateGrouping.formatDuration(65))
+        assertEquals("4m 12s", DateGrouping.formatDuration(252))
         assertEquals("1h 1m", DateGrouping.formatDuration(3661))
+        assertEquals("2h 19m", DateGrouping.formatDuration(2 * 3600 + 19 * 60 + 40))
+        assertEquals("1h 0m", DateGrouping.formatDuration(3600))
+    }
+
+    private fun at(year: Int, month: Int, day: Int, hour: Int, minute: Int): Long =
+        Calendar.getInstance().apply { set(year, month, day, hour, minute, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis
+
+    @Test
+    fun timestampsAreFriendlyWithNoSeconds() {
+        val previous = Locale.getDefault()
+        Locale.setDefault(Locale.US)
+        try {
+            // now = Sep 7, 2026 14:00
+            assertEquals("Today 12:25 AM", DateGrouping.formatDateTime(at(2026, Calendar.SEPTEMBER, 7, 0, 25), now))
+            assertEquals("Yesterday 6:47 PM", DateGrouping.formatDateTime(at(2026, Calendar.SEPTEMBER, 6, 18, 47), now))
+            assertEquals("Sep 3, 6:47 PM", DateGrouping.formatDateTime(at(2026, Calendar.SEPTEMBER, 3, 18, 47), now))
+            assertEquals("Dec 24, 2025, 9:05 AM", DateGrouping.formatDateTime(at(2025, Calendar.DECEMBER, 24, 9, 5), now))
+        } finally {
+            Locale.setDefault(previous)
+        }
     }
 }

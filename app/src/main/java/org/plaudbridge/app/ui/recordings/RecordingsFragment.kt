@@ -1,22 +1,22 @@
 package org.plaudbridge.app.ui.recordings
 
-import android.content.Context
-import android.content.Intent
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
-import android.widget.EditText
-import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
+import androidx.annotation.VisibleForTesting
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -24,10 +24,15 @@ import org.plaudbridge.app.PlaudBridgeApp
 import org.plaudbridge.app.R
 import org.plaudbridge.app.databinding.FragmentRecordingsBinding
 import org.plaudbridge.app.managers.TitleSyncManager
+import org.plaudbridge.app.managers.UploadManager
 import org.plaudbridge.app.models.SyncProgress
 import org.plaudbridge.app.models.SyncState
 import org.plaudbridge.app.net.ApiClient
 import org.plaudbridge.app.storage.RecordingStore
+import org.plaudbridge.app.ui.common.AppManagers
+import org.plaudbridge.app.ui.common.FriendlyErrors
+import org.plaudbridge.app.ui.common.SyncFeedback
+import org.plaudbridge.app.ui.common.showSnackbar
 import org.plaudbridge.app.ui.filedetail.FileDetailActivity
 import org.plaudbridge.app.ui.home.FastTransferSheet
 
@@ -38,10 +43,11 @@ import org.plaudbridge.app.ui.home.FastTransferSheet
  * This replaced the separate Files (phone) and Library (server) tabs. The split mirrored how
  * the app stores things, not how the user thinks about them: one recording showed up twice
  * with different names and different states, and nobody could say which tab to open. The rows
- * come from [RecordingsMerger] over the phone's sync index ([SyncManagerProtocol.files]) and the
- * server snapshot in [RecordingsRepository]; both are observed, so a finished download, upload
- * or transcription updates the row in place. The server list is refreshed on every visit and on
- * pull; a failed refresh keeps the last snapshot on screen behind a slim error line.
+ * come from [RecordingsMerger] over the phone's sync index ([SyncManagerProtocol.files]), the
+ * server snapshot in [RecordingsRepository] and the upload failures UploadManager remembers;
+ * all three are observed, so a finished download, upload or transcription updates the row in
+ * place. The server list is refreshed on every visit and on pull; a failed refresh keeps the
+ * last snapshot on screen behind a slim error line.
  */
 class RecordingsFragment : Fragment() {
 
@@ -49,7 +55,7 @@ class RecordingsFragment : Fragment() {
     private val binding get() = _binding!!
 
     private val app get() = requireActivity().application as PlaudBridgeApp
-    private val syncManager get() = app.syncManager
+    private val syncManager get() = AppManagers.sync(app)
 
     private var refreshJob: Job? = null
     private var merged: List<RecordingItem> = emptyList()
@@ -61,9 +67,13 @@ class RecordingsFragment : Fragment() {
      */
     private var pollJob: Job? = null
 
+    /** The delayed hide after a completed sync, cancelled if a new sync starts meanwhile. */
+    private var bannerHide: Runnable? = null
+
     private val adapter = RecordingsAdapter(
         onTapped = { item -> startActivity(FileDetailActivity.intentFor(requireContext(), item)) },
-        onLongPressed = { item -> showRowActions(item) }
+        onActions = { item -> showRowActions(item) },
+        diffExecutor = diffExecutorForTests
     )
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
@@ -94,6 +104,14 @@ class RecordingsFragment : Fragment() {
                 render()
             }
         })
+        // The keyboard's search key: the list already filters as you type, so it just puts the
+        // keyboard away and leaves the results.
+        binding.searchField.setOnEditorActionListener { v, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                hideKeyboard(v)
+                true
+            } else false
+        }
 
         binding.syncBanner.fastTransferButton.setOnClickListener {
             if (RecordingStore.fastTransferNeverShowAgain) {
@@ -103,6 +121,12 @@ class RecordingsFragment : Fragment() {
             }
         }
 
+        childFragmentManager.setFragmentResultListener(RecordingActionsSheet.REQUEST_KEY, viewLifecycleOwner) { _, result ->
+            val (action, key) = RecordingActionsSheet.parseResult(result) ?: return@setFragmentResultListener
+            val item = merged.firstOrNull { it.key == key } ?: return@setFragmentResultListener
+            onRowAction(action, item)
+        }
+
         observe()
     }
 
@@ -110,8 +134,8 @@ class RecordingsFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
-                    combine(syncManager.files, RecordingsRepository.server) { local, server ->
-                        RecordingsMerger.merge(local, server)
+                    combine(syncManager.files, RecordingsRepository.server, UploadManager.failedUploads) { local, server, failed ->
+                        RecordingsMerger.merge(local, server, failed)
                     }.collect { items ->
                         merged = items
                         render()
@@ -149,7 +173,10 @@ class RecordingsFragment : Fragment() {
     private fun render() {
         if (_binding == null) return
         val shown = RecordingsMerger.filter(merged, query)
-        adapter.submit(shown)
+        adapter.submit(shown, query)
+        val q = query
+        binding.emptyLabel.text =
+            if (q != null) getString(R.string.search_no_results_fmt, q) else getString(R.string.no_recordings_yet)
         binding.emptyLabel.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE
         binding.recordingsRecyclerView.visibility = if (shown.isEmpty()) View.GONE else View.VISIBLE
         schedulePollIfNeeded()
@@ -218,16 +245,18 @@ class RecordingsFragment : Fragment() {
     // MARK: - Search
 
     private fun toggleSearch() {
-        val showing = binding.searchContainer.visibility == View.VISIBLE
+        val container: TextInputLayout = binding.searchContainer
+        val field: TextInputEditText = binding.searchField
+        val showing = container.visibility == View.VISIBLE
         if (showing) {
-            binding.searchContainer.visibility = View.GONE
-            binding.searchField.setText("")
-            hideKeyboard(binding.searchField)
+            container.visibility = View.GONE
+            field.setText("")
+            hideKeyboard(field)
         } else {
-            binding.searchContainer.visibility = View.VISIBLE
-            binding.searchField.requestFocus()
+            container.visibility = View.VISIBLE
+            field.requestFocus()
             val imm = requireContext().getSystemService(InputMethodManager::class.java)
-            imm?.showSoftInput(binding.searchField, InputMethodManager.SHOW_IMPLICIT)
+            imm?.showSoftInput(field, InputMethodManager.SHOW_IMPLICIT)
         }
     }
 
@@ -240,21 +269,21 @@ class RecordingsFragment : Fragment() {
 
     private fun updateSyncBanner(state: SyncState) {
         val bannerRoot = binding.syncBanner.root
-        when (state) {
-            is SyncState.Syncing -> {
+        bannerHide?.let { bannerRoot.removeCallbacks(it) }
+        bannerHide = null
+        when (SyncFeedback.banner(state)) {
+            SyncFeedback.Banner.SHOW -> {
                 fadeInBanner(bannerRoot)
-                updateBannerContent(state.progress, false)
+                updateBannerContent(state.currentProgress ?: return, state is SyncState.WiFiTransferring)
             }
-            is SyncState.WiFiTransferring -> {
-                fadeInBanner(bannerRoot)
-                updateBannerContent(state.progress, true)
+            SyncFeedback.Banner.KEEP -> {}
+            SyncFeedback.Banner.HIDE_SOON -> {
+                val hide = Runnable { if (_binding != null) fadeOutBanner(bannerRoot) }
+                bannerHide = hide
+                bannerRoot.postDelayed(hide, 2000)
             }
-            // Keep the banner untouched during the WiFi connect window (mirrors iOS)
-            is SyncState.WiFiConnecting -> {}
-            is SyncState.Completed -> {
-                bannerRoot.postDelayed({ fadeOutBanner(bannerRoot) }, 2000)
-            }
-            else -> fadeOutBanner(bannerRoot)
+            // Idle and Failed: the failure itself is told through MainActivity's snackbar.
+            SyncFeedback.Banner.HIDE -> fadeOutBanner(bannerRoot)
         }
     }
 
@@ -301,38 +330,49 @@ class RecordingsFragment : Fragment() {
         banner.fastTransferButton.visibility = if (isWiFi) View.GONE else View.VISIBLE
     }
 
-    // MARK: - Row actions (long press)
+    // MARK: - Row actions (⋮ or long press)
 
     /**
-     * The sheet offers only what applies to this row: Re-transcribe needs a server copy, Remove
-     * from phone needs audio on the phone plus a server copy to fall back to. Rename and Delete
-     * always apply and route themselves.
+     * The sheet offers only what applies to this row: Retry upload needs a failed upload,
+     * Re-transcribe needs a server copy, Remove from phone needs audio on the phone plus a
+     * server copy to fall back to. Rename and Delete always apply and route themselves.
      */
     private fun showRowActions(item: RecordingItem) {
-        val actions = mutableListOf<Pair<String, () -> Unit>>()
-        actions += getString(R.string.rename) to { showRenameDialog(item) }
-        if (item.serverId != null) actions += getString(R.string.retranscribe) to { retranscribe(item) }
-        if (item.canRemoveFromPhone) actions += getString(R.string.remove_from_phone) to { confirmRemoveFromPhone(item) }
-        actions += getString(R.string.delete) to { confirmDelete(item) }
-        AlertDialog.Builder(requireContext())
-            .setTitle(RecordingsAdapter.rowTitle(requireContext(), item))
-            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
-            .show()
+        if (childFragmentManager.findFragmentByTag(RecordingActionsSheet.TAG) != null) return
+        val args = RecordingActionsSheet.argsFor(item, RecordingsAdapter.rowTitle(requireContext(), item))
+        RecordingActionsSheet.newInstance(args).show(childFragmentManager, RecordingActionsSheet.TAG)
+    }
+
+    private fun onRowAction(action: RecordingActionsSheet.Action, item: RecordingItem) {
+        when (action) {
+            RecordingActionsSheet.Action.RENAME -> showRenameDialog(item)
+            RecordingActionsSheet.Action.RETRY_UPLOAD -> retryUpload(item)
+            RecordingActionsSheet.Action.RETRANSCRIBE -> retranscribe(item)
+            RecordingActionsSheet.Action.REMOVE_FROM_PHONE -> confirmRemoveFromPhone(item)
+            RecordingActionsSheet.Action.DELETE -> confirmDelete(item)
+        }
     }
 
     private fun showRenameDialog(item: RecordingItem) {
-        val editText = EditText(requireContext()).apply {
+        val context = requireContext()
+        val layout = TextInputLayout(context).apply {
+            val pad = (24 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        val editText = TextInputEditText(context).apply {
             setText(item.title)
             selectAll()
-            setPadding(48, 32, 48, 32)
+            maxLines = 1
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
         }
-        AlertDialog.Builder(requireContext())
+        layout.addView(editText)
+        MaterialAlertDialogBuilder(context)
             .setTitle(R.string.rename)
-            .setView(editText)
+            .setView(layout)
             .setPositiveButton(R.string.confirm) { _, _ ->
                 val newTitle = editText.text.toString().trim()
                 if (newTitle.isEmpty()) {
-                    toast(getString(R.string.title_required))
+                    showSnackbar(getString(R.string.title_required))
                 } else {
                     runAction { RecordingActions.rename(item, newTitle, serverActions, syncManager) }
                 }
@@ -341,17 +381,24 @@ class RecordingsFragment : Fragment() {
             .show()
     }
 
+    /** Forget the failure and run an upload pass; the row reads "Uploading" again at once. */
+    private fun retryUpload(item: RecordingItem) {
+        val localId = item.localId ?: return
+        UploadManager.retryUpload(localId)
+        showSnackbar(getString(R.string.upload_retrying))
+    }
+
     private fun retranscribe(item: RecordingItem) {
         val serverId = item.serverId ?: return
         runAction(successMessage = getString(R.string.retranscribe_queued)) { RecordingActions.retranscribe(serverId, serverActions) }
     }
 
     private fun confirmRemoveFromPhone(item: RecordingItem) {
-        AlertDialog.Builder(requireContext())
+        MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.remove_from_phone)
             .setMessage(getString(R.string.remove_from_phone_confirm_fmt, RecordingsAdapter.rowTitle(requireContext(), item)))
             .setPositiveButton(R.string.remove_from_phone) { _, _ ->
-                if (RecordingActions.removeFromPhone(item, syncManager)) toast(getString(R.string.removed_from_phone))
+                if (RecordingActions.removeFromPhone(item, syncManager)) showSnackbar(getString(R.string.removed_from_phone))
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
@@ -365,7 +412,7 @@ class RecordingsFragment : Fragment() {
         } else {
             getString(R.string.delete_phone_only_confirm_fmt, shownTitle)
         }
-        AlertDialog.Builder(requireContext())
+        MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.delete)
             .setMessage(message)
             .setPositiveButton(R.string.delete) { _, _ ->
@@ -383,30 +430,34 @@ class RecordingsFragment : Fragment() {
             val result = action()
             if (_binding == null) return@launch
             when (result) {
-                is ApiClient.ActionResult.Ok -> successMessage?.let { toast(it) }
-                is ApiClient.ActionResult.NotFound -> toast(getString(R.string.recording_not_on_server))
-                is ApiClient.ActionResult.AuthError -> toast(getString(R.string.library_auth_failed))
-                is ApiClient.ActionResult.Error -> toast(getString(R.string.server_request_failed_fmt, result.message))
+                is ApiClient.ActionResult.Ok -> successMessage?.let { showSnackbar(it) }
+                is ApiClient.ActionResult.NotFound -> showSnackbar(getString(R.string.recording_not_on_server))
+                is ApiClient.ActionResult.AuthError -> showSnackbar(getString(R.string.library_auth_failed))
+                // The server's own sentence (its `detail`) when it sent one; never a code.
+                is ApiClient.ActionResult.Error ->
+                    showSnackbar(FriendlyErrors.forDisplay(result.message, getString(R.string.server_action_failed)))
             }
             refresh()
         }
-    }
-
-    private fun toast(message: String) {
-        Toast.makeText(requireContext(), message, Toast.LENGTH_SHORT).show()
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
         refreshJob?.cancel()
         cancelPoll()
+        bannerHide?.let { _binding?.syncBanner?.root?.removeCallbacks(it) }
+        bannerHide = null
         _binding = null
     }
 
     companion object {
         /** Swapped by tests; production always uses the ApiClient-backed default. */
-        @androidx.annotation.VisibleForTesting
+        @VisibleForTesting
         var serverActions: ServerRecordingActions = ApiServerRecordingActions
+
+        /** Tests make the list diff synchronous; production diffs on a background thread. */
+        @VisibleForTesting
+        var diffExecutorForTests: java.util.concurrent.Executor? = null
 
         /** How often the list is re-read while a shown row is still being transcribed. */
         const val TRANSCRIPTION_POLL_INTERVAL_MS = 5_000L

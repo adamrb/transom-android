@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Recordings list, Home and main navigation copy (UX overhaul, branch ux/android-list). -->
+<resources>
+    <!-- Recorder connection gating on Home -->
+    <string name="connect_recorder">Connect your recorder</string>
+    <string name="sync_connect_first">Connect your recorder first</string>
+    <string name="no_recorder_connected">No recorder connected</string>
+
+    <!-- Sync outcomes (snackbars) -->
+    <string name="sync_failed">Couldn\'t sync from your recorder.</string>
+    <string name="sync_failed_timeout">Your recorder stopped responding. Check that it\'s on and nearby.</string>
+    <string name="sync_failed_wifi">Fast Transfer didn\'t finish.</string>
+
+    <!-- Row status and actions -->
+    <string name="status_upload_failed">Upload failed</string>
+    <string name="retry_upload">Retry upload</string>
+    <string name="upload_retrying">Retrying the upload</string>
+    <string name="more_actions">More actions</string>
+
+    <!-- Search -->
+    <string name="search">Search</string>
+    <string name="search_no_results_fmt">Nothing matches “%1$s”</string>
+
+    <!-- Server errors shown when the server gave no sentence of its own -->
+    <string name="server_action_failed">Couldn\'t reach your server. Try again.</string>
+
+    <!-- Notices about the recorder's account binding (from Plaud's cloud) -->
+    <string name="recorder_notice_title">About your recorder</string>
+
+    <!-- Recovery offer for a recorder still locked by a previous account -->
+    <string name="recorder_locked_title">Recorder locked</string>
+    <string name="recorder_locked_message_fmt">%1$s may still be locked by a previous account. Try to recover it?</string>
+    <string name="recover">Recover</string>
+</resources>
