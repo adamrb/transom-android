@@ -113,6 +113,7 @@
     <string name="status_transcribing_percent_fmt">Transcribing · %1$d%%</string>
     <string name="status_waiting_to_transcribe">Waiting to transcribe</string>
     <string name="status_identifying_speakers">Identifying speakers</string>
+    <string name="status_cleaning_up">Cleaning up</string>
     <string name="status_summarizing">Summarizing</string>
     <string name="status_failed">Failed</string>
     <!-- Row title for a finished recording in which the server heard no speech and that has no title -->

@@ -102,6 +102,8 @@ data class ServerRecording(
         const val STAGE_QUEUED = "queued"
         const val STAGE_TRANSCRIBING = "transcribing"
         const val STAGE_DIARIZING = "diarizing"
+        /** The server's LLM cleanup pass (names, numbers, fillers) between speakers and summary. */
+        const val STAGE_CLEANING = "cleaning"
         const val STAGE_SUMMARIZING = "summarizing"
 
         /**

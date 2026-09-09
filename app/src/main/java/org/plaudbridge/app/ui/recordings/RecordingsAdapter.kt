@@ -104,6 +104,7 @@ class RecordingsAdapter(
             return when (rec.stage) {
                 ServerRecording.STAGE_QUEUED -> context.getString(R.string.status_waiting_to_transcribe)
                 ServerRecording.STAGE_DIARIZING -> context.getString(R.string.status_identifying_speakers)
+                ServerRecording.STAGE_CLEANING -> context.getString(R.string.status_cleaning_up)
                 ServerRecording.STAGE_SUMMARIZING -> context.getString(R.string.status_summarizing)
                 else -> rec.progressPercent?.let { context.getString(R.string.status_transcribing_percent_fmt, it) }
                     ?: context.getString(R.string.status_transcribing)

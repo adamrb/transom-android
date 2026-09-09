@@ -105,6 +105,7 @@ class RecordingsAdapterTest {
         assertEquals("Transcribing", status(transcribing(""""stage":"transcribing"""")))
         assertEquals("Transcribing · 42%", status(transcribing(""""stage":"transcribing","progress":0.428""")))
         assertEquals("Identifying speakers", status(transcribing(""""stage":"diarizing"""")))
+        assertEquals("Cleaning up", status(transcribing(""""stage":"cleaning"""")))
         assertEquals("Summarizing", status(transcribing(""""stage":"summarizing"""")))
         // An older server sends no stage: the percentage still shows when it is there.
         assertEquals("Transcribing · 7%", status(transcribing(""""progress":0.0799""")))
