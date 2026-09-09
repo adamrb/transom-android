@@ -165,14 +165,22 @@ class MainActivity : AppCompatActivity(), SnackbarHost {
     }
 
     private fun ensureBackgroundSyncService() {
-        if (!DeviceConnectionService.isEligible()) {
-            DeviceConnectionService.sync(this) // stops a stale instance, no-op otherwise
-            return
-        }
+        // The permission covers the connection notification AND the transcript/automation
+        // notifications, so it is asked for as soon as either has a reason to exist: a paired
+        // recorder or a configured server.
         val needsPrompt = Build.VERSION.SDK_INT >= 33 &&
             !RecordingStore.notificationPermissionAsked &&
+            (DeviceConnectionService.isEligible() || RecordingStore.isServerConfigured) &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
                 PackageManager.PERMISSION_GRANTED
+        if (!DeviceConnectionService.isEligible()) {
+            DeviceConnectionService.sync(this) // stops a stale instance, no-op otherwise
+            if (needsPrompt) {
+                RecordingStore.notificationPermissionAsked = true
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            return
+        }
         if (needsPrompt) {
             RecordingStore.notificationPermissionAsked = true
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)

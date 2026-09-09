@@ -53,6 +53,20 @@
             android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="13sp"
             android:visibility="gone" />
+
+        <!-- What the automations did with the recording ("Vault notes: Filed: Life/…") -->
+        <TextView
+            android:id="@+id/fileAutomationsLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:drawablePadding="4dp"
+            android:ellipsize="end"
+            android:fontFamily="sans-serif"
+            android:maxLines="1"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textSize="13sp"
+            android:visibility="gone" />
     </LinearLayout>
 
     <ImageButton

@@ -263,6 +263,12 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
          */
         private val liveScreens = mutableMapOf<String, FileDetailActivity>()
 
+        /**
+         * A detail screen for this server recording is in front of the user right now (resumed,
+         * not merely alive behind another activity or the home screen): notifications stay quiet.
+         */
+        fun isShowing(serverId: String): Boolean = liveScreens[serverId]?.inForeground == true
+
         /** An answer that leaves open whether the server ran the router anyway (timeout, 5xx, lost response). */
         private fun isAmbiguousRerunFailure(result: ApiClient.ActionResult): Boolean =
             result is ApiClient.ActionResult.Error && result.code != 409
@@ -1044,7 +1050,11 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
                     // shows up and keep polling for the agents. Not for a recording with no
                     // speech in it: there is nothing to route, so no run is coming.
                     if (isNoSpeech) clearRoutingWait()
-                    if (arrived) refreshRouting(awaitRun = !isNoSpeech)
+                    if (arrived) {
+                        refreshRouting(awaitRun = !isNoSpeech)
+                        // The outcomes should reach the user even after this screen is gone.
+                        if (!isNoSpeech) watchAutomationsAfterTranscript(rec.id)
+                    }
                 }
                 is ApiClient.TranscriptResult.Pending -> {
                     transcriptWasPending = true
@@ -1069,8 +1079,15 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
         serverKnowsRecording = true
         val file = currentFile ?: return
         if (file.transcriptJSON == rawJson) return
+        val firstCopy = file.transcriptJSON == null
         TitleSyncManager.storeTranscript(file.id, rawJson)
         currentFile = findFile(file.id) ?: file
+        // The phone's first copy of this transcript: the recording leaves the background title
+        // sync's work list here, so its automations are followed from here too (a recording that
+        // finished before its screen opened never reads as "pending" to this screen).
+        if (firstCopy && !ServerRecording.transcriptSaysNoSpeech(rawJson)) {
+            serverRecordingId?.let { watchAutomationsAfterTranscript(it) }
+        }
     }
 
     /**
@@ -1651,6 +1668,16 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
                 is ApiClient.RetryResult.Ok -> {
                     snack(getString(R.string.automation_retry_queued))
                     refreshRouting()
+                    // Follow the retried hand-off beyond this screen: every OTHER hand-off on
+                    // screen is known, this one (same id, next attempt) is what to wait for.
+                    serverRecordingId?.let { serverId ->
+                        val others = routingRuns.orEmpty().flatMap { it.deliveries }.map { it.id }.filter { it != d.id }.toSet()
+                        val title = currentFile?.displayName ?: serverRecording?.displayTitle
+                        org.plaudbridge.app.managers.AutomationWatcher.watch(
+                            serverId, currentFile?.id, title, others,
+                            forgetDeliveryIds = setOf(d.id), forgetRunIds = setOfNotNull(d.routerRunId)
+                        )
+                    }
                 }
                 // The delivery moved on without us (retried elsewhere, or it succeeded after
                 // all): the refreshed section is the answer, no dialog needed.
@@ -1701,12 +1728,20 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
             snack(getString(R.string.automations_retrying_earlier), Snackbar.LENGTH_LONG)
         }
         pendingReruns[serverId] = intent
+        // Follow the outcomes beyond this screen from the moment the request goes out: routing
+        // can take minutes and the user may well have left before the server answers. A definite
+        // failure below takes the watch back; an ambiguous one may still have produced a run.
+        watchAutomations(serverId)
         rerunScope.launch {
             val result = try {
                 serverSource.rerunRouting(serverId, intent.key, intent.instructions)
             } catch (e: Throwable) {
                 rerunsInFlight.remove(serverId)
+                org.plaudbridge.app.managers.AutomationWatcher.unwatch(serverId)
                 throw e
+            }
+            if (result !is ApiClient.ActionResult.Ok && !isAmbiguousRerunFailure(result)) {
+                org.plaudbridge.app.managers.AutomationWatcher.unwatch(serverId)
             }
             // Only companion state and ids from here: this coroutine may outlive the screen that
             // started it by minutes and must not keep that screen (and its views) alive.
@@ -1775,6 +1810,30 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
             }
             else -> showAlert(getString(R.string.automations), actionErrorMessage(result))
         }
+    }
+
+    /**
+     * Follow this recording's automations beyond the screen (AutomationWatcher posts a
+     * notification per outcome). Every hand-off already on screen is passed as known so the
+     * previous run's results are not announced again.
+     */
+    private fun watchAutomations(serverId: String) {
+        val runs = routingRuns.orEmpty()
+        val knownDeliveries = runs.flatMap { it.deliveries }.map { it.id }.toSet()
+        val knownRuns = runs.map { it.id }.toSet()
+        val title = currentFile?.displayName ?: serverRecording?.displayTitle
+        org.plaudbridge.app.managers.AutomationWatcher.watch(serverId, currentFile?.id, title, knownDeliveries, knownRuns)
+    }
+
+    /**
+     * Same, when a transcript just landed: nothing on screen is passed as known, because the
+     * routing section may already show the run this transcript produced (the two fetches race)
+     * and marking it known would silence its outcomes. History is told apart by what was
+     * announced before, which the watcher tracks itself.
+     */
+    private fun watchAutomationsAfterTranscript(serverId: String) {
+        val title = currentFile?.displayName ?: serverRecording?.displayTitle
+        org.plaudbridge.app.managers.AutomationWatcher.watch(serverId, currentFile?.id, title)
     }
 
     /** One ambiguous rerun being reconciled, see [reconcileRerun]. [release] is idempotent. */
@@ -1894,7 +1953,10 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
                     val arrived = transcriptArrived()
                     storeServerTranscript(outcome.rawJson)
                     render()
-                    if (arrived && serverRecordingId != null) refreshRouting(awaitRun = true)
+                    if (arrived && serverRecordingId != null) {
+                        refreshRouting(awaitRun = true)
+                        if (!isNoSpeech) serverRecordingId?.let { watchAutomationsAfterTranscript(it) }
+                    }
                 }
                 is ApiClient.TranscriptResult.Pending -> {
                     transcriptWasPending = true

@@ -32,6 +32,8 @@ object RecordingStore {
     private const val KEY_ADVANCED_SETTINGS_EXPANDED = "advanced_settings_expanded"
     private const val KEY_APPEARANCE = "appearance"
     private const val KEY_HIDDEN_SESSIONS = "hidden_sessions"
+    private const val KEY_WATCHED_AUTOMATIONS = "watched_automations"
+    private const val KEY_ANNOUNCED_AUTOMATIONS = "announced_automations"
     private const val RECORDINGS_FILE = "recordings.json"
 
     private lateinit var appContext: Context
@@ -226,6 +228,19 @@ object RecordingStore {
     var notificationPermissionAsked: Boolean
         get() = prefs.getBoolean(KEY_NOTIF_PERMISSION_ASKED, false)
         set(value) = prefs.edit().putBoolean(KEY_NOTIF_PERMISSION_ASKED, value).apply()
+
+    /**
+     * Recordings whose automations the app is waiting on, as AutomationWatcher's JSON. Persisted
+     * so a WorkManager-started process after process death still knows what to poll.
+     */
+    var watchedAutomationsJson: String?
+        get() = prefs.getString(KEY_WATCHED_AUTOMATIONS, null)
+        set(value) = prefs.edit().putString(KEY_WATCHED_AUTOMATIONS, value).apply()
+
+    /** Hand-offs and router runs already announced, as AutomationWatcher's JSON (bounded there). */
+    var announcedAutomationsJson: String?
+        get() = prefs.getString(KEY_ANNOUNCED_AUTOMATIONS, null)
+        set(value) = prefs.edit().putString(KEY_ANNOUNCED_AUTOMATIONS, value).apply()
 
     /** "Never show again" preference for the WiFi fast-transfer confirmation sheet. */
     var fastTransferNeverShowAgain: Boolean
@@ -654,6 +669,9 @@ object RecordingStore {
             saveFiles(files)
             // Same reasoning as removedFromPhone above; Delete tombstones are permanent.
             saveHiddenSessions(loadHiddenSessions().filterNot { it.untilServerSwitch })
+            // The ids in these belong to the old server; polling them on the new one is noise.
+            watchedAutomationsJson = null
+            announcedAutomationsJson = null
         }
     }
 

@@ -123,6 +123,18 @@ class SettingsFragment : Fragment() {
         renderAppearanceRow()
         binding.appearanceRow.setOnClickListener { showAppearanceDialog() }
 
+        // Transcript and automation notifications each have a channel; the system screen is
+        // where they are switched, so the row goes straight there.
+        binding.notificationsRow.setOnClickListener {
+            try {
+                startActivity(org.plaudbridge.app.common.AppNotifications.settingsIntent(requireContext()))
+            } catch (e: android.content.ActivityNotFoundException) {
+                com.google.android.material.snackbar.Snackbar
+                    .make(binding.root, R.string.notifications_unavailable, com.google.android.material.snackbar.Snackbar.LENGTH_SHORT)
+                    .show()
+            }
+        }
+
         // Bridge server (URL + auth token)
         renderServerCard()
         binding.editServerButton.setOnClickListener { showEditServerDialog() }

@@ -114,6 +114,9 @@ data class RecordingItem(
     val marksCount: Int
         get() = (server?.marks?.takeIf { it.isNotEmpty() } ?: local?.marks ?: emptyList()).size
 
+    /** What the automations did with the recording, when the server has run them for it. */
+    val automations: org.plaudbridge.app.models.AutomationsSummary? get() = server?.automations
+
     val status: Status
         get() {
             val s = server

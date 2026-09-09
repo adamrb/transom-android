@@ -50,7 +50,9 @@ data class ServerRecording(
      */
     val matchField: String? = null,
     /** About 160 characters around the first hit, ellipsised by the server; null when none. */
-    val matchSnippet: String? = null
+    val matchSnippet: String? = null,
+    /** What the latest automations run did with the recording; null when it never ran. */
+    val automations: AutomationsSummary? = null
 ) {
     /** Name for lists and headers: the AI/manual title when the server has one, else the file name. */
     val displayTitle: String
@@ -143,7 +145,8 @@ data class ServerRecording(
                 progress = obj.optDouble("progress", Double.NaN).takeIf { !it.isNaN() },
                 stage = obj.optNullableString("stage")?.takeIf { it.isNotBlank() },
                 matchField = obj.optNullableString("match_field")?.takeIf { it.isNotBlank() },
-                matchSnippet = obj.optNullableString("match_snippet")?.takeIf { it.isNotBlank() }
+                matchSnippet = obj.optNullableString("match_snippet")?.takeIf { it.isNotBlank() },
+                automations = AutomationsSummary.fromJson(obj.optJSONObject("automations"))
             )
         }
 

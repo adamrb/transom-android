@@ -221,9 +221,9 @@ class RecordingsFragment : Fragment() {
     private fun schedulePollIfNeeded() {
         cancelPoll()
         if (_binding == null || isHidden || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
-        if (!shouldPoll(RecordingsMerger.filter(merged, query))) return
+        val interval = pollIntervalMs(RecordingsMerger.filter(merged, query)) ?: return
         pollJob = viewLifecycleOwner.lifecycleScope.launch {
-            kotlinx.coroutines.delay(TRANSCRIPTION_POLL_INTERVAL_MS)
+            kotlinx.coroutines.delay(interval)
             refresh(quiet = true)
         }
     }
@@ -464,7 +464,23 @@ class RecordingsFragment : Fragment() {
         /** How often the list is re-read while a shown row is still being transcribed. */
         const val TRANSCRIPTION_POLL_INTERVAL_MS = 5_000L
 
+        /**
+         * How often while a shown row's automations are still working: their line changes once,
+         * minutes (or, for a Claude session, hours) later, so a slow cadence is enough.
+         */
+        const val AUTOMATIONS_POLL_INTERVAL_MS = 30_000L
+
         /** The list keeps polling only while a row the user can see is still being transcribed. */
-        fun shouldPoll(shown: List<RecordingItem>): Boolean = shown.any { it.isTranscribing }
+        fun shouldPoll(shown: List<RecordingItem>): Boolean = pollIntervalMs(shown) != null
+
+        /**
+         * The poll cadence the shown rows call for: fast while one is being transcribed, slow
+         * while one only has automations still working, none once everything has settled.
+         */
+        fun pollIntervalMs(shown: List<RecordingItem>): Long? = when {
+            shown.any { it.isTranscribing } -> TRANSCRIPTION_POLL_INTERVAL_MS
+            shown.any { it.automations?.isWorking == true } -> AUTOMATIONS_POLL_INTERVAL_MS
+            else -> null
+        }
     }
 }

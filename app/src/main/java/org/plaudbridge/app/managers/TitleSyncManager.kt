@@ -65,6 +65,34 @@ object TitleSyncManager {
     internal var onFilesChanged: () -> Unit = { SyncManager.shared.refreshFilesFromStore() }
 
     /**
+     * A transcript the user was waiting for has just been stored by a pass (not a refetch of a
+     * pre-title document, and not the detail screen's own fetch, where the user is looking at
+     * it). The default tells the user with a notification and starts following the recording's
+     * automations so their outcomes are announced too. Test seam.
+     */
+    internal var onTranscriptStored: (file: RecordingFile, rawJson: String) -> Unit = { file, rawJson ->
+        val serverId = file.serverId
+        if (serverId != null) {
+            val context = try { PlaudBridgeApp.instance } catch (e: UninitializedPropertyAccessException) { null }
+            // The detail screen and this manager poll independently; when the user is looking
+            // at the very recording whose transcript just landed, the screen shows it and a
+            // notification would only nag.
+            val onScreen = try {
+                org.plaudbridge.app.ui.filedetail.FileDetailActivity.isShowing(serverId)
+            } catch (t: Throwable) {
+                false
+            }
+            if (context != null && !onScreen) {
+                org.plaudbridge.app.common.AppNotifications.transcriptReady(context, file.id, serverId, file.displayName, rawJson)
+            }
+            // Nothing to route when the server heard nothing: no router run is coming.
+            if (!org.plaudbridge.app.models.ServerRecording.transcriptSaysNoSpeech(rawJson)) {
+                AutomationWatcher.watch(serverId, file.id, file.displayName)
+            }
+        }
+    }
+
+    /**
      * Runs after a stale server id was replaced (test seam). The default starts the marks sync:
      * RecordingStore.replaceServerId resets marksSynced so the rebuilt record gets its marks, and
      * with no upload or device connect necessarily coming, nothing else would issue that PATCH.
@@ -272,6 +300,7 @@ object TitleSyncManager {
                         storeTranscript(rec.id, result.rawJson)
                         stored++
                         AppLog.i(TAG, "Stored transcript/title for serverId=$serverId")
+                        if (rec.id !in legacyIds) notifyTranscriptStored(rec.id, result.rawJson)
                     }
                 }
                 ApiClient.TranscriptResult.Pending -> if (rec.id in legacyIds) skipped++ else pending++
@@ -401,6 +430,20 @@ object TitleSyncManager {
             }
         } catch (e: Exception) {
             false
+        }
+    }
+
+    /**
+     * Best-effort like [notifyFilesChanged]: the transcript is already persisted, and a failure
+     * to notify must not count as a fetch failure. Re-reads the record so the callback sees the
+     * title that [storeTranscript] just captured.
+     */
+    private fun notifyTranscriptStored(fileId: String, rawJson: String) {
+        try {
+            val file = RecordingStore.allFiles.firstOrNull { it.id == fileId } ?: return
+            onTranscriptStored(file, rawJson)
+        } catch (t: Throwable) {
+            AppLog.w(TAG, "transcript-stored notification failed", t)
         }
     }
 

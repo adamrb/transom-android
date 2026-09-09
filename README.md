@@ -109,6 +109,12 @@ phone's offline audio. Rows only carry a status word while something is still ha
 Remove from phone (keeps the server copy) and Delete (server and phone; the recorder is never
 touched). Searching filters the list on the phone.
 
+Under a row whose automations ran, a third line says what they did, straight from the server's
+`automations` summary: "**Vault notes:** Filed: Life/Topics/Dogs.md", "**Ask Claude:** Working",
+"No automation matched"; in the error colour when a hand-off failed or never reported. The
+recording's detail screen has the full history (every run, the router's reasons, each hand-off
+with its outcome and a Retry).
+
 The server's own web dashboard (automations editor, full server view) is still reachable from
 **Settings → Web dashboard**. It runs in a WebView locked to your server's origin: the token is
 only injected there, external links open in the system browser, and changing the server host
@@ -136,11 +142,33 @@ Scanned setup QRs are confirmed before use: the app shows the canonical ASCII ho
 the hosted `version_code` is strictly greater than the installed one). Bump `versionCode` /
 `versionName` in `app/build.gradle` for each release you upload.
 
+### Notifications
+
+The app tells you when the pipeline has done something, on two Android notification channels
+you can switch off independently under **Settings → Notifications** (the system screen):
+
+- **Transcripts**: one notification per recording when its transcript and summary land,
+  titled with the recording's name and showing the first line of the summary (or "No speech
+  was found"). Posted by the background title fetch (`TitleSyncManager`), not when you are
+  already looking at the recording.
+- **Automations**: one notification per hand-off when the automation reports back, e.g.
+  "Work meetings done: Created: Work/Meetings/2026/Q3/…", "Ask Claude failed: …", and a "No
+  automation matched" line when the router looked and applied nothing. `AutomationWatcher`
+  polls `GET /recordings/{id}/routing` for every recording whose transcript just arrived (or
+  whose automations you ran by hand), in-app for a few minutes and then from a WorkManager
+  request that survives process death, and announces each outcome exactly once (ids are
+  remembered). Watches end when nothing is still working, when the server no longer knows the
+  recording, or after an hour.
+
+Tapping either notification opens the recording. Both need the notification permission on
+Android 13+, which the app asks for once when a server is configured or a recorder is paired.
+
 ### Settings
 
 | Setting | Notes |
 |---|---|
 | Automatic sync | Pull new recordings whenever the device connects / stops recording |
+| Notifications | Opens the system screen with the Transcripts and Automations channels |
 | Delete after upload | Remove from device only after the server confirms (default off) |
 | Bridge server | Edit URL/token; changes are verified against the server before saving. Switching to a different server host resets local upload/transcript state — recordings re-upload to the new server (it deduplicates) |
 | Plaud cloud region | `platform-us.plaud.ai` (default) or `platform-jp.plaud.ai`; restart to apply |

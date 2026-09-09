@@ -46,6 +46,7 @@ class TitleSyncWorkerTest {
             response(id)
         }
         TitleSyncManager.onFilesChanged = {}
+        TitleSyncManager.onTranscriptStored = { _, _ -> } // notifications not under test
         scheduleCalls.set(0)
         TitleSyncManager.scheduler = { scheduleCalls.incrementAndGet() }
     }

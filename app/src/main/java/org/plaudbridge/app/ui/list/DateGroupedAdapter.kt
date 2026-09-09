@@ -81,6 +81,9 @@ abstract class DateGroupedAdapter<T : Any>(
     /** Optional third line (a search snippet); null hides it. */
     protected open fun rowSnippet(context: Context, item: T): CharSequence? = null
 
+    /** A line under the row about what happened to the item afterwards (automations); null hides it. */
+    protected open fun rowFootnote(context: Context, item: T): CharSequence? = null
+
     protected abstract fun onRowTapped(item: T)
 
     /** Long-press hook; default does nothing. */
@@ -128,6 +131,9 @@ abstract class DateGroupedAdapter<T : Any>(
         val snippet = rowSnippet(context, item)
         holder.snippet.text = snippet
         holder.snippet.visibility = if (snippet.isNullOrEmpty()) View.GONE else View.VISIBLE
+        val footnote = rowFootnote(context, item)
+        holder.footnote.text = footnote
+        holder.footnote.visibility = if (footnote.isNullOrEmpty()) View.GONE else View.VISIBLE
         holder.more.visibility = if (hasRowActions(item)) View.VISIBLE else View.GONE
         if (!full) return
         holder.itemView.setOnClickListener { currentItem(holder)?.let(::onRowTapped) }
@@ -156,6 +162,7 @@ abstract class DateGroupedAdapter<T : Any>(
         val name: TextView = view.findViewById(R.id.fileNameLabel)
         val meta: TextView = view.findViewById(R.id.fileMetaLabel)
         val snippet: TextView = view.findViewById(R.id.fileSnippetLabel)
+        val footnote: TextView = view.findViewById(R.id.fileAutomationsLabel)
         val more: ImageView = view.findViewById(R.id.moreButton)
     }
 }

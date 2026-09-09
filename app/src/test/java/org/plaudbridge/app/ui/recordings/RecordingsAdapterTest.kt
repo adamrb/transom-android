@@ -35,6 +35,41 @@ class RecordingsAdapterTest {
 
     private fun meta(item: RecordingItem) = RecordingsAdapter.metaLine(context, item)
 
+    private fun serverWithAutomations(json: String?) = ServerRecording.fromJson(
+        JSONObject("""{"id":"s1","device_sn":"SN","session_id":1,"filename":"a.mp3","status":"done","duration_s":61.0,"automations":${json ?: "null"}}""")
+    )
+
+    @Test
+    fun automationsLineIsAbsentWhenTheyNeverRan() {
+        assertEquals(null, RecordingsAdapter.automationsText(context, RecordingItem(null, serverWithAutomations(null))))
+        assertEquals(null, RecordingsAdapter.automationsText(context, RecordingItem(local("/a", true), null)))
+    }
+
+    @Test
+    fun automationsLineShowsTheServersOneLinerWithRouteLabelsBold() {
+        val item = RecordingItem(null, serverWithAutomations(
+            """{"state":"done","line":"Vault notes: Filed: Life/Topics/Dogs.md","items":[{"route_name":"Vault notes","state":"done","summary":"Filed: Life/Topics/Dogs.md"}]}"""
+        ))
+        val text = RecordingsAdapter.automationsText(context, item) as android.text.Spanned
+        assertEquals("Vault notes: Filed: Life/Topics/Dogs.md", text.toString())
+        val bold = text.getSpans(0, text.length, android.text.style.StyleSpan::class.java)
+        assertEquals(1, bold.size)
+        assertEquals("Vault notes:", text.subSequence(text.getSpanStart(bold[0]), text.getSpanEnd(bold[0])).toString())
+        assertEquals(0, text.getSpans(0, text.length, android.text.style.ForegroundColorSpan::class.java).size)
+    }
+
+    @Test
+    fun failedAutomationsLineIsColouredAsAnError() {
+        val item = RecordingItem(null, serverWithAutomations(
+            """{"state":"failed","line":"Ask Claude: HTTP 500","items":[{"route_name":"Ask Claude","state":"failed","summary":"HTTP 500"}]}"""
+        ))
+        val text = RecordingsAdapter.automationsText(context, item) as android.text.Spanned
+        assertEquals(1, text.getSpans(0, text.length, android.text.style.ForegroundColorSpan::class.java).size)
+        val unknown = RecordingItem(null, serverWithAutomations("""{"state":"unknown","line":"Ask Claude: No result was reported","items":[]}"""))
+        assertEquals(1, (RecordingsAdapter.automationsText(context, unknown) as android.text.Spanned)
+            .getSpans(0, 5, android.text.style.ForegroundColorSpan::class.java).size)
+    }
+
     @Test
     fun doneRowShowsOnlyDateTimeAndDuration() {
         val item = RecordingItem(null, server("done"))

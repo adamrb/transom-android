@@ -50,6 +50,9 @@ class PlaudBridgeApp : Application() {
         // Settings > Appearance, before any activity inflates: the DayNight theme picks its
         // palette from the delegate's default night mode.
         RecordingStore.appearance.apply()
+        // Transcript / automation channels exist from the first launch, so Settings >
+        // Notifications shows them before the first notification is ever posted.
+        org.plaudbridge.app.common.AppNotifications.ensureChannels(this)
         // Reconcile the index with the filesystem: recordings whose exported audio vanished
         // (legacy cacheDir eviction, user "clear cache") become unsynced again so the sync flow
         // re-downloads them while the recorder copy still exists.
@@ -99,8 +102,10 @@ class PlaudBridgeApp : Application() {
                 val wasBackground = startedCount == 0
                 startedCount++
                 if (!wasBackground || USE_MOCK) return
-                // Returning to the foreground: retry any queued server uploads.
+                // Returning to the foreground: retry any queued server uploads, and check on
+                // automations still being followed.
                 org.plaudbridge.app.managers.UploadManager.kick()
+                org.plaudbridge.app.managers.AutomationWatcher.kick()
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                     if (RecordingStore.lastConnectedDeviceSN != null &&
                         RecordingStore.userId != null

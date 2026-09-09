@@ -71,6 +71,8 @@ class TitleSyncManagerTest {
     private val filesChanged = AtomicInteger()
     private val scheduleCalls = AtomicInteger()
     private val repairKicks = AtomicInteger()
+    /** File ids handed to the transcript-stored seam (the notification hook). */
+    private val transcriptsStored = mutableListOf<String>()
 
     @Before
     fun setUp() {
@@ -91,6 +93,8 @@ class TitleSyncManagerTest {
         TitleSyncManager.onFilesChanged = { filesChanged.incrementAndGet() }
         scheduleCalls.set(0)
         TitleSyncManager.scheduler = { scheduleCalls.incrementAndGet() }
+        transcriptsStored.clear()
+        TitleSyncManager.onTranscriptStored = { file, _ -> synchronized(transcriptsStored) { transcriptsStored.add(file.id) } }
         TitleSyncManager.inAppPollDelayMs = 50L
         TitleSyncManager.resetLegacyAttemptsForTest()
         org.plaudbridge.app.ui.recordings.RecordingsRepository.reset()
@@ -137,6 +141,51 @@ class TitleSyncManagerTest {
             Thread.sleep(25)
         }
         fail("Timed out waiting for: $what")
+    }
+
+    // MARK: - transcript-stored hook (notifications)
+
+    @Test
+    fun awaitingTranscriptStoredFiresHookWithTitledFile() = runBlocking {
+        val rec = addRecording(1, "srv-1")
+        var seenTitle: String? = null
+        TitleSyncManager.onTranscriptStored = { file, raw ->
+            synchronized(transcriptsStored) { transcriptsStored.add(file.id) }
+            seenTitle = file.displayName
+            assertTrue(raw.contains("Fresh AI title"))
+        }
+        source.script("srv-1", ready("Fresh AI title"))
+
+        val pass = TitleSyncManager.runPass()
+
+        assertEquals(1, pass.stored)
+        assertEquals(listOf(rec.id), transcriptsStored)
+        // The hook sees the record AFTER the title was captured, so a notification can use it.
+        assertEquals("Fresh AI title", seenTitle)
+    }
+
+    @Test
+    fun legacyRefetchDoesNotFireTranscriptStoredHook() = runBlocking {
+        addRecording(1, "srv-1", transcript = """{"text":"old","segments":[]}""")
+        source.script("srv-1", ready("Fresh AI title"))
+
+        val pass = TitleSyncManager.runPass()
+
+        assertEquals(1, pass.stored)
+        assertTrue("a pre-title refetch is not news to the user", transcriptsStored.isEmpty())
+    }
+
+    @Test
+    fun transcriptStoredHookFailureDoesNotFailThePass() = runBlocking {
+        addRecording(1, "srv-1")
+        TitleSyncManager.onTranscriptStored = { _, _ -> error("notification plumbing broke") }
+        source.script("srv-1", ready("Fresh AI title"))
+
+        val pass = TitleSyncManager.runPass()
+
+        assertEquals(1, pass.stored)
+        assertEquals(0, pass.failed)
+        assertEquals("Fresh AI title", RecordingStore.allFiles.first().serverTitle)
     }
 
     // MARK: - pre-title cached transcripts

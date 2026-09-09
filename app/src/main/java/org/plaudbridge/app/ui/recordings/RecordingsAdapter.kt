@@ -56,6 +56,8 @@ class RecordingsAdapter(
         return text
     }
 
+    override fun rowFootnote(context: Context, item: RecordingItem): CharSequence? = automationsText(context, item)
+
     override fun onRowTapped(item: RecordingItem) = onTapped(item)
 
     override fun onRowLongPressed(item: RecordingItem): Boolean {
@@ -121,6 +123,29 @@ class RecordingsAdapter(
                 append(DateGrouping.SEPARATOR)
                 append("★ ${item.marksCount}")
             }
+        }
+
+        /**
+         * The automations line under a row: the server's one-liner ("Vault notes: Filed:
+         * Life/Topics/Dogs.md"), the route name in the body colour so it reads as a label, the
+         * whole line in the error colour when the automation failed or never reported. Null when
+         * the automations never ran for the recording (most rows), so the row stays two lines.
+         */
+        fun automationsText(context: Context, item: RecordingItem): CharSequence? {
+            val a = item.automations ?: return null
+            val line = a.line.takeIf { it.isNotBlank() } ?: return null
+            val text = SpannableString(line)
+            if (a.isFailure) {
+                text.setSpan(ForegroundColorSpan(context.themeColor(MaterialR.attr.colorError)), 0, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                return text
+            }
+            // Bold each route label ("Vault notes:") so the eye finds what ran before what it did.
+            for (it in a.items) {
+                val label = it.routeName.takeIf { n -> n.isNotBlank() }?.plus(":") ?: continue
+                val start = line.indexOf(label)
+                if (start >= 0) text.setSpan(StyleSpan(Typeface.BOLD), start, start + label.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            return text
         }
 
         /** [metaLine] with the status word coloured when it is a failure. */

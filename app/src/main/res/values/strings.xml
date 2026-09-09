@@ -212,6 +212,10 @@
     <string name="appearance_system">Same as the phone</string>
     <string name="appearance_light">Light</string>
     <string name="appearance_dark">Dark</string>
+    <!-- Notifications row: opens the system screen where each channel can be switched -->
+    <string name="notifications">Notifications</string>
+    <string name="notifications_desc">When a transcript is ready and what automations did. Turn each kind on or off</string>
+    <string name="notifications_unavailable">Couldn\'t open notification settings on this phone</string>
     <string name="sdk_logs_desc">Share a log file when something isn\'t working</string>
     <string name="export_logs">Export</string>
     <string name="export_failed">No logs to share yet</string>
@@ -362,6 +366,23 @@
     <string name="bg_sync_notif_connected_fmt">Connected to %1$s</string>
     <string name="bg_sync_notif_searching_fmt">Searching for %1$s…</string>
     <string name="bg_sync_notif_disconnected">Disconnected</string>
+    <!-- Transcript / automation notifications (AppNotifications), one channel each -->
+    <string name="notif_channel_transcripts_name">Transcripts</string>
+    <string name="notif_channel_transcripts_desc">A recording\'s transcript and summary are ready</string>
+    <string name="notif_channel_automations_name">Automations</string>
+    <string name="notif_channel_automations_desc">What an automation did with a recording, or why it couldn\'t</string>
+    <string name="notif_transcript_ready">Transcript ready</string>
+    <string name="notif_transcript_ready_body">Tap to read the transcript and summary.</string>
+    <string name="notif_transcript_no_speech">No speech was found in this recording.</string>
+    <string name="notif_automation_done_fmt">%1$s done</string>
+    <string name="notif_automation_done_body">Finished.</string>
+    <string name="notif_automation_failed_fmt">%1$s failed</string>
+    <string name="notif_automation_failed_body">The automation couldn\'t finish. Open the recording for details.</string>
+    <string name="notif_automation_no_result_fmt">%1$s gave no result</string>
+    <string name="notif_automation_no_result_body">The automation never reported back. Open the recording to retry it.</string>
+    <string name="notif_automations_none">No automation matched</string>
+    <string name="notif_automations_none_body">Your automations looked at this recording and left it alone.</string>
+    <string name="notif_automations_error">Automations couldn\'t run</string>
 
     <string name="qr_confirm_title">Connect to this server?</string>
     <string name="qr_confirm_fmt">Server: %1$s\n\nThe address and access token from the code will be checked against this server before they are saved.</string>
