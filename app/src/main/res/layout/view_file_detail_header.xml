@@ -38,12 +38,26 @@
             android:text="@string/action_export_markdown" />
     </LinearLayout>
 
-    <!-- Summary block (only when a summary exists): header with a Copy action, then the text -->
+    <!-- Summary card (only when a summary exists): header with a Copy action, then the text.
+         A card, like the automations below it, so the page reads as blocks rather than one
+         column of text running into the transcript. -->
+    <LinearLayout
+        android:id="@+id/summaryCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:background="@drawable/bg_card"
+        android:orientation="vertical"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="14dp"
+        android:visibility="gone">
+
     <LinearLayout
         android:id="@+id/summaryHeaderRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:visibility="gone">
@@ -83,6 +97,22 @@
         android:textIsSelectable="true"
         android:textSize="14sp"
         android:visibility="gone" />
+
+    <!-- Long summaries fold to a few lines; this unfolds them (shown only when they overflow) -->
+    <TextView
+        android:id="@+id/summaryMore"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:background="?attr/selectableItemBackground"
+        android:fontFamily="sans-serif-medium"
+        android:paddingTop="6dp"
+        android:paddingBottom="2dp"
+        android:text="@string/read_more"
+        android:textColor="?attr/colorOnSurface"
+        android:textSize="13sp"
+        android:visibility="gone" />
+    </LinearLayout>
 
     <!-- Highlights (only when the transcript carries button-press highlights): header plus
          one tappable row per highlight, filled in code -->

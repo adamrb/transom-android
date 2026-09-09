@@ -8,6 +8,7 @@
     <item name="automation_run_instructions" type="id" />
     <item name="automation_no_match" type="id" />
     <item name="automation_route_name" type="id" />
+    <item name="automation_route_icon" type="id" />
     <item name="automation_route_reason" type="id" />
     <item name="automation_delivery_row" type="id" />
     <item name="automation_delivery_pill" type="id" />

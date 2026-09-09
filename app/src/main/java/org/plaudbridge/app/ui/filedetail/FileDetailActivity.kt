@@ -227,6 +227,9 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
         /** A route's reason is a paragraph; show its opening lines and unfold on tap. */
         private const val REASON_COLLAPSED_LINES = 3
 
+        /** Lines of summary shown before "Read more" (about a paragraph on a phone). */
+        private const val SUMMARY_COLLAPSED_LINES = 8
+
         /** Opens a transcript paragraph that holds a bookmark; the same star the Highlights rows use. */
         @VisibleForTesting
         const val BOOKMARK_STAR = "★ "
@@ -609,9 +612,15 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
             md.takeIf { it.isNotBlank() }
         }
         val hasSummary = summaryMarkdown != null
+        header.summaryCard.visibility = if (hasSummary) View.VISIBLE else View.GONE
         header.summaryHeaderRow.visibility = if (hasSummary) View.VISIBLE else View.GONE
         header.summaryText.visibility = if (hasSummary) View.VISIBLE else View.GONE
-        if (summaryMarkdown != null) MarkdownRenderer.setMarkdown(header.summaryText, summaryMarkdown)
+        if (summaryMarkdown != null) {
+            MarkdownRenderer.setMarkdown(header.summaryText, summaryMarkdown)
+            foldLongSummary()
+        } else {
+            header.summaryMore.visibility = View.GONE
+        }
 
         bindHighlights(currentHighlights)
 
@@ -1471,14 +1480,21 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
     private fun buildRunBlock(run: RoutingRun, isLatest: Boolean): View {
         val density = resources.displayMetrics.density
         fun dp(v: Int) = (v * density).toInt()
+        // One card per run, so the section reads as blocks rather than a column of grey text.
         val block = android.widget.LinearLayout(this).apply {
             id = R.id.automation_run_block
             orientation = android.widget.LinearLayout.VERTICAL
             tag = run
+            setBackgroundResource(R.drawable.bg_card)
+            setPadding(dp(16), dp(6), dp(16), dp(14))
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
         }
         if (!isLatest) {
             block.addView(mutedText(getString(R.string.automations_earlier_run_fmt, run.createdAt?.let { formatMetaDate(it) } ?: ""))
-                .apply { id = R.id.automation_run_header; setPadding(0, dp(12), 0, 0) })
+                .apply { id = R.id.automation_run_header; textSize = 12f; setPadding(0, dp(8), 0, 0) })
         }
         // What the user told the automations when starting this run by hand.
         run.instructions?.let { instructions ->
@@ -1505,45 +1521,106 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
                 setPadding(0, dp(8), 0, dp(4))
             })
         }
+        // Per route: name with a state icon, then what happened (the headline), then the
+        // router's reason last and muted, since "why it ran" matters less than "what it did".
         val covered = mutableSetOf<String>()
+        var routesShown = 0
+        fun addRoute(name: String, reason: String?, deliveries: List<Delivery>) {
+            if (routesShown++ > 0) block.addView(View(this).apply {
+                setBackgroundColor(themeColor(R.attr.pbColorDivider))
+                layoutParams = android.widget.LinearLayout.LayoutParams(android.widget.LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
+                    .apply { topMargin = dp(12) }
+            })
+            block.addView(buildRouteRow(name, deliveries))
+            deliveries.forEach { block.addView(buildDeliveryRow(it)) }
+            if (reason != null) block.addView(buildReasonRow(reason))
+        }
         for (route in run.routes) {
             covered += route.name
-            block.addView(buildRouteRow(route.name, route.reason))
-            run.deliveriesFor(route.name).forEach { block.addView(buildDeliveryRow(it)) }
+            addRoute(route.name, route.reason, run.deliveriesFor(route.name))
         }
         // A delivery whose route the decision does not list (should not happen; shown so nothing
         // the server did is invisible).
         run.deliveries.filter { it.routeName !in covered }.groupBy { it.routeName }.forEach { (name, list) ->
-            block.addView(buildRouteRow(name.ifBlank { "?" }, null))
-            list.forEach { block.addView(buildDeliveryRow(it)) }
+            addRoute(name.ifBlank { "?" }, null, list)
         }
         return block
     }
 
-    /** Route name in the primary style, the router's reason muted below it; tap the reason to unfold it. */
-    private fun buildRouteRow(name: String, reason: String?): View {
+    /** Worst state among a route's hand-offs, for the icon next to its name. */
+    private enum class RouteState { WORKING, DONE, FAILED, UNKNOWN, HANDED_OFF }
+
+    /**
+     * Same precedence as [deliveryPresentation], so the icon agrees with the words: the agent's
+     * report first (a "done" report outranks a hand-off that later read as failed), the hand-off
+     * status only without one. A webhook that was accepted and will not report is neither
+     * working nor done: handed off, shown neutral.
+     */
+    private fun routeState(deliveries: List<Delivery>): RouteState? {
+        if (deliveries.isEmpty()) return null
+        val states = deliveries.map { d ->
+            when (d.resultStatus) {
+                Delivery.RESULT_DONE -> RouteState.DONE
+                Delivery.RESULT_FAILED -> RouteState.FAILED
+                Delivery.RESULT_UNKNOWN -> RouteState.UNKNOWN
+                Delivery.RESULT_QUEUED -> RouteState.WORKING
+                else -> when {
+                    d.status == Delivery.STATUS_FAILED -> RouteState.FAILED
+                    d.status == Delivery.STATUS_PENDING -> RouteState.WORKING
+                    d.actionType == Delivery.ACTION_WEBHOOK -> RouteState.HANDED_OFF
+                    else -> RouteState.DONE
+                }
+            }
+        }
+        // Failed beats working beats unknown beats handed-off beats done: what still needs attention.
+        val rank = mapOf(RouteState.FAILED to 0, RouteState.WORKING to 1, RouteState.UNKNOWN to 2, RouteState.HANDED_OFF to 3, RouteState.DONE to 4)
+        return states.minByOrNull { rank.getValue(it) }
+    }
+
+    /** Route name with a state icon in front: green check, amber sync while working, red warning. */
+    private fun buildRouteRow(name: String, deliveries: List<Delivery>): View {
         val density = resources.displayMetrics.density
         fun dp(v: Int) = (v * density).toInt()
+        val state = routeState(deliveries)
+        val (icon, colorAttr) = when (state) {
+            RouteState.DONE -> R.drawable.ic_check_circle to R.attr.pbColorSuccess
+            RouteState.WORKING -> R.drawable.ic_sync to R.attr.pbColorWarning
+            RouteState.FAILED -> R.drawable.ic_warning to MaterialR.attr.colorError
+            RouteState.UNKNOWN -> R.drawable.ic_warning to MaterialR.attr.colorOnSurfaceVariant
+            RouteState.HANDED_OFF, null -> R.drawable.ic_bolt to MaterialR.attr.colorOnSurfaceVariant
+        }
         return android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
             setPadding(0, dp(10), 0, 0)
+            addView(android.widget.ImageView(this@FileDetailActivity).apply {
+                id = R.id.automation_route_icon
+                setImageResource(icon)
+                imageTintList = android.content.res.ColorStateList.valueOf(themeColor(colorAttr))
+                contentDescription = null
+            }, android.widget.LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(10) })
             addView(android.widget.TextView(this@FileDetailActivity).apply {
                 id = R.id.automation_route_name
                 text = name
                 setTextColor(themeColor(MaterialR.attr.colorOnSurface))
-                textSize = 14f
+                textSize = 15f
                 typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
-            })
-            if (reason != null) {
-                addView(mutedText(reason).apply {
-                    id = R.id.automation_route_reason
-                    maxLines = REASON_COLLAPSED_LINES
-                    ellipsize = android.text.TextUtils.TruncateAt.END
-                    setPadding(0, dp(2), 0, 0)
-                    setOnClickListener {
-                        maxLines = if (maxLines == REASON_COLLAPSED_LINES) Int.MAX_VALUE else REASON_COLLAPSED_LINES
-                    }
-                })
+            }, android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        }
+    }
+
+    /** The router's reason, muted and collapsed to a few lines; tap to unfold. */
+    private fun buildReasonRow(reason: String): View {
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
+        return mutedText(reason).apply {
+            id = R.id.automation_route_reason
+            textSize = 12.5f
+            maxLines = REASON_COLLAPSED_LINES
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(30), dp(6), 0, 0)
+            setOnClickListener {
+                maxLines = if (maxLines == REASON_COLLAPSED_LINES) Int.MAX_VALUE else REASON_COLLAPSED_LINES
             }
         }
     }
@@ -1562,7 +1639,8 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
             id = R.id.automation_delivery_row
             orientation = android.widget.LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.TOP
-            setPadding(0, dp(6), 0, dp(2))
+            // Indented under the route's icon so name → outcome → reason line up as one column.
+            setPadding(dp(30), dp(6), 0, dp(2))
             tag = d
         }
         presentation.chip?.let { chipText ->
@@ -1583,12 +1661,14 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
         val textColumn = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             presentation.detail?.let { detail ->
+                // The outcome is the headline of the card: body colour, a size up from the reason.
                 addView(android.widget.TextView(this@FileDetailActivity).apply {
                     id = R.id.automation_delivery_text
                     text = detail
                     setTextColor(themeColor(R.attr.pbColorTextBody))
-                    textSize = 13f
+                    textSize = 14f
                     typeface = android.graphics.Typeface.SANS_SERIF
+                    setLineSpacing(dp(2).toFloat(), 1f)
                 })
             }
             d.effectiveAt?.let { at ->
@@ -1652,6 +1732,45 @@ class FileDetailActivity : AppCompatActivity(), JumpToSheet.Host, MoreActionsShe
                 else getString(R.string.automation_state_done)
             )
         }
+    }
+
+    /** The user unfolded the summary; a re-render keeps it open. */
+    private var summaryExpanded = false
+
+    /**
+     * A summary longer than [SUMMARY_COLLAPSED_LINES] lines folds to that many with a "Read more"
+     * line under it, so the top of the page stays scannable (summary, automations, transcript)
+     * instead of one long column of text. Short summaries show whole with no toggle. Decided
+     * after layout, from the rendered line count.
+     */
+    private fun foldLongSummary() {
+        val text = header.summaryText
+        val more = header.summaryMore
+        text.maxLines = if (summaryExpanded) Int.MAX_VALUE else SUMMARY_COLLAPSED_LINES
+        text.ellipsize = if (summaryExpanded) null else android.text.TextUtils.TruncateAt.END
+        more.text = getString(if (summaryExpanded) R.string.show_less else R.string.read_more)
+        more.setOnClickListener {
+            summaryExpanded = !summaryExpanded
+            foldLongSummary()
+        }
+        // Re-decided on every layout of the text, not once: the wide-screen column cap lands in
+        // its own post-layout pass and can turn a summary that fit into one that overflows.
+        if (!summaryFoldWatched) {
+            summaryFoldWatched = true
+            text.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> refreshSummaryMore() }
+        }
+        text.post { refreshSummaryMore() }
+    }
+
+    private var summaryFoldWatched = false
+
+    /** Show "Read more" only while the folded summary actually hides something (or is unfolded). */
+    private fun refreshSummaryMore() {
+        val text = header.summaryText
+        val layout = text.layout ?: return
+        val overflows = summaryExpanded || layout.lineCount >= SUMMARY_COLLAPSED_LINES &&
+            (layout.lineCount > SUMMARY_COLLAPSED_LINES || layout.getEllipsisCount(layout.lineCount - 1) > 0)
+        header.summaryMore.visibility = if (overflows && text.visibility == View.VISIBLE) View.VISIBLE else View.GONE
     }
 
     private fun mutedText(text: CharSequence): android.widget.TextView = android.widget.TextView(this).apply {

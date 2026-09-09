@@ -152,6 +152,9 @@
     <string name="automations_none">No automations ran for this recording</string>
     <string name="automations_no_match">No automation matched</string>
     <string name="automations_show_earlier">Show earlier runs</string>
+    <!-- Long summary fold on the detail screen -->
+    <string name="read_more">Read more</string>
+    <string name="show_less">Show less</string>
     <string name="automations_earlier_run_fmt">Earlier run · %1$s</string>
     <string name="run_automations">Run automations</string>
     <string name="run_automations_with_instructions">Run automations with instructions…</string>
