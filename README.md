@@ -5,14 +5,20 @@ sync server. Plaud Bridge pairs with your recorder over Bluetooth (with optional
 transfer), pulls recordings off the device as MP3s, and uploads them to **your**
 [`plaud-bridge-server`](https://github.com/adamrb/plaud-bridge-server) — not Plaud's cloud.
 
-> **Your audio never touches Plaud's cloud.** The only thing that goes through Plaud's
-> platform is the authentication handshake the device firmware requires (see "How it works").
-> Transcription, storage, and everything downstream happen on your own server.
+> **Your audio never touches Plaud's cloud.** The only things that go through Plaud's
+> platform are the authentication handshake the device firmware requires (see "How it works")
+> and, if you use it, the firmware-update check. Transcription, storage, and everything
+> downstream happen on your own server, or on whatever endpoints you configure there.
 
 Plaud Bridge is an independent community project. It is **not affiliated with, endorsed by,
 or supported by Plaud Inc.** It is adapted from Plaud's official Apache-2.0 Android template
 app ([Plaud-AI/plaud-sdk-public](https://github.com/Plaud-AI/plaud-sdk-public)) and bundles
 Plaud's proprietary device SDK (`app/libs/plaud-sdk.aar`) — see [NOTICE](NOTICE).
+
+**Status:** developed and tested with a Plaud Note Pro on a current Pixel-class phone. The SDK
+also lists the NotePin S, which the maintainer has not tested; reports are welcome. There are no
+prebuilt releases yet: build the APK yourself (below) and let your server host it for updates.
+Contributors and coding agents should start with [AGENTS.md](AGENTS.md).
 
 ## How it works
 
@@ -82,8 +88,8 @@ echo "sdk.dir=$HOME/Android/Sdk" > local.properties
 Or open the project in Android Studio and press Run. **No build-time credentials are
 required** — everything is configured in-app.
 
-The bundled SDK ships `arm64-v8a` and `armeabi-v7a` native libraries, so run on a physical
-device (BLE also doesn't work in the emulator).
+Run it on a physical device: BLE does not exist in the emulator, so pairing and sync cannot be
+tested there (the emulator still works for UI development with the mock managers).
 
 ### 3. Sideload and onboard
 
@@ -110,7 +116,7 @@ Remove from phone (keeps the server copy) and Delete (server and phone; the reco
 touched). Searching filters the list on the phone.
 
 Under a row whose automations ran, a third line says what they did, straight from the server's
-`automations` summary: "**Vault notes:** Filed: Life/Topics/Dogs.md", "**Ask Claude:** Working",
+`automations` summary: "**Vault notes:** Filed: Notes/Dogs.md", "**Ask Claude:** Working",
 "No automation matched"; in the error colour when a hand-off failed or never reported. The
 recording's detail screen has the full history (every run, the router's reasons, each hand-off
 with its outcome and a Retry).
@@ -158,7 +164,7 @@ you can switch off independently under **Settings → Notifications** (the syste
   whose automations you ran by hand), in-app for a few minutes and then from a WorkManager
   request that survives process death, and announces each outcome exactly once (ids are
   remembered). Watches end when nothing is still working, when the server no longer knows the
-  recording, or after an hour.
+  recording, or after nine hours.
 
 Tapping either notification opens the recording. Both need the notification permission on
 Android 13+, which the app asks for once when a server is configured or a recorder is paired.
@@ -205,13 +211,17 @@ Plaud's latest. The firmware image comes from Plaud's platform.
 Yes — start/pause/stop the device's recorder remotely, with a live level meter.
 
 **What does deleting a recording in the app do?**
-The *Remove Downloaded Copy* action on a recording removes only the MP3 the phone downloaded
-(and the local list entry). It does **not** delete the copy on the recorder, nor anything
-already uploaded to your server. Device-side deletion happens only via the *Delete after
+Long-press a row for two different actions. *Remove from phone* deletes only the MP3 the phone
+downloaded; the row stays, linked to the server copy. *Delete* removes the recording from your
+server and the phone. Neither touches the copy on the recorder. Device-side deletion happens only via the *Delete after
 upload* setting, and only after the server confirms the upload — and only ever on the exact
 device (matched by serial number) the recording came from.
 
 ## Development notes
+
+[AGENTS.md](AGENTS.md) is the maintained contributor guide: source layout, commands, the rules the
+code relies on (versionCode bumps, HTTPS only, self-update verification, SDK quirks) and the
+release steps. The notes below are the short version.
 
 - Architecture follows the upstream template: singleton managers (`DeviceManager`,
   `SyncManager`, `RecordingManager`, `UploadManager`) + ViewBinding fragments/activities.
@@ -265,7 +275,10 @@ in the test suite talks to real hardware.
   `distributionSha256Sum` for the 8.2 distribution.
 - **Backups.** `android:allowBackup` is `false`: the app stores your server bearer token and
   a Plaud JWT, which must not leak through cloud/device-transfer backups. Re-onboard (server
-  URL + token) after moving to a new phone; recordings re-download/re-upload safely.
+  URL + token) after moving to a new phone; recordings re-download/re-upload safely. Unpair the
+  recorder from the old installation first: a fresh install gets a new user id, and the SDK
+  refuses to take over a recorder that is still bound elsewhere (see the FAQ for the case where
+  the old phone is gone).
 
 ## License
 

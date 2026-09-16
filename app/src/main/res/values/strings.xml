@@ -336,7 +336,7 @@
     <string name="discard">Discard</string>
     <string name="keep_editing">Keep editing</string>
     <string name="vocabulary_import">Import from your vault</string>
-    <string name="vocabulary_import_help">Pick the names file from your Obsidian vault (Life/_names.md). Terms already on the list are kept; new names and mis-hearings are added.</string>
+    <string name="vocabulary_import_help">Pick the names file from your Obsidian vault (_names.md). Terms already on the list are kept; new names and mis-hearings are added.</string>
     <string name="choose_file">Choose file</string>
     <string name="vocabulary_import_save_first">Save or discard your changes before importing.</string>
     <string name="vocabulary_importing">Importing…</string>

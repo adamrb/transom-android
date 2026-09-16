@@ -4,7 +4,7 @@ import org.plaudbridge.app.models.VocabEntry
 
 /**
  * "Import from your vault" for the custom vocabulary: parse the Obsidian names gazetteer the
- * phone's vault copy holds (`Life/_names.md`) into entries for [ApiClient.importVocabulary],
+ * phone's vault copy holds (`_names.md`) into entries for [ApiClient.importVocabulary],
  * which MERGES them into the server's list. A port of the server's own
  * `contrib/vocab_from_obsidian.py` so both paths produce the same entries.
  */
@@ -23,7 +23,7 @@ object VocabularyImport {
     )
 
     /**
-     * Entries from the vault's `Life/_names.md`: one name per line as
+     * Entries from the vault's `_names.md`: one name per line as
      * `Canonical | type | alias, alias | ...`. Header, comment and prose lines are skipped;
      * aliases are kept only when they are plausible mis-hearings of the name itself (a nickname
      * or bare first name must never be rewritten into a full name). Every entry is

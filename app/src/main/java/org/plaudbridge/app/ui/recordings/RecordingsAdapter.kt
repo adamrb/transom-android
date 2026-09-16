@@ -128,7 +128,7 @@ class RecordingsAdapter(
 
         /**
          * The automations line under a row: the server's one-liner ("Vault notes: Filed:
-         * Life/Topics/Dogs.md"), the route name in the body colour so it reads as a label, the
+         * Notes/Dogs.md"), the route name in the body colour so it reads as a label, the
          * whole line in the error colour when the automation failed or never reported. Null when
          * the automations never ran for the recording (most rows), so the row stays two lines.
          */

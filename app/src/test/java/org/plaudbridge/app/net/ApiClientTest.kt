@@ -495,7 +495,7 @@ class ApiClientTest {
         "decision":{"routes":[{"name":"meetings","reason":"The speaker explicitly directs how this recording should be filed."}]},
         "deliveries":[{"id":"d-1","router_run_id":"run-1","route_name":"meetings","action_type":"markdown","status":"ok",
             "attempts":1,"last_error":null,"created_at":"2026-09-07T06:39:05Z","result_status":"done",
-            "result_summary":"Saved to 0_Quick Add/Garage Inventory Note Request.md","result_at":"2026-09-07T06:40:10Z",
+            "result_summary":"Saved to Inbox/Garage Inventory Note Request.md","result_at":"2026-09-07T06:40:10Z",
             "payload":{"ignored":true}}]}],"deliveries":[]}"""
 
     @Test
@@ -509,7 +509,7 @@ class ApiClientTest {
         val d = runs[0].deliveries.single()
         assertEquals("d-1", d.id)
         assertEquals("done", d.resultStatus)
-        assertEquals("Saved to 0_Quick Add/Garage Inventory Note Request.md", d.resultSummary)
+        assertEquals("Saved to Inbox/Garage Inventory Note Request.md", d.resultSummary)
         val recorded = server.takeRequest()
         assertEquals("GET", recorded.method)
         assertEquals("/api/v1/recordings/rec-1/routing", recorded.path)

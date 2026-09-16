@@ -48,10 +48,10 @@ class RecordingsAdapterTest {
     @Test
     fun automationsLineShowsTheServersOneLinerWithRouteLabelsBold() {
         val item = RecordingItem(null, serverWithAutomations(
-            """{"state":"done","line":"Vault notes: Filed: Life/Topics/Dogs.md","items":[{"route_name":"Vault notes","state":"done","summary":"Filed: Life/Topics/Dogs.md"}]}"""
+            """{"state":"done","line":"Vault notes: Filed: Notes/Dogs.md","items":[{"route_name":"Vault notes","state":"done","summary":"Filed: Notes/Dogs.md"}]}"""
         ))
         val text = RecordingsAdapter.automationsText(context, item) as android.text.Spanned
-        assertEquals("Vault notes: Filed: Life/Topics/Dogs.md", text.toString())
+        assertEquals("Vault notes: Filed: Notes/Dogs.md", text.toString())
         val bold = text.getSpans(0, text.length, android.text.style.StyleSpan::class.java)
         assertEquals(1, bold.size)
         assertEquals("Vault notes:", text.subSequence(text.getSpanStart(bold[0]), text.getSpanEnd(bold[0])).toString())

@@ -12,7 +12,7 @@ import org.json.JSONObject
 data class AutomationsSummary(
     /** working, done, failed, unknown (never reported), skipped (nothing matched). */
     val state: String,
-    /** "Vault notes: Filed: Life/Topics/Dogs.md", or "No automation matched". */
+    /** "Vault notes: Filed: Notes/Dogs.md", or "No automation matched". */
     val line: String,
     val items: List<Item>,
     val runId: String?,

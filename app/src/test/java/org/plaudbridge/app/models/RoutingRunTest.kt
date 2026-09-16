@@ -22,7 +22,7 @@ class RoutingRunTest {
         "decision":{"routes":[{"name":"meetings","reason":"The speaker explicitly directs how this recording should be filed."}]},
         "deliveries":[{"id":"d-1","router_run_id":"run-1","route_name":"meetings","action_type":"markdown","status":"ok",
             "attempts":1,"last_error":null,"created_at":"2026-09-07T06:39:05Z","result_status":"done",
-            "result_summary":"Saved to 0_Quick Add/Garage Inventory Note Request.md","result_at":"2026-09-07T06:40:10.5Z",
+            "result_summary":"Saved to Inbox/Garage Inventory Note Request.md","result_at":"2026-09-07T06:40:10.5Z",
             "payload":{"ignored":true},"some_future_field":42}]}],
         "deliveries":[]}"""
 
@@ -48,7 +48,7 @@ class RoutingRunTest {
         assertNull(d.lastError)
         assertEquals(ServerRecording.parseIso("2026-09-07T06:39:05Z"), d.createdAt)
         assertEquals("done", d.resultStatus)
-        assertEquals("Saved to 0_Quick Add/Garage Inventory Note Request.md", d.resultSummary)
+        assertEquals("Saved to Inbox/Garage Inventory Note Request.md", d.resultSummary)
         assertEquals(ServerRecording.parseIso("2026-09-07T06:40:10.5Z"), d.resultAt)
         assertEquals(d.resultAt, d.effectiveAt)
         assertFalse(d.isInProgress)

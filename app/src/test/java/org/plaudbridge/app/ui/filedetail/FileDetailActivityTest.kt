@@ -1998,7 +1998,7 @@ class FileDetailActivityTest {
         assertEquals("Retry", retry.text.toString())
         val before = fake.routingCalls.size
         fake.routing = runsOf("""{"runs":[${run(routes = """[{"name":"obsidian-inbox","reason":"A note request."}]""",
-            deliveries = "[" + delivery("d-7", "obsidian-inbox", "ok", "done", "Saved to 0_Quick Add/Note.md") + "]")}],"deliveries":[]}""")
+            deliveries = "[" + delivery("d-7", "obsidian-inbox", "ok", "done", "Saved to Inbox/Note.md") + "]")}],"deliveries":[]}""")
         retry.performClick()
         shadowOf(android.os.Looper.getMainLooper()).idle()
         assertEquals(listOf("d-7"), fake.retries)
@@ -2006,7 +2006,7 @@ class FileDetailActivityTest {
         assertEquals(before + 1, fake.routingCalls.size)
         val refreshed = automationsList(activity).getChildAt(0)
         assertEquals(null, refreshed.findViewById<View>(R.id.automation_delivery_pill))
-        assertEquals("Saved to 0_Quick Add/Note.md", textOf(refreshed, R.id.automation_delivery_text))
+        assertEquals("Saved to Inbox/Note.md", textOf(refreshed, R.id.automation_delivery_text))
         assertEquals(null, refreshed.findViewById<View>(R.id.automation_retry))
     }
 
