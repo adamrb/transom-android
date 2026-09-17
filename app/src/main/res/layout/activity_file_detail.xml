@@ -170,7 +170,7 @@
 
         <!-- Full width so the time bubble has room to the left of the thumb; touches outside the
              thumb's column fall through to the list -->
-        <cloud.adamrb.transom.ui.filedetail.TranscriptFastScroller
+        <io.github.adamrb.transom.ui.filedetail.TranscriptFastScroller
             android:id="@+id/fastScroller"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />

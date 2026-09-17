@@ -211,7 +211,7 @@ Plaud's latest. The firmware image comes from Plaud's platform.
 Yes — start/pause/stop the device's recorder remotely, with a live level meter.
 
 **I had the app when it was called Plaud Bridge. How do I move to Transom?**
-The package id changed (`org.plaudbridge.app` to `cloud.adamrb.transom`), so the old app cannot
+The package id changed (`org.plaudbridge.app` to `io.github.adamrb.transom`), so the old app cannot
 update itself into the new one and the two would sit side by side. In the old app, unpair the
 recorder (its binding belongs to that install's user id; a fresh install gets a new one and the
 SDK refuses to take over a still-bound recorder), then uninstall it, install Transom and onboard

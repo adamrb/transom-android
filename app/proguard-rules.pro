@@ -5,4 +5,4 @@
 # Gson
 -keepattributes Signature
 -keepattributes *Annotation*
--keep class cloud.adamrb.transom.models.** { *; }
+-keep class io.github.adamrb.transom.models.** { *; }

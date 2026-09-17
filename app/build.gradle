@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace 'cloud.adamrb.transom'
+    namespace 'io.github.adamrb.transom'
     compileSdk 34
 
     defaultConfig {
-        applicationId "cloud.adamrb.transom"
+        applicationId "io.github.adamrb.transom"
         minSdk 21
         targetSdk 34
         // In-app updates compare the server-hosted APK's version_code against this value:

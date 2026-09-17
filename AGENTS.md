@@ -7,14 +7,14 @@ to is [transom-server](https://github.com/adamrb/transom-server), whose
 
 ## What this is
 
-A Kotlin Android app (`cloud.adamrb.transom`, minSdk 21, targetSdk 34) that pairs with a Plaud
+A Kotlin Android app (`io.github.adamrb.transom`, minSdk 21, targetSdk 34) that pairs with a Plaud
 recorder through Plaud's proprietary Embedded SDK (`app/libs/plaud-sdk.aar`), pulls recordings
 off the device, uploads them to the user's own transom-server, and shows transcripts,
 summaries and automation results. No audio ever goes to Plaud's cloud; the SDK only needs a
 signed user token, which the app fetches from the user's server at runtime. There are no
 build-time secrets.
 
-## Layout (`app/src/main/java/cloud/adamrb/transom/`)
+## Layout (`app/src/main/java/io/github/adamrb/transom/`)
 
 ```
 TransomApp.kt   Application: manager wiring, USE_MOCK switch for UI work without hardware
@@ -91,7 +91,7 @@ launcher intent and navigate with taps.
   test against Markwon spans, not Android `StyleSpan`.
 - **No secrets, personal names, hostnames, or private paths in the repo.** Test fixtures use
   fictional names.
-- **Naming.** The app is Transom (`cloud.adamrb.transom`). "Plaud" appears only to name the
+- **Naming.** The app is Transom (`io.github.adamrb.transom`). "Plaud" appears only to name the
   vendor's recorder, SDK or cloud (nominative use), never in the app name, package, themes or
   sample vocabulary (samples use the fictional "Parrot Deck"). The `pb_` prefixes on resource
   names, the per-install user id and the dashboard token key are historical; leave them.
