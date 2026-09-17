@@ -15,6 +15,7 @@ object RecordingStore {
     private const val KEY_PAIRED_SNS = "paired_device_sns"
     private const val KEY_PAIRED_NAMES = "paired_device_names"
     private const val KEY_USER_ID = "user_id"
+    private const val KEY_CACHED_PLAUD_TOKEN_USER_ID = "cached_plaud_token_user_id"
     private const val KEY_AUTO_SYNC = "is_auto_sync_enabled"
     private const val KEY_BACKGROUND_SYNC = "is_background_sync_enabled"
     private const val KEY_NOTIF_PERMISSION_ASKED = "notification_permission_asked"
@@ -115,6 +116,30 @@ object RecordingStore {
         return id
     }
 
+    /** Plaud accepts 6 to 120 characters for a client user id; we also refuse whitespace. */
+    fun isValidUserId(id: String): Boolean = id.length in 6..120 && id.none { it.isWhitespace() }
+
+    /**
+     * Adopt the user id of a previous install (another phone, or the app before it changed
+     * package name) so a recorder bound to that id keeps working without an unpair. The cached
+     * Plaud token belongs to the old id and is dropped; the SDK reads the id at init, so the
+     * caller asks for an app restart. Returns false (and changes nothing) for an invalid id.
+     */
+    @Synchronized
+    fun adoptUserId(id: String): Boolean {
+        val value = id.trim()
+        if (!isValidUserId(value)) return false
+        if (value == userId) return true
+        // One transaction: the new id and the emptied token cache land together. commit(), not
+        // apply(): the caller exits the process right after, so the write must be on disk.
+        return prefs.edit()
+            .putString(KEY_USER_ID, value)
+            .remove(KEY_CACHED_PLAUD_TOKEN)
+            .remove(KEY_CACHED_PLAUD_TOKEN_USER_ID)
+            .putLong(KEY_CACHED_PLAUD_TOKEN_EXPIRY, 0L)
+            .commit()
+    }
+
     // --- Bridge server settings ---
 
     /**
@@ -200,6 +225,45 @@ object RecordingStore {
     var cachedPlaudTokenExpiry: Long
         get() = prefs.getLong(KEY_CACHED_PLAUD_TOKEN_EXPIRY, 0L)
         set(value) = prefs.edit().putLong(KEY_CACHED_PLAUD_TOKEN_EXPIRY, value).apply()
+
+    /**
+     * The user id the cached token was minted for. A token tagged with another id (the user
+     * adopted a previous install's id after the fetch started) is never handed out. Null on
+     * tokens cached by builds before this field existed.
+     */
+    var cachedPlaudTokenUserId: String?
+        get() = prefs.getString(KEY_CACHED_PLAUD_TOKEN_USER_ID, null)
+        set(value) = prefs.edit().putString(KEY_CACHED_PLAUD_TOKEN_USER_ID, value).apply()
+
+    /**
+     * Token, owner and expiry in ONE preferences transaction, so two writers (a Settings
+     * verification and a refresh, say) can never interleave into a token tagged with the wrong
+     * owner. [userId] null with a non-null token means "owner unknown" (legacy cache).
+     */
+    @Synchronized
+    fun setCachedPlaudToken(token: String?, userId: String?, expirySec: Long): Boolean {
+        // A token minted for an identity this install no longer has (the user adopted another
+        // id while the request was in flight) is refused at the write boundary.
+        val current = this.userId
+        if (userId != null && current != null && userId != current) return false
+        prefs.edit()
+            .putString(KEY_CACHED_PLAUD_TOKEN, token)
+            .putString(KEY_CACHED_PLAUD_TOKEN_USER_ID, userId)
+            .putLong(KEY_CACHED_PLAUD_TOKEN_EXPIRY, expirySec)
+            .apply()
+        return true
+    }
+
+    /** Cached token with its owner and expiry, read together; null if none or owned by another id. */
+    data class CachedToken(val token: String, val owner: String?, val expirySec: Long)
+
+    @Synchronized
+    fun cachedPlaudTokenSnapshot(): CachedToken? {
+        val token = cachedPlaudToken ?: return null
+        val owner = cachedPlaudTokenUserId
+        if (owner != null && owner != userId) return null
+        return CachedToken(token, owner, cachedPlaudTokenExpiry)
+    }
 
     /** Delete a recording from the device after a CONFIRMED server upload. Default OFF. */
     var deleteAfterUpload: Boolean

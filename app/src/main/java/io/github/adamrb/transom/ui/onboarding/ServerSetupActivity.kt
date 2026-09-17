@@ -176,7 +176,8 @@ class ServerSetupActivity : AppCompatActivity() {
             // Persist settings + the freshly fetched Plaud token (with its expires_in).
             RecordingStore.serverBaseUrl = url
             RecordingStore.serverAuthToken = token
-            plaudToken?.let { io.github.adamrb.transom.net.TokenManager.store(it) }
+            // Onboarding runs before Settings is reachable, so the id cannot change mid-fetch.
+            plaudToken?.let { io.github.adamrb.transom.net.TokenManager.store(it, forUserId = RecordingStore.getOrCreateUserId()) }
             verified = true
             binding.continueButton.isEnabled = true
             showStatus(getString(R.string.server_setup_success), isError = false)

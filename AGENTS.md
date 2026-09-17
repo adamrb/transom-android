@@ -106,6 +106,10 @@ launcher intent and navigate with taps.
 - A recorder can be bound to one app account at a time. The SDK refuses to take over a recorder
   that is still bound to the official Plaud app, so the user has to unbind it there first (the
   README FAQ explains how, and what to do when the old app is gone). Do not hide that from users.
+- The binding follows the per-install **user id** (`RecordingStore.getOrCreateUserId`), not the
+  phone. Settings → Advanced → User ID lets a user adopt a previous install's id
+  (`RecordingStore.adoptUserId`: validates, drops the cached token, needs an app restart because
+  the SDK reads the id at init). That is how a phone move or the package rename avoids an unpair.
 
 ## Releasing
 

@@ -40,6 +40,39 @@ class RecordingStoreTest {
         createdAt = session * 1000
     )
 
+    // MARK: - User id (the recorder's binding)
+
+    @Test
+    fun adoptUserIdTakesAPreviousInstallsIdAndDropsTheOldToken() {
+        val generated = RecordingStore.getOrCreateUserId()
+        assertTrue(generated.startsWith("pb_"))
+        RecordingStore.cachedPlaudToken = "old-token"
+        RecordingStore.cachedPlaudTokenExpiry = 123L
+
+        assertTrue(RecordingStore.adoptUserId("  pb_previous-phone-id  "))
+        assertEquals("pb_previous-phone-id", RecordingStore.getOrCreateUserId())
+        assertNull(RecordingStore.cachedPlaudToken)
+        assertEquals(0L, RecordingStore.cachedPlaudTokenExpiry)
+
+        // Same id again: a no-op that reports success and keeps a token that is already valid
+        RecordingStore.cachedPlaudToken = "fresh-token"
+        assertTrue(RecordingStore.adoptUserId("pb_previous-phone-id"))
+        assertEquals("fresh-token", RecordingStore.cachedPlaudToken)
+    }
+
+    @Test
+    fun adoptUserIdRejectsInvalidIdsWithoutChangingAnything() {
+        val generated = RecordingStore.getOrCreateUserId()
+        RecordingStore.cachedPlaudToken = "keep"
+        assertFalse(RecordingStore.adoptUserId("short"))                 // under 6 chars
+        assertFalse(RecordingStore.adoptUserId("has whitespace inside"))
+        assertFalse(RecordingStore.adoptUserId("x".repeat(121)))         // over 120 chars
+        assertEquals(generated, RecordingStore.getOrCreateUserId())
+        assertEquals("keep", RecordingStore.cachedPlaudToken)
+        assertTrue(RecordingStore.isValidUserId("abcdef"))
+        assertTrue(RecordingStore.isValidUserId("x".repeat(120)))
+    }
+
     // MARK: - Composite-key identity
 
     @Test

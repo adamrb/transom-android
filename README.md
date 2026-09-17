@@ -212,10 +212,14 @@ Yes — start/pause/stop the device's recorder remotely, with a live level meter
 
 **I had the app when it was called Plaud Bridge. How do I move to Transom?**
 The package id changed (`org.plaudbridge.app` to `io.github.adamrb.transom`), so the old app cannot
-update itself into the new one and the two would sit side by side. In the old app, unpair the
-recorder (its binding belongs to that install's user id; a fresh install gets a new one and the
-SDK refuses to take over a still-bound recorder), then uninstall it, install Transom and onboard
-again with the same server URL and token. Everything already uploaded stays on the server.
+update itself into the new one and the two would sit side by side. Your recorder is bound to the
+old install's **User ID**, so carry that over instead of unpairing: in the old app open Settings →
+Advanced → User ID and tap **Copy**. Install Transom, connect it to the same server (scan the QR
+from the dashboard, or enter the URL and token), then before pairing open Settings → Advanced, tap
+the User ID, paste the old one and restart when asked. Pair the recorder and it connects as
+before. Then uninstall the old app. Everything already uploaded stays on the server. If the old
+app is already gone, unpair-free recovery is not possible: unbind the recorder as described in
+the previous FAQ entry and pair fresh.
 
 **What does deleting a recording in the app do?**
 Long-press a row for two different actions. *Remove from phone* deletes only the MP3 the phone

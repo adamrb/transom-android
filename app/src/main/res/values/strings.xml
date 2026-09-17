@@ -203,6 +203,10 @@
     <string name="exit_now">Exit now</string>
     <string name="later">Later</string>
     <string name="user_id">User ID</string>
+    <string name="user_id_tap_hint">Tap to use the ID from a previous install</string>
+    <string name="user_id_edit_title">Use a previous User ID</string>
+    <string name="user_id_edit_help">Your recorder is paired to this ID. If you set Transom up on another phone or an earlier version, paste that install\'s User ID (its Settings → Advanced → User ID) and the recorder stays paired. Do this before pairing. The app closes when you confirm; open it again to continue.</string>
+    <string name="user_id_invalid">A User ID is 6 to 120 characters with no spaces.</string>
     <string name="background_sync">Keep syncing in the background</string>
     <string name="background_sync_subtitle">Stay connected while the app is closed so recordings arrive right away</string>
     <string name="battery_optimization">Battery optimization</string>

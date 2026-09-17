@@ -177,6 +177,8 @@ class SettingsFragment : Fragment() {
 
         // Per-install user id (sent to the bridge server as the Plaud client_user_id)
         binding.userIdLabel.text = RecordingStore.getOrCreateUserId()
+        binding.userIdLabel.contentDescription = getString(R.string.user_id_tap_hint)
+        binding.userIdLabel.setOnClickListener { showEditUserIdDialog() }
         binding.copyUserIdButton.setOnClickListener {
             val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             clipboard.setPrimaryClip(
@@ -462,14 +464,15 @@ class SettingsFragment : Fragment() {
             val error = withContext(Dispatchers.IO) {
                 try {
                     if (!ApiClient.checkHealth(finalUrl)) return@withContext ctx.getString(R.string.server_setup_health_failed)
-                    val plaudToken = ApiClient.fetchUserToken(
-                        finalUrl, token, RecordingStore.getOrCreateUserId()
-                    )
+                    val userId = RecordingStore.getOrCreateUserId()
+                    val plaudToken = ApiClient.fetchUserToken(finalUrl, token, userId)
                     RecordingStore.serverBaseUrl = finalUrl
                     RecordingStore.serverAuthToken = token
-                    io.github.adamrb.transom.net.TokenManager.store(plaudToken)
+                    // store() refuses the token if the user adopted another id meanwhile; then the
+                    // SDK must not be handed it either (the next refresh mints one for the new id).
+                    val stored = io.github.adamrb.transom.net.TokenManager.store(plaudToken, forUserId = userId)
                     if (hostChanged) RecordingStore.clearServerState()
-                    try { sdk.NiceBuildSdk.setPartnerToken(plaudToken.accessToken) } catch (_: Exception) { }
+                    if (stored) try { sdk.NiceBuildSdk.setPartnerToken(plaudToken.accessToken) } catch (_: Exception) { }
                     null
                 } catch (e: Exception) {
                     AppLog.w(TAG, "server verification failed", e)
@@ -504,6 +507,45 @@ class SettingsFragment : Fragment() {
      * Switch the Plaud platform region (SDK customDomain / partner API host — used ONLY for the
      * device auth handshake). The SDK initializes once at app start, so restart to apply.
      */
+    /**
+     * Let the user adopt a previous install's user id (see RecordingStore.adoptUserId): the
+     * recorder's binding follows that id, so a phone move or the package rename needs no unpair.
+     */
+    private fun showEditUserIdDialog() {
+        val input = EditText(requireContext()).apply {
+            setText(RecordingStore.getOrCreateUserId())
+            isSingleLine = true
+            setSelectAllOnFocus(true)
+        }
+        val pad = (20 * resources.displayMetrics.density).toInt()
+        val container = LinearLayout(requireContext()).apply {
+            setPadding(pad, pad / 2, pad, 0)
+            addView(input, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        }
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.user_id_edit_title)
+            .setMessage(R.string.user_id_edit_help)
+            .setView(container)
+            .setPositiveButton(R.string.confirm) { _, _ ->
+                val value = input.text.toString().trim()
+                if (value == RecordingStore.getOrCreateUserId()) return@setPositiveButton
+                if (!RecordingStore.isValidUserId(value)) {
+                    android.widget.Toast.makeText(requireContext(), R.string.user_id_invalid, android.widget.Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                // The SDK was initialised with the old id and the recorder link may be live under
+                // it, so the process ends right here (the dialog text says so); a second dialog
+                // could be lost to a rotation and leave the app running on mixed identities.
+                // Exiting also covers a failed commit: disk still holds the old id, the in-memory
+                // half-state dies with the process, and the user sees the unchanged id on relaunch.
+                RecordingStore.adoptUserId(value)
+                requireActivity().finishAffinity()
+                kotlin.system.exitProcess(0)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
     private fun showSwitchRegionDialog() {
         val domains = RecordingStore.plaudDomains.map { it.second }.toTypedArray()
         val labels = RecordingStore.plaudDomains

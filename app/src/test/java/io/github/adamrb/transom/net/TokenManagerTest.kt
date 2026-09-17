@@ -6,6 +6,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -60,6 +61,29 @@ class TokenManagerTest {
     fun cachedTokenValidWhenFarFromExpiry() {
         TokenManager.store(ApiClient.UserToken("tok-abc", 7200L)) // margin is 1800s
         assertEquals("tok-abc", TokenManager.cachedTokenIfValid())
+    }
+
+    @Test
+    fun cachedTokenMintedForAnotherUserIdIsNotHandedOut() {
+        val original = RecordingStore.getOrCreateUserId()
+        TokenManager.store(ApiClient.UserToken("tok-old-id", 7200L), forUserId = original)
+        assertEquals("tok-old-id", TokenManager.cachedTokenIfValid())
+
+        // A fetch that started before the user adopted a previous install's id arrives late: the
+        // store refuses it, and the token cached for the old id is not handed out either.
+        assertTrue(RecordingStore.adoptUserId("pb_previous-phone-id"))
+        assertFalse(TokenManager.store(ApiClient.UserToken("tok-late", 7200L), forUserId = original))
+        assertNull(RecordingStore.cachedPlaudToken)
+        assertNull(TokenManager.cachedTokenIfValid())
+        // ...while a token minted for the adopted id is accepted.
+        assertTrue(TokenManager.store(ApiClient.UserToken("tok-new", 7200L), forUserId = "pb_previous-phone-id"))
+        assertEquals("tok-new", TokenManager.cachedTokenIfValid())
+
+        // Tokens cached by builds without the tag (null) are still trusted.
+        RecordingStore.cachedPlaudToken = "tok-untagged"
+        RecordingStore.cachedPlaudTokenUserId = null
+        RecordingStore.cachedPlaudTokenExpiry = System.currentTimeMillis() / 1000 + 7200
+        assertEquals("tok-untagged", TokenManager.cachedTokenIfValid())
     }
 
     @Test

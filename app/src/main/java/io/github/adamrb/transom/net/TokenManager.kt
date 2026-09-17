@@ -29,8 +29,7 @@ object TokenManager {
     private val refreshMutex = Mutex()
 
     /** Effective expiry (epoch seconds): server-provided expiry, tightened by the JWT exp if sooner. */
-    private fun effectiveExpirySec(token: String): Long {
-        val serverExp = RecordingStore.cachedPlaudTokenExpiry
+    private fun effectiveExpirySec(token: String, serverExp: Long = RecordingStore.cachedPlaudTokenExpiry): Long {
         val jwtExp = JwtUtils.parse(token)?.expSeconds ?: 0L
         return when {
             serverExp > 0 && jwtExp > 0 -> minOf(serverExp, jwtExp)
@@ -39,25 +38,29 @@ object TokenManager {
         }
     }
 
-    /** Cached token if it is not near expiry, else null. */
+    /** Cached token if it is not near expiry and was minted for the current user id, else null. */
     fun cachedTokenIfValid(): String? {
-        val token = RecordingStore.cachedPlaudToken ?: return null
-        val exp = effectiveExpirySec(token)
+        // Token, owner and expiry come from one synchronized snapshot (owner already checked).
+        val cached = RecordingStore.cachedPlaudTokenSnapshot() ?: return null
+        val exp = effectiveExpirySec(cached.token, cached.expirySec)
         if (exp <= 0) return null
         val now = System.currentTimeMillis() / 1000
-        return if (exp - now > EXPIRY_MARGIN_SEC) token else null
+        return if (exp - now > EXPIRY_MARGIN_SEC) cached.token else null
     }
 
     /** Best-effort current token for synchronous callers (may be expired; empty if none yet). */
     val currentToken: String
         get() = RecordingStore.cachedPlaudToken ?: ""
 
-    /** Persist a token + its server-declared lifetime (used by onboarding and refresh). */
-    fun store(token: ApiClient.UserToken) {
-        RecordingStore.cachedPlaudToken = token.accessToken
-        RecordingStore.cachedPlaudTokenExpiry =
-            if (token.expiresInSec > 0) System.currentTimeMillis() / 1000 + token.expiresInSec
-            else 0L
+    /**
+     * Persist a token + its server-declared lifetime (used by onboarding and refresh), tagged
+     * with the user id it was minted for so [cachedTokenIfValid] can refuse it after the user
+     * adopts a different id.
+     */
+    fun store(token: ApiClient.UserToken, forUserId: String = RecordingStore.getOrCreateUserId()): Boolean {
+        val expiry = if (token.expiresInSec > 0) System.currentTimeMillis() / 1000 + token.expiresInSec else 0L
+        // One transaction (token + owner + expiry); refused if the install's id changed meanwhile.
+        return RecordingStore.setCachedPlaudToken(token.accessToken, forUserId, expiry)
     }
 
     /**
@@ -66,11 +69,20 @@ object TokenManager {
      */
     suspend fun getValidToken(force: Boolean = false): String = refreshMutex.withLock {
         if (!force) cachedTokenIfValid()?.let { return it }
-        val userId = RecordingStore.getOrCreateUserId()
-        val token = ApiClient.fetchUserToken(userId)
-        store(token)
-        AppLog.i(TAG, "Fetched Plaud user token (expires_in=${token.expiresInSec}s)")
-        token.accessToken
+        while (true) {
+            val userId = RecordingStore.getOrCreateUserId()
+            val token = ApiClient.fetchUserToken(userId)
+            // The user may adopt a previous install's id (RecordingStore.adoptUserId) while this
+            // request is in flight; the store refuses a token minted for the old id, so fetch
+            // again for the new one instead of handing out the stale token.
+            if (store(token, forUserId = userId)) {
+                AppLog.i(TAG, "Fetched Plaud user token (expires_in=${token.expiresInSec}s)")
+                return@withLock token.accessToken
+            }
+            AppLog.i(TAG, "User id changed during token fetch; fetching again for the new id")
+        }
+        @Suppress("UNREACHABLE_CODE")
+        error("unreachable")
     }
 
     /**
