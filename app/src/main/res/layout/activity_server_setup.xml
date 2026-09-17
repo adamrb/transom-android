@@ -8,7 +8,7 @@
 
     <ImageButton
         android:id="@+id/backButton"
-        style="@style/Widget.PlaudBridge.IconButton"
+        style="@style/Widget.Transom.IconButton"
         android:layout_marginStart="8dp"
         android:layout_marginTop="8dp"
         android:contentDescription="@string/cancel"
@@ -47,7 +47,7 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/scanQrButton"
-                style="@style/Widget.PlaudBridge.Button.Outlined"
+                style="@style/Widget.Transom.Button.Outlined"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:layout_marginTop="24dp"
@@ -106,7 +106,7 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/testButton"
-                style="@style/Widget.PlaudBridge.Button.Outlined"
+                style="@style/Widget.Transom.Button.Outlined"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:layout_marginTop="24dp"
@@ -124,7 +124,7 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/continueButton"
-                style="@style/Widget.PlaudBridge.Button"
+                style="@style/Widget.Transom.Button"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:layout_marginTop="24dp"

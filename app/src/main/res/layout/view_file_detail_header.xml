@@ -24,14 +24,14 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/copyTranscriptButton"
-            style="@style/Widget.PlaudBridge.Button.Outlined.Small"
+            style="@style/Widget.Transom.Button.Outlined.Small"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:text="@string/action_copy_transcript" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/exportMarkdownButton"
-            style="@style/Widget.PlaudBridge.Button.Outlined.Small"
+            style="@style/Widget.Transom.Button.Outlined.Small"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:layout_marginStart="8dp"
@@ -272,7 +272,7 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/generateButton"
-            style="@style/Widget.PlaudBridge.Button"
+            style="@style/Widget.Transom.Button"
             android:layout_width="match_parent"
             android:layout_height="48dp"
             android:layout_marginTop="24dp"

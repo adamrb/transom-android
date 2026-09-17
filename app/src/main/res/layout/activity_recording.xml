@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Recording page: dark full screen in both palettes (Theme.PlaudBridge.Recording), aligned
+  Recording page: dark full screen in both palettes (Theme.Transom.Recording), aligned
   item-by-item with iOS RecordingViewController:
   - Title is at about 58.5% of the screen (iOS top=494/844), subtitle 16dp below it
   - Waveform is at about 75.6% (iOS top=638/844), nearly full width, height 28dp

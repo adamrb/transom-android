@@ -1,23 +1,23 @@
 # AGENTS.md
 
-Guide for coding agents (and humans) working on **Plaud Bridge for Android**. Read this before
+Guide for coding agents (and humans) working on **Transom for Android**. Read this before
 changing anything. User-facing documentation is [README.md](README.md); the server this app talks
-to is [plaud-bridge-server](https://github.com/adamrb/plaud-bridge-server), whose
+to is [transom-server](https://github.com/adamrb/transom-server), whose
 `docs/end-to-end.md` describes the whole pipeline.
 
 ## What this is
 
-A Kotlin Android app (`org.plaudbridge.app`, minSdk 21, targetSdk 34) that pairs with a Plaud
+A Kotlin Android app (`cloud.adamrb.transom`, minSdk 21, targetSdk 34) that pairs with a Plaud
 recorder through Plaud's proprietary Embedded SDK (`app/libs/plaud-sdk.aar`), pulls recordings
-off the device, uploads them to the user's own plaud-bridge-server, and shows transcripts,
+off the device, uploads them to the user's own transom-server, and shows transcripts,
 summaries and automation results. No audio ever goes to Plaud's cloud; the SDK only needs a
 signed user token, which the app fetches from the user's server at runtime. There are no
 build-time secrets.
 
-## Layout (`app/src/main/java/org/plaudbridge/app/`)
+## Layout (`app/src/main/java/cloud/adamrb/transom/`)
 
 ```
-PlaudBridgeApp.kt   Application: manager wiring, USE_MOCK switch for UI work without hardware
+TransomApp.kt   Application: manager wiring, USE_MOCK switch for UI work without hardware
 managers/           Singletons around the SDK: DeviceManager (BLE/WiFi, pairing), SyncManager
                     (file list + download), UploadManager (queue, delete-after-upload),
                     MarksSyncManager (button-press bookmarks), TitleSyncManager (transcript/title
@@ -67,7 +67,7 @@ launcher intent and navigate with taps.
   `app/build.gradle`.
 - **HTTPS only.** The app refuses `http://` server URLs by design and there is no cleartext
   network security config. Do not add one for convenience.
-- **The server API is a contract shared with plaud-bridge-server.** `ApiClient` is strict about
+- **The server API is a contract shared with transom-server.** `ApiClient` is strict about
   status codes and content types on the data endpoints (an HTML 200 from an upload or transcript
   call is an error, redirects are not followed; the health probe only checks for success). New
   fields from the server must be optional so older servers keep working, and the server is always
@@ -83,7 +83,7 @@ launcher intent and navigate with taps.
 - **WebView is origin-locked.** The dashboard WebView injects the token only for the configured
   server origin and opens external links in the browser. It needs a `WebChromeClient` or
   `confirm()` silently returns false. Blob downloads are not supported inside the WebView (the
-  user gets a toast); copy and export go through the `window.PlaudBridgeApp` JavaScript bridge.
+  user gets a toast); copy and export go through the `window.TransomApp` JavaScript bridge.
 - **`android:allowBackup` stays false.** The app holds a bearer token and a Plaud JWT.
 - **UX rules:** native feel, one Recordings list, status words only while something is in flight,
   no pipeline internals or SDK plumbing in the UI, user words not ours. Transcripts show bookmarks,
@@ -91,6 +91,10 @@ launcher intent and navigate with taps.
   test against Markwon spans, not Android `StyleSpan`.
 - **No secrets, personal names, hostnames, or private paths in the repo.** Test fixtures use
   fictional names.
+- **Naming.** The app is Transom (`cloud.adamrb.transom`). "Plaud" appears only to name the
+  vendor's recorder, SDK or cloud (nominative use), never in the app name, package, themes or
+  sample vocabulary (samples use the fictional "Parrot Deck"). The `pb_` prefixes on resource
+  names, the per-install user id and the dashboard token key are historical; leave them.
 
 ## SDK quirks worth knowing
 
@@ -113,7 +117,7 @@ launcher intent and navigate with taps.
 3. Host it on the server: `POST /api/v1/apk` with `metadata={"version_code","version_name","notes"}`,
    or upload from the dashboard. Phones pick it up at their next update check: automatically at
    most once per 24 hours on foregrounding, or immediately from Settings → Version → Check.
-4. If a server image should bundle it, publish `plaud-bridge.apk` plus `manifest.json` as
+4. If a server image should bundle it, publish `transom.apk` plus `manifest.json` as
    release assets and point the server repo's `APK_RELEASE_URL` variable at them.
 
 ## When you change things

@@ -68,7 +68,7 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/turnOnButton"
-            style="@style/Widget.PlaudBridge.Button"
+            style="@style/Widget.Transom.Button"
             android:layout_width="match_parent"
             android:layout_height="48dp"
             android:layout_marginTop="20dp"
@@ -77,7 +77,7 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/cancelButton"
-            style="@style/Widget.PlaudBridge.Button.Outlined"
+            style="@style/Widget.Transom.Button.Outlined"
             android:layout_width="match_parent"
             android:layout_height="48dp"
             android:layout_marginTop="8dp"

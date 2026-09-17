@@ -22,11 +22,11 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/recordings"
-            android:textAppearance="@style/TextAppearance.PlaudBridge.LargeTitle" />
+            android:textAppearance="@style/TextAppearance.Transom.LargeTitle" />
 
         <ImageButton
             android:id="@+id/searchButton"
-            style="@style/Widget.PlaudBridge.IconButton"
+            style="@style/Widget.Transom.IconButton"
             android:layout_gravity="end|center_vertical"
             android:contentDescription="@string/search"
             android:src="@drawable/ic_search" />
@@ -105,7 +105,7 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/retryButton"
-            style="@style/Widget.PlaudBridge.Button.Outlined.Small"
+            style="@style/Widget.Transom.Button.Outlined.Small"
             android:layout_width="wrap_content"
             android:layout_height="32dp"
             android:layout_marginStart="8dp"

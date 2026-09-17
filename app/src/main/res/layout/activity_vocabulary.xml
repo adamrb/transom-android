@@ -15,7 +15,7 @@
 
         <ImageButton
             android:id="@+id/backButton"
-            style="@style/Widget.PlaudBridge.IconButton"
+            style="@style/Widget.Transom.IconButton"
             android:layout_gravity="start|center_vertical"
             android:layout_marginStart="4dp"
             android:contentDescription="@string/cd_back"
@@ -32,7 +32,7 @@
 
         <ImageButton
             android:id="@+id/moreButton"
-            style="@style/Widget.PlaudBridge.IconButton"
+            style="@style/Widget.Transom.IconButton"
             android:layout_gravity="end|center_vertical"
             android:layout_marginEnd="4dp"
             android:contentDescription="@string/cd_more"
@@ -128,7 +128,7 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/addButton"
-            style="@style/Widget.PlaudBridge.Button.Outlined"
+            style="@style/Widget.Transom.Button.Outlined"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:layout_marginStart="12dp"
@@ -137,7 +137,7 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/saveButton"
-            style="@style/Widget.PlaudBridge.Button"
+            style="@style/Widget.Transom.Button"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:layout_marginStart="8dp"

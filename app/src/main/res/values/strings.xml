@@ -5,7 +5,7 @@
   Never surface HTTP codes, exception text, SDK terms or device model names to the user.
 -->
 <resources>
-    <string name="app_name">Plaud Bridge</string>
+    <string name="app_name">Transom</string>
 
     <!-- Accessibility labels for icon-only controls -->
     <string name="cd_back">Back</string>
@@ -16,7 +16,7 @@
     <string name="cd_remove">Remove</string>
 
     <!-- Onboarding -->
-    <string name="welcome_app_name">Plaud Bridge</string>
+    <string name="welcome_app_name">Transom</string>
     <string name="get_started">Get started</string>
     <string name="connect_later">Connect a recorder later</string>
     <string name="scanning_subtitle">Press the record button on\nyour recorder to turn it on</string>
@@ -29,7 +29,7 @@
     <string name="connect">Connect</string>
     <string name="youre_all_set">You\'re all set!</string>
     <string name="success_subtitle">Your recorder is connected and ready to use.</string>
-    <string name="explore_intelligence">Open Plaud Bridge</string>
+    <string name="explore_intelligence">Open Transom</string>
     <!-- Fallback name for a recorder whose name is unknown -->
     <string name="default_recorder_name">Your recorder</string>
     <!-- Shown under the recorder name in the connect sheet -->
@@ -237,7 +237,7 @@
 
     <!-- Server setup (onboarding + settings) -->
     <string name="server_setup_title">Connect your server</string>
-    <string name="server_setup_subtitle">Enter the address of your Plaud Bridge server and its access token. Audio goes only to your server, never to Plaud\'s cloud.</string>
+    <string name="server_setup_subtitle">Enter the address of your Transom server and its access token. Audio goes only to your server, never to Plaud\'s cloud.</string>
     <string name="server_url">Server address</string>
     <string name="server_url_hint">https://bridge.example.com</string>
     <string name="server_auth_token">Access token</string>
@@ -304,7 +304,7 @@
     <string name="custom_vocabulary">Custom vocabulary</string>
     <string name="custom_vocabulary_subtitle">Names and terms the transcriber should get right</string>
     <string name="vocabulary_help">Names, places and products the transcriber keeps getting wrong. Add what it usually hears instead and those get corrected automatically.</string>
-    <string name="vocabulary_hint">Plaud Bridge = Plogged Bridge, Plod Bridge</string>
+    <string name="vocabulary_hint">Parrot Deck = Parted Deck, Carrot Deck</string>
     <string name="vocabulary_search_hint">Search terms</string>
     <string name="save">Save</string>
     <string name="vocabulary_loading">Loading…</string>
@@ -356,17 +356,17 @@
     <string name="update_not_hosted">Your server hosts no app update</string>
     <string name="update_check_failed">Couldn\'t check for updates</string>
     <string name="update_available_title">Update available</string>
-    <string name="update_available_fmt">Plaud Bridge %1$s is available on your server.</string>
+    <string name="update_available_fmt">Transom %1$s is available on your server.</string>
     <string name="update_available_short_fmt">Update %1$s available</string>
     <string name="update_download_install">Download &amp; install</string>
     <string name="update_downloading">Downloading update…</string>
     <string name="update_download_failed">Couldn\'t download the update. Try again.</string>
-    <string name="update_allow_installs">To install updates from your server, allow Plaud Bridge to install unknown apps, then try again.</string>
+    <string name="update_allow_installs">To install updates from your server, allow Transom to install unknown apps, then try again.</string>
     <string name="update_install_success">Update installed</string>
     <string name="update_install_failed">The update couldn\'t be installed.</string>
     <!-- Background sync foreground service -->
     <string name="bg_sync_channel_name">Recorder connection</string>
-    <string name="bg_sync_channel_desc">Shows whether Plaud Bridge is connected to your recorder while running in the background</string>
+    <string name="bg_sync_channel_desc">Shows whether Transom is connected to your recorder while running in the background</string>
     <string name="bg_sync_notif_connected_fmt">Connected to %1$s</string>
     <string name="bg_sync_notif_searching_fmt">Searching for %1$s…</string>
     <string name="bg_sync_notif_disconnected">Disconnected</string>

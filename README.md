@@ -1,16 +1,16 @@
-# Plaud Bridge (Android)
+# Transom (Android)
 
 A companion app for **Plaud Note Pro** and **Plaud NotePin S** owners who self-host their own
-sync server. Plaud Bridge pairs with your recorder over Bluetooth (with optional WiFi fast
+sync server. Transom pairs with your recorder over Bluetooth (with optional WiFi fast
 transfer), pulls recordings off the device as MP3s, and uploads them to **your**
-[`plaud-bridge-server`](https://github.com/adamrb/plaud-bridge-server) — not Plaud's cloud.
+[`transom-server`](https://github.com/adamrb/transom-server) — not Plaud's cloud.
 
 > **Your audio never touches Plaud's cloud.** The only things that go through Plaud's
 > platform are the authentication handshake the device firmware requires (see "How it works")
 > and, if you use it, the firmware-update check. Transcription, storage, and everything
 > downstream happen on your own server, or on whatever endpoints you configure there.
 
-Plaud Bridge is an independent community project. It is **not affiliated with, endorsed by,
+Transom is an independent community project. It is **not affiliated with, endorsed by,
 or supported by Plaud Inc.** It is adapted from Plaud's official Apache-2.0 Android template
 app ([Plaud-AI/plaud-sdk-public](https://github.com/Plaud-AI/plaud-sdk-public)) and bundles
 Plaud's proprietary device SDK (`app/libs/plaud-sdk.aar`) — see [NOTICE](NOTICE).
@@ -24,9 +24,9 @@ Contributors and coding agents should start with [AGENTS.md](AGENTS.md).
 
 ```
                   ┌──────────────────────┐
-   BLE / WiFi     │   Plaud Bridge app   │   HTTPS (your server)
+   BLE / WiFi     │     Transom app      │   HTTPS (your server)
  ┌───────────┐    │                      │    ┌─────────────────────┐
- │  Plaud    │◄──►│  pair / record /     │◄──►│ plaud-bridge-server │
+ │  Plaud    │◄──►│  pair / record /     │◄──►│   transom-server    │
  │  device   │    │  sync (MP3 export)   │    │  (self-hosted)      │
  └───────────┘    │                      │    │  - stores audio     │
                   └──────────┬───────────┘    │  - issues Plaud     │
@@ -42,7 +42,7 @@ Contributors and coding agents should start with [AGENTS.md](AGENTS.md).
 
 1. **Token, at runtime, from your server.** Plaud devices use end-to-end encryption keyed to a
    Plaud "user access token" (a JWT). Instead of baking a token into the build (as the official
-   template does), Plaud Bridge asks your server for one at runtime
+   template does), Transom asks your server for one at runtime
    (`POST /api/v1/plaud/user-token` with a stable per-install user id), caches it, and refreshes
    it when it nears expiry. Your server holds the Plaud partner credentials; the app never sees
    them.
@@ -62,7 +62,7 @@ Contributors and coding agents should start with [AGENTS.md](AGENTS.md).
 
 ### 1. Run a server
 
-Deploy [`plaud-bridge-server`](https://github.com/adamrb/plaud-bridge-server) somewhere the
+Deploy [`transom-server`](https://github.com/adamrb/transom-server) somewhere the
 phone can reach. You'll need its base URL and an API auth token.
 
 **HTTPS is required.** The app only accepts `https://` server URLs: Android blocks cleartext
@@ -78,8 +78,8 @@ deliberately not shipped.
 There are no prebuilt releases; build it yourself with Android Studio (JDK 17):
 
 ```bash
-git clone https://github.com/adamrb/plaud-bridge-android
-cd plaud-bridge-android
+git clone https://github.com/adamrb/transom-android
+cd transom-android
 # local.properties only needs your Android SDK path — no secrets:
 echo "sdk.dir=$HOME/Android/Sdk" > local.properties
 ./gradlew assembleDebug
@@ -136,7 +136,7 @@ to app-private storage, where its **sha256 is verified against the server's mani
 APK's identity is validated** — package name, a strictly newer `versionCode`, and signing
 certificates matching the installed app — **before the installer ever sees it**; anything that
 fails is deleted. Installation goes through a `PackageInstaller` session (no implicit install
-intents). On Android 8+ the first install asks you to allow Plaud Bridge to install unknown
+intents). On Android 8+ the first install asks you to allow Transom to install unknown
 apps (the standard sideload consent). Downloaded APKs are cleaned up automatically after a
 successful update (or after 7 days). A failed check retries after 1 hour instead of consuming
 the 24-hour throttle, and changing servers resets the throttle.
@@ -184,9 +184,9 @@ Android 13+, which the app asks for once when a server is configured or a record
 
 **Why do I have to unbind the device from the official Plaud app first?**
 Plaud devices are cryptographically locked to one account at a time. If your recorder is still
-bound to your Plaud-app account, the handshake from Plaud Bridge is rejected. Unbind it in the
+bound to your Plaud-app account, the handshake from Transom is rejected. Unbind it in the
 official app first (Plaud App → Device → Unbind). If you no longer have access to the old
-account, Plaud Bridge offers a device-recovery flow that unlocks the device using its cloud
+account, Transom offers a device-recovery flow that unlocks the device using its cloud
 bind history — the device just must not be actively bound to another account.
 
 **Does any of my audio go to Plaud?**
@@ -210,6 +210,13 @@ Plaud's latest. The firmware image comes from Plaud's platform.
 **Recording from the app?**
 Yes — start/pause/stop the device's recorder remotely, with a live level meter.
 
+**I had the app when it was called Plaud Bridge. How do I move to Transom?**
+The package id changed (`org.plaudbridge.app` to `cloud.adamrb.transom`), so the old app cannot
+update itself into the new one and the two would sit side by side. In the old app, unpair the
+recorder (its binding belongs to that install's user id; a fresh install gets a new one and the
+SDK refuses to take over a still-bound recorder), then uninstall it, install Transom and onboard
+again with the same server URL and token. Everything already uploaded stays on the server.
+
 **What does deleting a recording in the app do?**
 Long-press a row for two different actions. *Remove from phone* deletes only the MP3 the phone
 downloaded; the row stays, linked to the server copy. *Delete* removes the recording from your
@@ -225,7 +232,7 @@ release steps. The notes below are the short version.
 
 - Architecture follows the upstream template: singleton managers (`DeviceManager`,
   `SyncManager`, `RecordingManager`, `UploadManager`) + ViewBinding fragments/activities.
-  Mock managers (`PlaudBridgeApp.USE_MOCK`) allow UI work without hardware.
+  Mock managers (`TransomApp.USE_MOCK`) allow UI work without hardware.
 - New vs. the template: `net/ApiClient` (bridge-server HTTP), `net/TokenManager` (runtime token
   fetch/refresh), `managers/UploadManager` (upload queue + delete-after-upload),
   `ui/onboarding/ServerSetupActivity`. Removed: `TranscriptionManager` (Plaud cloud

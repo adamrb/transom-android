@@ -114,7 +114,7 @@
     <!-- Connect button -->
     <com.google.android.material.button.MaterialButton
         android:id="@+id/connectButton"
-        style="@style/Widget.PlaudBridge.Button"
+        style="@style/Widget.Transom.Button"
         android:layout_width="match_parent"
         android:layout_height="48dp"
         android:layout_marginStart="24dp"

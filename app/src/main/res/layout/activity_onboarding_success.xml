@@ -60,10 +60,10 @@
             android:textSize="13sp" />
     </LinearLayout>
 
-    <!-- "Open Plaud Bridge" button -->
+    <!-- "Open Transom" button -->
     <com.google.android.material.button.MaterialButton
         android:id="@+id/exploreButton"
-        style="@style/Widget.PlaudBridge.Button"
+        style="@style/Widget.Transom.Button"
         android:layout_width="match_parent"
         android:layout_height="48dp"
         android:layout_gravity="bottom|center_horizontal"

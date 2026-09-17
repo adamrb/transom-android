@@ -24,7 +24,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:text="@string/home"
-            android:textAppearance="@style/TextAppearance.PlaudBridge.LargeTitle" />
+            android:textAppearance="@style/TextAppearance.Transom.LargeTitle" />
 
         <!-- ===== Device card (collapsed/expanded) ===== -->
         <LinearLayout
@@ -66,7 +66,7 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/connectRecorderButton"
-                    style="@style/Widget.PlaudBridge.Button"
+                    style="@style/Widget.Transom.Button"
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
                     android:layout_marginStart="12dp"
@@ -231,7 +231,7 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/manageButton"
-                    style="@style/Widget.PlaudBridge.Button.Outlined.Small"
+                    style="@style/Widget.Transom.Button.Outlined.Small"
                     android:layout_width="wrap_content"
                     android:layout_height="32dp"
                     android:layout_marginTop="20dp"
@@ -391,7 +391,7 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/syncNowButton"
-                style="@style/Widget.PlaudBridge.Button.Small"
+                style="@style/Widget.Transom.Button.Small"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
                 android:text="@string/sync_now" />

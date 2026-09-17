@@ -5,4 +5,4 @@
 # Gson
 -keepattributes Signature
 -keepattributes *Annotation*
--keep class org.plaudbridge.app.models.** { *; }
+-keep class cloud.adamrb.transom.models.** { *; }

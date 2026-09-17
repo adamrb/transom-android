@@ -13,7 +13,7 @@
 
         <ImageButton
             android:id="@+id/backButton"
-            style="@style/Widget.PlaudBridge.IconButton"
+            style="@style/Widget.Transom.IconButton"
             android:layout_gravity="start|center_vertical"
             android:layout_marginStart="4dp"
             android:contentDescription="@string/cd_back"
@@ -152,7 +152,7 @@
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/firmwareUpdateButton"
-                            style="@style/Widget.PlaudBridge.Button.Small"
+                            style="@style/Widget.Transom.Button.Small"
                             android:layout_width="wrap_content"
                             android:layout_height="28dp"
                             android:layout_marginStart="8dp"
@@ -210,7 +210,7 @@
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/disconnectButton"
-                        style="@style/Widget.PlaudBridge.Button.Outlined.Small"
+                        style="@style/Widget.Transom.Button.Outlined.Small"
                         android:layout_width="wrap_content"
                         android:layout_height="32dp"
                         android:layout_marginStart="8dp"
@@ -258,7 +258,7 @@
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/unpairButton"
-                        style="@style/Widget.PlaudBridge.Button.Outlined.Destructive"
+                        style="@style/Widget.Transom.Button.Outlined.Destructive"
                         android:layout_width="wrap_content"
                         android:layout_height="32dp"
                         android:layout_marginStart="8dp"

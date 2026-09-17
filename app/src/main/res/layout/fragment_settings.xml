@@ -22,7 +22,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:text="@string/settings"
-            android:textAppearance="@style/TextAppearance.PlaudBridge.LargeTitle" />
+            android:textAppearance="@style/TextAppearance.Transom.LargeTitle" />
 
         <!-- Card 1: Auto Sync -->
         <LinearLayout
@@ -64,7 +64,7 @@
                         android:textSize="16sp" />
                 </LinearLayout>
 
-                <org.plaudbridge.app.common.PlaudToggle
+                <cloud.adamrb.transom.common.PlaudToggle
                     android:id="@+id/autoSyncToggle"
                     android:layout_width="48dp"
                     android:layout_height="26dp"
@@ -123,7 +123,7 @@
                         android:textSize="16sp" />
                 </LinearLayout>
 
-                <org.plaudbridge.app.common.PlaudToggle
+                <cloud.adamrb.transom.common.PlaudToggle
                     android:id="@+id/backgroundSyncToggle"
                     android:layout_width="48dp"
                     android:layout_height="26dp"
@@ -214,7 +214,7 @@
                     android:textColor="?attr/colorOnSurface"
                     android:textSize="16sp" />
 
-                <org.plaudbridge.app.common.PlaudToggle
+                <cloud.adamrb.transom.common.PlaudToggle
                     android:id="@+id/deleteAfterUploadToggle"
                     android:layout_width="48dp"
                     android:layout_height="26dp"
@@ -360,7 +360,7 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/editServerButton"
-                style="@style/Widget.PlaudBridge.Button.Outlined.Small"
+                style="@style/Widget.Transom.Button.Outlined.Small"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
                 android:layout_marginStart="8dp"
@@ -543,7 +543,7 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/firmwareUpdateButton"
-                style="@style/Widget.PlaudBridge.Button.Small"
+                style="@style/Widget.Transom.Button.Small"
                 android:layout_width="wrap_content"
                 android:layout_height="28dp"
                 android:layout_marginStart="8dp"
@@ -591,7 +591,7 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/checkUpdateButton"
-                style="@style/Widget.PlaudBridge.Button.Outlined.Small"
+                style="@style/Widget.Transom.Button.Outlined.Small"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
                 android:layout_marginStart="8dp"
@@ -722,7 +722,7 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/switchRegionButton"
-                    style="@style/Widget.PlaudBridge.Button.Outlined.Small"
+                    style="@style/Widget.Transom.Button.Outlined.Small"
                     android:layout_width="wrap_content"
                     android:layout_height="32dp"
                     android:layout_marginStart="8dp"
@@ -765,7 +765,7 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/copyUserIdButton"
-                    style="@style/Widget.PlaudBridge.Button.Outlined.Small"
+                    style="@style/Widget.Transom.Button.Outlined.Small"
                     android:layout_width="wrap_content"
                     android:layout_height="32dp"
                     android:layout_marginStart="8dp"
@@ -808,7 +808,7 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/exportLogsButton"
-                    style="@style/Widget.PlaudBridge.Button.Outlined.Small"
+                    style="@style/Widget.Transom.Button.Outlined.Small"
                     android:layout_width="wrap_content"
                     android:layout_height="32dp"
                     android:layout_marginStart="8dp"

@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "PlaudBridge"
+rootProject.name = "Transom"
 include ':app'

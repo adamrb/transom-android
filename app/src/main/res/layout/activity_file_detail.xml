@@ -112,7 +112,7 @@
 
                     <ImageButton
                         android:id="@+id/backButton"
-                        style="@style/Widget.PlaudBridge.IconButton"
+                        style="@style/Widget.Transom.IconButton"
                         android:layout_marginStart="4dp"
                         android:contentDescription="@string/detail_back"
                         android:src="@drawable/ic_chevron_left" />
@@ -136,14 +136,14 @@
 
                     <ImageButton
                         android:id="@+id/jumpToButton"
-                        style="@style/Widget.PlaudBridge.IconButton"
+                        style="@style/Widget.Transom.IconButton"
                         android:contentDescription="@string/detail_jump_to"
                         android:src="@drawable/ic_jump_to"
                         android:visibility="gone" />
 
                     <ImageButton
                         android:id="@+id/moreButton"
-                        style="@style/Widget.PlaudBridge.IconButton"
+                        style="@style/Widget.Transom.IconButton"
                         android:layout_marginEnd="4dp"
                         android:contentDescription="@string/detail_more"
                         android:src="@drawable/ic_more"
@@ -170,7 +170,7 @@
 
         <!-- Full width so the time bubble has room to the left of the thumb; touches outside the
              thumb's column fall through to the list -->
-        <org.plaudbridge.app.ui.filedetail.TranscriptFastScroller
+        <cloud.adamrb.transom.ui.filedetail.TranscriptFastScroller
             android:id="@+id/fastScroller"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />

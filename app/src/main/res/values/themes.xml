@@ -5,7 +5,7 @@
          values-night/colors.xml, chosen by the Appearance setting (System / Light / Dark, applied
          through AppCompatDelegate at start). Everything on screen reads its colours from these
          attributes; see attrs.xml for the app-specific ones. -->
-    <style name="Base.Theme.PlaudBridge" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Base.Theme.Transom" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">@color/pb_primary</item>
         <item name="colorPrimaryVariant">@color/pb_primary</item>
         <item name="colorOnPrimary">@color/pb_on_primary</item>
@@ -43,19 +43,19 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
 
-        <item name="materialButtonStyle">@style/Widget.PlaudBridge.Button</item>
-        <item name="materialButtonOutlinedStyle">@style/Widget.PlaudBridge.Button.Outlined</item>
-        <item name="materialAlertDialogTheme">@style/ThemeOverlay.PlaudBridge.Dialog</item>
-        <item name="alertDialogTheme">@style/ThemeOverlay.PlaudBridge.Dialog</item>
-        <item name="bottomSheetDialogTheme">@style/ThemeOverlay.PlaudBridge.BottomSheet</item>
+        <item name="materialButtonStyle">@style/Widget.Transom.Button</item>
+        <item name="materialButtonOutlinedStyle">@style/Widget.Transom.Button.Outlined</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.Transom.Dialog</item>
+        <item name="alertDialogTheme">@style/ThemeOverlay.Transom.Dialog</item>
+        <item name="bottomSheetDialogTheme">@style/ThemeOverlay.Transom.BottomSheet</item>
     </style>
 
     <!-- values-v27 adds the navigation bar items (light icons need API 27). -->
-    <style name="Theme.PlaudBridge" parent="Base.Theme.PlaudBridge" />
+    <style name="Theme.Transom" parent="Base.Theme.Transom" />
 
     <!-- The Recording screen: always dark, whatever the palette, so its own colours are fixed
          (see activity_recording.xml) and only the system bars come from here. -->
-    <style name="Theme.PlaudBridge.Recording" parent="Theme.MaterialComponents.NoActionBar">
+    <style name="Theme.Transom.Recording" parent="Theme.MaterialComponents.NoActionBar">
         <item name="colorPrimary">#E8E8E8</item>
         <item name="colorOnPrimary">#1A1A1A</item>
         <item name="colorSecondary">#E8E8E8</item>
@@ -70,28 +70,28 @@
     </style>
 
     <!-- Dialogs: surface-coloured, with the primary (near black / near white) for the buttons -->
-    <style name="ThemeOverlay.PlaudBridge.Dialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+    <style name="ThemeOverlay.Transom.Dialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
         <item name="colorPrimary">@color/pb_primary</item>
         <item name="colorOnSurface">@color/pb_on_surface</item>
         <item name="android:textColorPrimary">@color/pb_on_surface</item>
         <item name="android:textColorSecondary">@color/pb_text_body</item>
         <item name="android:textColorAlertDialogListItem">@color/pb_on_surface</item>
-        <item name="shapeAppearanceOverlay">@style/ShapeAppearanceOverlay.PlaudBridge.Dialog</item>
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearanceOverlay.Transom.Dialog</item>
     </style>
 
-    <style name="ShapeAppearanceOverlay.PlaudBridge.Dialog" parent="">
+    <style name="ShapeAppearanceOverlay.Transom.Dialog" parent="">
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">16dp</item>
     </style>
 
     <!-- Bottom sheets draw their own rounded surface (bg_bottom_sheet); the dialog window behind
          them stays transparent. -->
-    <style name="ThemeOverlay.PlaudBridge.BottomSheet" parent="ThemeOverlay.MaterialComponents.BottomSheetDialog">
-        <item name="bottomSheetStyle">@style/Widget.PlaudBridge.BottomSheet</item>
+    <style name="ThemeOverlay.Transom.BottomSheet" parent="ThemeOverlay.MaterialComponents.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/Widget.Transom.BottomSheet</item>
         <item name="android:navigationBarColor">@color/pb_surface</item>
     </style>
 
-    <style name="Widget.PlaudBridge.BottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
+    <style name="Widget.Transom.BottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
         <item name="android:background">@android:color/transparent</item>
         <item name="backgroundTint">@android:color/transparent</item>
     </style>
@@ -100,7 +100,7 @@
          Save). Outlined: everything beside it (Copy transcript, Retry, Cancel, Manage). Both
          sentence case, 12dp corners, no vertical inset so a 32-48dp layout height is the real
          height. -->
-    <style name="Widget.PlaudBridge.Button" parent="Widget.MaterialComponents.Button.UnelevatedButton">
+    <style name="Widget.Transom.Button" parent="Widget.MaterialComponents.Button.UnelevatedButton">
         <item name="android:textAllCaps">false</item>
         <item name="android:fontFamily">sans-serif-medium</item>
         <item name="android:textSize">14sp</item>
@@ -118,7 +118,7 @@
         <item name="iconTint">@color/pb_button_filled_text</item>
     </style>
 
-    <style name="Widget.PlaudBridge.Button.Outlined" parent="Widget.MaterialComponents.Button.OutlinedButton">
+    <style name="Widget.Transom.Button.Outlined" parent="Widget.MaterialComponents.Button.OutlinedButton">
         <item name="android:textAllCaps">false</item>
         <item name="android:fontFamily">sans-serif-medium</item>
         <item name="android:textSize">14sp</item>
@@ -139,25 +139,25 @@
     </style>
 
     <!-- Compact variants for the trailing button on a settings card (32dp tall, 13sp) -->
-    <style name="Widget.PlaudBridge.Button.Small">
+    <style name="Widget.Transom.Button.Small">
         <item name="android:minHeight">32dp</item>
         <item name="android:textSize">13sp</item>
     </style>
 
-    <style name="Widget.PlaudBridge.Button.Outlined.Small">
+    <style name="Widget.Transom.Button.Outlined.Small">
         <item name="android:minHeight">32dp</item>
         <item name="android:textSize">13sp</item>
     </style>
 
     <!-- A destructive outlined pill (Unpair) -->
-    <style name="Widget.PlaudBridge.Button.Outlined.Destructive">
+    <style name="Widget.Transom.Button.Outlined.Destructive">
         <item name="android:textColor">?attr/colorError</item>
         <item name="strokeColor">?attr/colorError</item>
         <item name="iconTint">?attr/colorError</item>
     </style>
 
     <!-- Icon-only buttons on toolbars and rows -->
-    <style name="Widget.PlaudBridge.IconButton" parent="">
+    <style name="Widget.Transom.IconButton" parent="">
         <item name="android:layout_width">48dp</item>
         <item name="android:layout_height">48dp</item>
         <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
@@ -166,7 +166,7 @@
     </style>
 
     <!-- The large page titles (Home, Recordings, Settings) -->
-    <style name="TextAppearance.PlaudBridge.LargeTitle" parent="TextAppearance.MaterialComponents.Headline3">
+    <style name="TextAppearance.Transom.LargeTitle" parent="TextAppearance.MaterialComponents.Headline3">
         <item name="android:fontFamily">sans-serif-light</item>
         <item name="android:textSize">@dimen/pb_large_title_text_size</item>
         <item name="android:textColor">?attr/colorOnSurface</item>

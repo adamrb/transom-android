@@ -59,7 +59,7 @@
     <!-- "Get started" button, above the skip entry -->
     <com.google.android.material.button.MaterialButton
         android:id="@+id/getStartedButton"
-        style="@style/Widget.PlaudBridge.Button"
+        style="@style/Widget.Transom.Button"
         android:layout_width="0dp"
         android:layout_height="48dp"
         android:layout_marginStart="24dp"
